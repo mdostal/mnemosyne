@@ -1,0 +1,104 @@
+id: m-06-continuous-indexing
+epic: mnemosyne-foundation
+title: Implement Multica-native continuous indexing
+status: pending
+complexity: high
+methodology: classic
+depends_on: [m-05-project-enterprise-meta-layers]
+
+description: |
+  Keep all memory layers fresh as files/docs change. Use Multica-native scheduling
+  (event-driven or scheduled) - NO localized cron or shell daemons.
+
+  This is critical for keeping the code-graph, vector embeddings, and meta layer
+  synchronized with codebase and documentation changes.
+
+acceptance_criteria:
+  - "Given a file change, when continuous indexing runs, then code-graph edges are updated"
+  - "Given new markdown in Obsidian vault, when indexing runs, then meta layer includes the new content"
+  - "Given Multica scheduler, when indexing is configured, then no box cron or shell daemon is used"
+  - "Given staleness detection, when indexed content is out-of-date, then provenance includes staleness marker"
+
+steps:
+  - id: research
+    description: |
+      Research:
+      - Multica scheduling API and patterns
+      - File change detection (fswatch, inotify, or Multica hooks)
+      - Incremental vs full reindex strategies
+    agent: researcher
+  - id: implement
+    description: |
+      Implement continuous indexing:
+      - Multica task for periodic full reindex (daily)
+      - Event-driven incremental index on file save (if Multica supports)
+      - Staleness tracking (index_timestamp vs file mtime)
+      - Update code-graph, vector, meta layers
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Tests:
+      - File change triggers incremental index
+      - Full reindex updates all layers
+      - Staleness detected and flagged in provenance
+      - Zero box cron processes spawned
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review Multica integration and no-cron constraint
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit continuous indexing to feat/mnemosyne-foundation
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  tech_stack:
+    scheduler: Multica (NOT cron)
+  key_files: []
+
+files_to_modify:
+  - file: lib/mnemosyne/indexing/continuous.ts
+    change: Implement Multica-native continuous indexing
+  - file: lib/mnemosyne/indexing/staleness.ts
+    change: Track index_timestamp vs file mtime
+  - file: .multica/tasks/mnemosyne-reindex.yaml
+    change: Define Multica scheduled task for full reindex
+
+design_decisions:
+  - decision: Multica-native scheduling only
+    rationale: Hard constraint from idea brief - no localized cron
+  - decision: Daily full reindex + event-driven incremental
+    rationale: Balance freshness with indexing cost
+  - decision: Staleness marker in provenance
+    rationale: Consumers know when results may be out-of-date
+
+cross_cutting:
+  - concern: existing-infrastructure
+    action: "Continuous indexing updates swarm-memory graph and Qdrant; does not replace them"
+  - concern: provenance-completeness
+    action: "index_timestamp field updated on every index run"
+
+risks:
+  - severity: medium
+    description: Multica not available or API incompatible
+    mitigation: Fallback to manual reindex command; document Multica setup
+
+references: []
+
+metric:
+  applies: true
+  name: indexing.staleness_median
+  direction: down
+  unit: hours
+  baseline: null
+  target: 24
+  window: 7d post-merge
+  source:
+    kind: sql
+    ref: "SELECT MEDIAN(NOW() - index_timestamp) FROM indexed_content"
+  verify_at: 2026-08-03T00:00:00Z
+  owner: tester

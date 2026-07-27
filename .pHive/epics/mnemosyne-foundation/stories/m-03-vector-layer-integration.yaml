@@ -1,0 +1,122 @@
+id: m-03-vector-layer-integration
+epic: mnemosyne-foundation
+title: Integrate swarm-memory vector layer (Qdrant)
+status: pending
+complexity: high
+methodology: classic
+depends_on: [m-02-file-layer-implementation]
+
+description: |
+  Wrap the existing swarm-memory Qdrant operations as Mnemosyne's vector layer.
+  This is a critical integration point - we MUST preserve existing Qdrant collections
+  and NOT reinvent the vector engine.
+
+  Start with read-only operations to prove safety, then add write/indexing.
+
+acceptance_criteria:
+  - "Given a semantic query, when vector layer recall() executes, then Qdrant results are returned with provenance.layer='vector'"
+  - "Given existing Qdrant collections, when integration runs, then zero collections are dropped or overwritten"
+  - "Given recall with zero vector hits, when file layer fallback activates, then provenance includes both layers attempted"
+  - "Given remember() on vector layer, when content is indexed, then swarm-memory handles the Qdrant write"
+
+steps:
+  - id: research
+    description: |
+      Explore swarm-memory codebase at ~/Documents/work/dostal/code/swarm-memory:
+      - Qdrant client initialization
+      - Collection schema
+      - Embedding generation
+      - Scope → collection mapping
+    agent: researcher
+  - id: implement
+    description: |
+      Implement VectorLayer class (read-only first):
+      - Wrap swarm-memory Qdrant client
+      - recall() queries existing collections
+      - Provenance: layer='vector', embedder=<model>, chunk_span from metadata
+      - Escalation: vector → file fallback
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Integration tests against real Qdrant (read-only):
+      - Query existing collection returns hits
+      - Empty query falls back to file layer
+      - Provenance includes embedder + Qdrant metadata
+      - Zero collections dropped (assertion)
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review existing-infrastructure preservation (no Qdrant writes yet)
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit vector layer integration to feat/mnemosyne-foundation
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  tech_stack:
+    vector_db: Qdrant Cloud
+    swarm_memory: ~/Documents/work/dostal/code/swarm-memory
+  key_files:
+    - path: ~/.config/swarm-memory/qdrant.key
+      purpose: Qdrant Cloud credentials (DO NOT WIPE)
+
+files_to_modify:
+  - file: lib/mnemosyne/layers/vector.ts
+    change: Implement VectorLayer wrapping swarm-memory
+  - file: lib/mnemosyne/layers/vector.test.ts
+    change: Add integration tests (read-only Qdrant)
+  - file: lib/mnemosyne/escalation.ts
+    change: Implement vector → file fallback logic
+
+code_examples:
+  - title: swarm-memory Qdrant query pattern
+    file: ~/Documents/work/dostal/code/swarm-memory
+    snippet: |
+      # Reference pattern from existing implementation
+      # (actual snippet to be extracted during research step)
+
+design_decisions:
+  - decision: Read-only first, writes in follow-up story
+    rationale: Prove safety before touching existing collections
+  - decision: Wrap swarm-memory, don't duplicate Qdrant client
+    rationale: Single source of truth for Qdrant operations
+  - decision: Escalation on zero hits, not on low confidence
+    rationale: Open question #4 resolution - simple trigger first
+
+cross_cutting:
+  - concern: existing-infrastructure
+    action: "Read-only mode; assertion that zero collections are dropped; swarm-memory state preserved"
+  - concern: provenance-completeness
+    action: "Extract embedder model from swarm-memory metadata; populate all 7 fields"
+  - concern: loud-failure
+    action: "Log when vector layer unavailable (Qdrant down, key missing); escalate to file layer with degradation marker"
+
+risks:
+  - severity: high
+    description: Accidental Qdrant collection deletion
+    mitigation: Read-only mode first; backup existing collections before write story; loud assertion on any DROP operation
+  - severity: medium
+    description: swarm-memory API changes
+    mitigation: Pin to specific commit; integration test against real repo
+
+references:
+  - path: ~/Documents/work/dostal/code/swarm-memory
+    relevant_excerpt: "swarm-memory repo - Qdrant client, scope mapping, escalation ladder"
+
+metric:
+  applies: true
+  name: vector_layer.recall_vs_find_token_cost
+  direction: down
+  unit: tokens
+  baseline: null
+  target: 0.5
+  window: epic-close
+  source:
+    kind: manual
+    ref: "Benchmark: 1000-query comparison of recall() vs grep token cost"
+  verify_at: epic-close
+  owner: researcher

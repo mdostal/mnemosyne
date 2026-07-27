@@ -1,0 +1,128 @@
+project_name: Mnemosyne
+type: greenfield
+discovered: "2026-07-27T10:46:00Z"
+source: "idea brief"
+
+project_type: framework
+has_ui: false
+
+ship_target:
+  kind: github-release
+  notes: "Pantheon gods ship via GitHub releases"
+
+# From the idea brief
+claude_md_summary: |
+  Mnemosyne is the Pantheon's memory god — the single unified layer that writes
+  and recalls across every memory scope. It wraps existing infrastructure
+  (Qdrant Cloud, swarm-memory, Obsidian vault) rather than reinventing them.
+
+  Key constraints:
+  - Do NOT wipe existing Qdrant collections or Obsidian vault
+  - Multica-native scheduling only (no localized cron)
+  - Loud failure is a hard requirement
+  - Build ON what exists (swarm-memory at ~/Documents/work/dostal/code/swarm-memory)
+
+tech_stack:
+  languages: []
+  frameworks: []
+  build_tools: []
+  package_managers: []
+  versions: {}
+
+structure:
+  modules: []
+  entry_points: []
+
+architecture:
+  pattern: "To be determined during architecture phase"
+  di_framework: null
+  state_management: "Layer-stack escalation with provenance tracking"
+  navigation: null
+  data_layer: "Multi-layer: meta(Obsidian) → enterprise → project → code-graph → vector(Qdrant) → file"
+
+conventions:
+  naming: "To be established"
+  file_organization: "To be established"
+  branching: "To be established"
+  commit_messages: "To be established"
+
+test_infrastructure:
+  unit:
+    framework: null
+    location: null
+    count: "0 files"
+    coverage_tool: null
+  integration:
+    framework: null
+    location: null
+  e2e:
+    framework: null
+    location: null
+    count: "0 flows"
+  mocking: null
+  test_commands: []
+
+ci_cd:
+  platform: null
+  workflows: []
+  gating: null
+
+documentation_found: []
+
+existing_knowledge:
+  mcp_servers: []
+  existing_skills: []
+  existing_hooks: []
+
+north_star:
+  goal: "Unify memory layers behind one recall/write API so 'memory over find' becomes the default retrieval path for every agent"
+  audience: "Pantheon gods (Minerva, Argus, Metis, etc.) and swarm agents"
+  expected_scale: "Cross-project meta-layer serving all Pantheon components"
+  pain_points: "Memory infrastructure exists but is fragmented — no single god owns the layer stack, no unified API, agents fall back to grep/find"
+  success: "One recall/write API in use by ≥1 other god spanning ≥3 layers; recall beats find on token cost"
+  avoid: "Reinventing existing vector DB or embedder; wiping Qdrant collections; silent failures"
+
+integrations:
+  cli_tools:
+    swarm-memory:
+      detected: true
+      path: "~/Documents/work/dostal/code/swarm-memory"
+      qdrant_key_configured: true
+    codex:
+      detected: true
+      path: null
+    linearis:
+      detected: false
+    frame0:
+      detected: false
+    maestro:
+      detected: false
+  mcp_servers:
+    firecrawl:
+      detected: false
+    context7:
+      detected: false
+    posthog:
+      detected: false
+    firebase:
+      detected: false
+    mobile-mcp:
+      detected: false
+  vaults:
+    obsidian:
+      detected: false
+      path: null
+
+code_quality:
+  linters: []
+  formatters: []
+  pre_commit:
+    framework: null
+    hooks: []
+  code_snippets: []
+  test_first_signals:
+    co_located_tests: false
+    test_before_source: inconclusive
+    test_runner_in_precommit: false
+    bdd_keywords: false
+    test_absence: true

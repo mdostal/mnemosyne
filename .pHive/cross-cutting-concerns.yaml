@@ -1,0 +1,117 @@
+# cross-cutting-concerns.yaml
+# Project-specific cross-cutting concerns for Mnemosyne story planning and execution.
+# Each concern is evaluated per-story during planning. The planner marks which
+# apply and what action is needed.
+
+concerns:
+
+  - id: documentation
+    name: Documentation Updates
+    description: >
+      When a story changes user-facing behavior, API contracts, layer stack
+      behavior, recall/write semantics, schemas, directory structure, or
+      configuration, the corresponding documentation must be updated. This
+      prevents docs from drifting out of sync with the system.
+    applies_when: >
+      Story modifies recall/write API surface, layer escalation logic, provenance
+      schema, indexing behavior, configuration files, or adds/removes/renames
+      reference documents
+    planning_prompt: >
+      Which documentation files reference the behavior this story changes?
+      Check: README, API documentation, integration guides, layer-stack
+      architecture docs, and any docs that describe the affected workflow or
+      feature. List each doc and what section needs updating.
+    implementation_checklist:
+      - "All docs referencing changed behavior identified"
+      - "Affected sections updated to reflect new behavior"
+      - "No stale references to old behavior remain in docs"
+      - "New features/concepts mentioned in at least one discoverable doc"
+
+  - id: versioning
+    name: Version Incrementing
+    description: >
+      When an epic ships consumer-visible changes (new API methods, new layer
+      behavior, new config keys, breaking changes), the package version must
+      be bumped per semver, and CHANGELOG.md must gain a new entry. This
+      prevents the consumer-facing version from drifting silently as
+      capabilities ship.
+    applies_when: >
+      Epic adds, removes, or modifies any consumer-visible surface — including
+      public API methods (recall, remember), layer contracts, config schema,
+      or CLI commands. NOT triggered by pure-internal edits (internal
+      refactors, performance improvements with no observable API changes).
+    planning_prompt: >
+      Does this epic change anything a consumer (other Pantheon gods) would
+      observe after pulling the latest version? List each consumer-visible
+      change. Map each to the semver bump level: patch (bug fix or doc-only),
+      minor (additive feature), major (breaking change).
+    implementation_checklist:
+      - "package.json (or equivalent) version bumped per semver"
+      - "CHANGELOG.md gains a new dated section with bullet entries for each consumer-visible change"
+      - "Bump commit is the LAST commit on the epic branch"
+      - "If breaking change: migration notes added to CHANGELOG"
+
+  - id: loud-failure
+    name: Loud Failure Contract
+    description: >
+      Mnemosyne has a hard requirement: never silently run without memory.
+      When a layer is unreachable or degraded, the system must flag it
+      explicitly in the response (provenance includes degradation markers)
+      and emit telemetry. Silent fallback to grep/find without flagging is
+      a contract violation.
+    applies_when: >
+      Story touches layer availability checks, fallback paths, error handling
+      in recall/write operations, or provenance generation.
+    planning_prompt: >
+      Does this story add a fallback path or handle a layer being unavailable?
+      If yes: What signal tells the consumer that memory is degraded? Does
+      provenance track which layers were skipped? Is telemetry emitted?
+    implementation_checklist:
+      - "Fallback paths emit explicit degradation markers in provenance"
+      - "Telemetry event logged when falling back to file layer"
+      - "Response includes which layers were queried vs skipped"
+      - "No silent grep/find fallback without flagging"
+
+  - id: provenance-completeness
+    name: Provenance Completeness
+    description: >
+      Every recall hit must include full provenance: layer, source file/collection,
+      chunk span, index timestamp, content hash, embedder, and retrieval time.
+      Partial or missing provenance breaks the "where did this come from"
+      debugging contract.
+    applies_when: >
+      Story adds or modifies recall operations, layer implementations, or
+      provenance schema.
+    planning_prompt: >
+      Does this story return recall hits? If yes: Which provenance fields
+      are included? Are any fields optional? What happens if a layer doesn't
+      support a field (e.g., file layer has no embedder)?
+    implementation_checklist:
+      - "All required provenance fields populated: layer, source, chunk_span, index_timestamp, content_hash, embedder, retrieval_time"
+      - "Missing fields (e.g., file layer has no embedder) are explicitly null, not omitted"
+      - "Provenance schema matches the documented contract"
+      - "Provenance is testable: unit tests verify all fields present"
+
+  - id: existing-infrastructure
+    name: Build ON What Exists
+    description: >
+      Mnemosyne wraps existing infrastructure (Qdrant Cloud, swarm-memory,
+      Obsidian vault) rather than reinventing it. Any story that touches
+      vector search, code-graph, or meta-layer storage must preserve existing
+      data and configurations. Do NOT wipe Qdrant collections, do NOT
+      overwrite swarm-memory's internal state, do NOT reorganize Obsidian
+      vault structure.
+    applies_when: >
+      Story touches vector layer (Qdrant), code-graph layer (swarm-memory),
+      or meta layer (Obsidian vault).
+    planning_prompt: >
+      Does this story modify how we interact with Qdrant, swarm-memory, or
+      Obsidian? If yes: What existing data might be affected? Are we
+      preserving collections/files/configs? Is the change additive or
+      destructive?
+    implementation_checklist:
+      - "Existing Qdrant collections preserved (no drops, no overwrites)"
+      - "swarm-memory internal state preserved (read-only or append-only)"
+      - "Obsidian vault structure preserved (no renames, no deletes)"
+      - "Qdrant key at ~/.config/swarm-memory/qdrant.key not modified"
+      - "Changes are additive (new collections, new indexes) rather than destructive"

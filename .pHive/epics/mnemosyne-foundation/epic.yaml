@@ -1,0 +1,56 @@
+name: mnemosyne-foundation
+title: Mnemosyne Foundation - Unified Memory God
+target_codebase: .
+methodology: classic
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: main
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [greenfield, architecture, integration]
+  roster: [researcher, architect, technical-writer]
+  per_tag_reasoning:
+    greenfield: "No existing codebase; defining new god from scratch"
+    architecture: "Multi-layer memory stack with complex escalation logic"
+    integration: "Wraps existing swarm-memory, Qdrant, Obsidian systems"
+  confidence: high
+  gate_decisions: {}
+
+stories:
+  - id: m-01-core-recall-interface
+    title: Define core recall/remember interface contracts
+    complexity: medium
+    depends_on: []
+
+  - id: m-02-file-layer-implementation
+    title: Implement file layer with loud failure
+    complexity: medium
+    depends_on: [m-01-core-recall-interface]
+
+  - id: m-03-vector-layer-integration
+    title: Integrate swarm-memory vector layer (Qdrant)
+    complexity: high
+    depends_on: [m-02-file-layer-implementation]
+
+  - id: m-04-code-graph-layer
+    title: Integrate swarm-memory code-graph layer
+    complexity: medium
+    depends_on: [m-03-vector-layer-integration]
+
+  - id: m-05-project-enterprise-meta-layers
+    title: Implement project/enterprise/meta memory layers
+    complexity: high
+    depends_on: [m-04-code-graph-layer]
+
+  - id: m-06-continuous-indexing
+    title: Implement Multica-native continuous indexing
+    complexity: high
+    depends_on: [m-05-project-enterprise-meta-layers]
+
+  - id: m-07-first-god-integration
+    title: Integrate Mnemosyne with first Pantheon god (validation)
+    complexity: medium
+    depends_on: [m-06-continuous-indexing]

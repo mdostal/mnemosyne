@@ -1,0 +1,102 @@
+id: m-07-first-god-integration
+epic: mnemosyne-foundation
+title: Integrate Mnemosyne with first Pantheon god (validation)
+status: pending
+complexity: medium
+methodology: classic
+depends_on: [m-06-continuous-indexing]
+
+description: |
+  Validate the entire Mnemosyne stack by integrating with one Pantheon god
+  (likely Minerva or Argus). This proves the recall/remember API works end-to-end
+  and measures token cost vs grep/find.
+
+  Success criteria from idea brief: "One recall/write API in use by ≥1 other god,
+  spanning ≥3 layers; recall beats find on token cost."
+
+acceptance_criteria:
+  - "Given a Pantheon god (Minerva/Argus), when it calls recall(), then results span ≥3 layers (e.g., project → code-graph → vector)"
+  - "Given the same query via grep/find, when token costs are compared, then recall uses ≤ find tokens"
+  - "Given remember() called by a god, when content is stored, then it's retrievable via recall()"
+  - "Given provenance from a multi-layer recall, when the god inspects it, then all 7 fields are present for each hit"
+
+steps:
+  - id: research
+    description: |
+      Research:
+      - Which god to integrate first (Minerva for planning? Argus for metrics?)
+      - God's current memory access patterns (grep/find usage)
+      - Integration touchpoints (where to replace grep with recall)
+    agent: researcher
+  - id: implement
+    description: |
+      Integrate with chosen god:
+      - Replace grep/find calls with recall()
+      - Add remember() calls for god's decision/metric records
+      - Measure token cost (before/after)
+      - Validate ≥3 layers hit for representative queries
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Integration tests:
+      - recall() returns multi-layer results
+      - Provenance includes all 7 fields
+      - Token cost benchmark (recall vs grep)
+      - remember() → recall() round-trip
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review token cost improvement and multi-layer coverage
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit first-god integration to feat/mnemosyne-foundation
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  tech_stack: {}
+  key_files: []
+
+files_to_modify:
+  - file: lib/minerva/memory.ts
+    change: Replace grep calls with Mnemosyne recall()
+  - file: lib/minerva/decisions.ts
+    change: Add remember() calls for planning decisions
+  - file: benchmarks/recall-vs-find.ts
+    change: Token cost comparison script
+
+design_decisions:
+  - decision: Minerva as first integration target
+    rationale: Planning god has highest memory access frequency; best validation signal
+  - decision: Token cost is output tokens (LLM processing), not input tokens
+    rationale: recall() may use more input tokens (provenance) but reduce output tokens (fewer grep iterations)
+
+cross_cutting:
+  - concern: provenance-completeness
+    action: "Validate all 7 fields present in integration test assertions"
+  - concern: documentation
+    action: "Document Mnemosyne integration pattern for other gods"
+
+risks:
+  - severity: low
+    description: Token cost regression (recall worse than grep)
+    mitigation: Profile and optimize slow layers; add caching
+
+references: []
+
+metric:
+  applies: true
+  name: recall_vs_find.token_cost_ratio
+  direction: down
+  unit: ratio
+  baseline: 1.0
+  target: 0.5
+  window: story-integrate
+  source:
+    kind: manual
+    ref: benchmarks/recall-vs-find.ts output
+  verify_at: integrate
+  owner: researcher

@@ -1,0 +1,86 @@
+id: m-01-core-recall-interface
+epic: mnemosyne-foundation
+title: Define core recall/remember interface contracts
+status: pending
+complexity: medium
+methodology: classic
+depends_on: []
+
+description: |
+  Define the foundational API contracts for Mnemosyne's recall and remember operations.
+  These interfaces establish the contract that all Pantheon gods will use for memory
+  operations, replacing fragmented grep/find calls.
+
+  This is the architectural foundation - no implementation yet, just the contract
+  definitions that subsequent stories will implement against.
+
+acceptance_criteria:
+  - "Given the recall interface, when a god calls recall(query, scope, intent), then the return type includes hits with full provenance"
+  - "Given the remember interface, when a god calls remember(content, scope, layer), then the operation succeeds or fails loudly"
+  - "Given the provenance schema, when any layer returns a hit, then all 7 required fields are present"
+  - "Given the scope enumeration, when a caller specifies scope, then project/enterprise/meta are valid values"
+
+steps:
+  - id: research
+    description: Review swarm-memory interfaces and Pantheon god contracts for consistency
+    agent: researcher
+  - id: implement
+    description: |
+      Define TypeScript/Python interfaces for:
+      - recall(query: string, scope: Scope, intent?: Intent): RecallResult
+      - remember(content: Content, scope: Scope, layer?: Layer): RememberResult
+      - Provenance schema (7 fields)
+      - Scope/Intent/Layer enumerations
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: Write interface contract tests (type checking, schema validation)
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review interface contracts against Pantheon standards
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit interface definitions to feat/mnemosyne-foundation
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  tech_stack:
+    runtime: "To be determined (TypeScript or Python)"
+  key_files: []
+
+files_to_modify:
+  - file: lib/mnemosyne/interfaces.ts
+    change: Define RecallResult, RememberResult, Provenance, Scope, Intent, Layer types
+  - file: lib/mnemosyne/schema.ts
+    change: Define JSON schemas for validation
+
+design_decisions:
+  - decision: Use strongly-typed interfaces for recall/remember
+    rationale: Compile-time safety for Pantheon god integrations
+  - decision: Provenance is mandatory on every hit
+    rationale: Cross-cutting concern from .pHive/cross-cutting-concerns.yaml
+  - decision: Scope is required, layer is optional on remember()
+    rationale: Scope-based routing (open question #5 resolution)
+
+cross_cutting:
+  - concern: provenance-completeness
+    action: "Define all 7 provenance fields in schema: layer, source, chunk_span, index_timestamp, content_hash, embedder, retrieval_time"
+  - concern: loud-failure
+    action: "Return type includes success/failure discriminator; no silent nulls"
+  - concern: documentation
+    action: "Document recall/remember contracts in API reference"
+
+risks:
+  - severity: medium
+    description: Interface changes after god integration begins
+    mitigation: Version the API from day 1; deprecation policy
+
+references: []
+
+metric:
+  applies: false
+  justification: "Schema/interface definition story; metric is measured by consuming stories (m-02 file layer, m-03 vector integration)"

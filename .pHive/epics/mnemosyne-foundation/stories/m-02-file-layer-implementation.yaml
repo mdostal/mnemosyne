@@ -1,0 +1,103 @@
+id: m-02-file-layer-implementation
+epic: mnemosyne-foundation
+title: Implement file layer with loud failure
+status: pending
+complexity: medium
+methodology: classic
+depends_on: [m-01-core-recall-interface]
+
+description: |
+  Implement the file layer (bottom of the memory stack) - a grep-based fallback
+  that serves as the loud-failure floor. When all higher layers fail or are
+  unavailable, recall degrades to keyword search over files but MUST flag the
+  degraded state in provenance.
+
+  This establishes the "never silently run without memory" contract.
+
+acceptance_criteria:
+  - "Given a query, when file layer recall() executes, then grep results are returned with provenance.layer='file'"
+  - "Given higher layers are unavailable, when recall falls back to file layer, then provenance includes degradation marker"
+  - "Given a search with zero hits, when file layer returns empty, then loud failure is logged"
+  - "Given remember() on file layer, when content is written, then file metadata is captured in provenance"
+
+steps:
+  - id: research
+    description: Explore grep performance patterns, provenance tracking strategies
+    agent: researcher
+  - id: implement
+    description: |
+      Implement FileLayer class:
+      - recall() using ripgrep or native grep
+      - remember() writing to .pHive/memory/file/
+      - Provenance generation (layer='file', no embedder, content_hash via SHA256)
+      - Degradation markers when fallback path is active
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Write tests:
+      - Keyword search returns hits with file provenance
+      - Empty results trigger loud-failure log
+      - Degradation marker present when fallback activated
+      - Remember() persists and retrieves correctly
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review loud-failure contract implementation
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit file layer to feat/mnemosyne-foundation
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  tech_stack:
+    search: ripgrep (if available) or grep
+  key_files: []
+
+files_to_modify:
+  - file: lib/mnemosyne/layers/file.ts
+    change: Implement FileLayer class with recall/remember
+  - file: lib/mnemosyne/layers/file.test.ts
+    change: Add file layer unit tests
+  - file: .pHive/memory/file/.gitkeep
+    change: Create file layer storage directory
+
+design_decisions:
+  - decision: Use ripgrep over grep when available
+    rationale: 10x faster on large codebases; fallback to grep if missing
+  - decision: Store file-layer writes under .pHive/memory/file/
+    rationale: Co-located with project memory, gitignored by default
+  - decision: SHA256 for content_hash, no embedder field
+    rationale: File layer has no semantic embedding; hash proves content identity
+
+cross_cutting:
+  - concern: loud-failure
+    action: "Log degraded state when file layer is the only available layer; emit telemetry event"
+  - concern: provenance-completeness
+    action: "Populate layer='file', source=<path>, chunk_span=<lines>, index_timestamp=mtime, content_hash=SHA256, embedder=null, retrieval_time=now()"
+  - concern: existing-infrastructure
+    action: "File layer is additive; does not modify swarm-memory or Qdrant"
+
+risks:
+  - severity: low
+    description: Grep performance on large repos
+    mitigation: Use ripgrep with ignore patterns (.git, node_modules); timeout after 5s
+
+references: []
+
+metric:
+  applies: true
+  name: file_layer.recall_latency
+  direction: down
+  unit: milliseconds
+  baseline: null
+  target: 500
+  window: story-integrate
+  source:
+    kind: events
+    ref: .pHive/metrics/events/file-layer-*.jsonl
+  verify_at: integrate
+  owner: tester

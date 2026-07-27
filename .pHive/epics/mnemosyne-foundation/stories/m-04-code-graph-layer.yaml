@@ -1,0 +1,103 @@
+id: m-04-code-graph-layer
+epic: mnemosyne-foundation
+title: Integrate swarm-memory code-graph layer
+status: pending
+complexity: medium
+methodology: classic
+depends_on: [m-03-vector-layer-integration]
+
+description: |
+  Wrap swarm-memory's SQLite-backed impact graph as Mnemosyne's code-graph layer.
+  The graph captures typed edges (depends_on, cites, implements) between files,
+  docs, and metrics - answering "what breaks if I change this?"
+
+  Like vector integration, this wraps existing infrastructure rather than
+  reimplementing graph storage.
+
+acceptance_criteria:
+  - "Given a file path query, when code-graph recall() executes, then typed edges are returned in provenance"
+  - "Given a 'depends_on' edge, when recall traverses it, then dependent files are included in results"
+  - "Given remember() on code-graph, when an edge is recorded, then swarm-memory SQLite is updated"
+  - "Given recall spanning vector + code-graph, when hits merge, then provenance shows both layers"
+
+steps:
+  - id: research
+    description: Explore swarm-memory impact graph schema and query patterns
+    agent: researcher
+  - id: implement
+    description: |
+      Implement CodeGraphLayer class:
+      - Wrap swarm-memory SQLite graph operations
+      - recall() queries edges by file/doc path
+      - Provenance: layer='code-graph', source=<edge>, chunk_span=null
+      - Edge traversal for "what breaks if X changes"
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Tests:
+      - Query returns typed edges (depends_on, cites, implements)
+      - Edge traversal follows graph correctly
+      - Merge with vector layer results preserves provenance
+      - SQLite state unchanged by read-only queries
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review graph query correctness and swarm-memory preservation
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit code-graph layer to feat/mnemosyne-foundation
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  tech_stack:
+    graph_db: SQLite (via swarm-memory)
+  key_files: []
+
+files_to_modify:
+  - file: lib/mnemosyne/layers/code-graph.ts
+    change: Implement CodeGraphLayer wrapping swarm-memory graph
+  - file: lib/mnemosyne/layers/code-graph.test.ts
+    change: Add graph query tests
+  - file: lib/mnemosyne/merge.ts
+    change: Implement multi-layer result merging (vector + code-graph)
+
+design_decisions:
+  - decision: Graph edges are first-class provenance entries
+    rationale: "what breaks" queries need edge metadata, not just file content
+  - decision: Typed edges (depends_on, cites, implements) preserved
+    rationale: swarm-memory schema already captures these; Mnemosyne exposes them
+  - decision: Graph layer has no chunk_span (edges, not content)
+    rationale: Edges reference whole files/docs, not text spans
+
+cross_cutting:
+  - concern: existing-infrastructure
+    action: "Wrap swarm-memory SQLite graph; do not create parallel graph storage"
+  - concern: provenance-completeness
+    action: "Populate layer='code-graph', source=<edge-id>, chunk_span=null, embedder=null"
+
+risks:
+  - severity: low
+    description: Graph staleness if files change without reindexing
+    mitigation: Continuous indexing story (m-06) keeps graph fresh
+
+references:
+  - path: ~/Documents/work/dostal/code/swarm-memory
+    relevant_excerpt: "SQLite impact graph schema, edge types, query patterns"
+
+metric:
+  applies: true
+  name: code_graph.edge_coverage
+  direction: up
+  unit: percentage
+  baseline: null
+  target: 0.80
+  window: epic-close
+  source:
+    kind: sql
+    ref: "SELECT COUNT(DISTINCT file_path) / (SELECT COUNT(*) FROM files) FROM edges"
+  verify_at: epic-close
+  owner: tester

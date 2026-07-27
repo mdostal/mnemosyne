@@ -1,0 +1,119 @@
+id: m-05-project-enterprise-meta-layers
+epic: mnemosyne-foundation
+title: Implement project/enterprise/meta memory layers
+status: pending
+complexity: high
+methodology: classic
+depends_on: [m-04-code-graph-layer]
+
+description: |
+  Implement the top 3 layers of the memory stack:
+  - Meta layer: Obsidian vault (cross-project knowledge)
+  - Enterprise layer: Org-wide standards (~/.claude/hive/enterprise/)
+  - Project layer: Per-project working memory (.pHive/memory/project/)
+
+  These layers store human-curated and agent-generated knowledge that
+  isn't in the codebase but informs planning and execution.
+
+acceptance_criteria:
+  - "Given an Obsidian vault at ~/.claude/hive/vault, when meta layer recall() runs, then markdown docs are indexed and searchable"
+  - "Given enterprise memory at ~/.claude/hive/enterprise/, when recall queries org standards, then cross-project knowledge is returned"
+  - "Given project memory at .pHive/memory/project/, when recall queries decisions, then project-scoped context is returned"
+  - "Given meta layer unavailable, when recall executes, then graceful degradation to enterprise → project → lower layers"
+
+steps:
+  - id: research
+    description: |
+      Research:
+      - Obsidian vault detection and markdown parsing
+      - Enterprise vs project scope boundary (directory-based)
+      - Indexing markdown into vector layer for semantic search
+    agent: researcher
+  - id: implement
+    description: |
+      Implement MetaLayer, EnterpriseLayer, ProjectLayer classes:
+      - MetaLayer: Index Obsidian vault markdown → vector layer
+      - EnterpriseLayer: Index ~/.claude/hive/enterprise/ → vector
+      - ProjectLayer: Index .pHive/memory/project/ → vector
+      - remember() routes writes to appropriate layer based on scope
+      - Bootstrap vault/enterprise directories if missing
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Tests:
+      - Obsidian markdown indexed and retrievable
+      - Enterprise/project scope routing correct
+      - Graceful degradation when meta layer missing
+      - remember() writes to correct directory
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review scope boundary logic and graceful degradation
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit top-3 layers to feat/mnemosyne-foundation
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  tech_stack:
+    markdown_parser: remark or marked
+  key_files:
+    - path: ~/.claude/hive/vault
+      purpose: Obsidian vault for meta layer (bootstrap if missing)
+    - path: ~/.claude/hive/enterprise
+      purpose: Enterprise-scoped memory (create if missing)
+    - path: .pHive/memory/project
+      purpose: Project-scoped memory
+
+files_to_modify:
+  - file: lib/mnemosyne/layers/meta.ts
+    change: Implement MetaLayer (Obsidian vault indexing)
+  - file: lib/mnemosyne/layers/enterprise.ts
+    change: Implement EnterpriseLayer
+  - file: lib/mnemosyne/layers/project.ts
+    change: Implement ProjectLayer
+  - file: lib/mnemosyne/routing.ts
+    change: Implement scope-based write routing
+  - file: lib/mnemosyne/bootstrap.ts
+    change: Bootstrap vault/enterprise directories if missing
+
+design_decisions:
+  - decision: Meta layer is optional with graceful degradation
+    rationale: Obsidian vault not detected in integrations; can't be required
+  - decision: Enterprise at ~/.claude/hive/enterprise/, project at .pHive/memory/project/
+    rationale: Open question #3 resolution - directory-based scoping
+  - decision: Markdown → vector indexing for semantic search
+    rationale: Top layers store prose knowledge; vector search finds relevant passages
+
+cross_cutting:
+  - concern: existing-infrastructure
+    action: "Bootstrap Obsidian vault if missing; do not overwrite existing vault structure"
+  - concern: loud-failure
+    action: "Log when meta layer unavailable; degrade to enterprise → project"
+  - concern: documentation
+    action: "Document vault setup, enterprise/project scope boundaries"
+
+risks:
+  - severity: medium
+    description: Obsidian vault missing or incompatible structure
+    mitigation: Graceful degradation; bootstrap default structure; document setup in README
+
+references: []
+
+metric:
+  applies: true
+  name: meta_layer.markdown_index_coverage
+  direction: up
+  unit: percentage
+  baseline: null
+  target: 0.95
+  window: epic-close
+  source:
+    kind: events
+    ref: .pHive/metrics/events/meta-layer-*.jsonl
+  verify_at: epic-close
+  owner: tester
