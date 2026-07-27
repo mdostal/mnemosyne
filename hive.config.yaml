@@ -1,0 +1,20 @@
+# Hive workflow configuration for mnemosyne — the Pantheon Memory god.
+# Hive-specific settings only. Status: concept, staged for Minerva planning.
+
+metrics:
+  enabled: true
+
+execution:
+  default_methodology: tdd    # Pantheon god discipline: named -> interfaced -> FULL TDD -> locked
+
+developer:
+  pr_style: single-commit
+  commit_granularity: feature-scoped
+  review_depth: thorough
+  notes: null
+
+planning:
+  collaborative_review: true
+
+meta_team:
+  github_forwarding: false
