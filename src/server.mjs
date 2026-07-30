@@ -50,6 +50,11 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const route = `${req.method} ${url.pathname}`;
   const t0 = Date.now();
+  // Lightweight request log — proves what actually reaches the memory god
+  // (which consumers route recall/remember THROUGH Mnemosyne vs shelling direct).
+  res.on("finish", () => {
+    console.log(`[mnemosyne] ${route} -> ${res.statusCode} ${Date.now() - t0}ms`);
+  });
   try {
     if (route === "GET /") {
       return send(res, 200, {
@@ -82,6 +87,10 @@ const server = http.createServer(async (req, res) => {
         minScore: b.min_score,
         radius: b.radius,
       });
+      console.log(
+        `[mnemosyne] recall q=${JSON.stringify(String(b.query || "").slice(0, 80))} ` +
+          `scope=${b.scope || "(default)"} total_hits=${result.total_hits ?? 0}`
+      );
       return send(res, 200, { ...result, took_ms: Date.now() - t0 });
     }
 
