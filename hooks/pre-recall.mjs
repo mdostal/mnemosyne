@@ -16,9 +16,9 @@
 // Resilience contract: this hook NEVER blocks the agent loop. Any failure ->
 // exit 0 with no injected context. A memory miss is not a ticket failure.
 
-import { recall, MNEMOSYNE_URL } from "./lib/mnemo-client.mjs";
+import { recall, grep, MNEMOSYNE_URL } from "./lib/mnemo-client.mjs";
 import { resolveScope } from "./lib/scope.mjs";
-import { formatPriorMemory } from "./lib/format.mjs";
+import { formatPriorMemory, mergeResults } from "./lib/format.mjs";
 
 function readStdin() {
   return new Promise((resolve) => {
@@ -74,13 +74,37 @@ async function main() {
   const { scope, escalate, role, reason } = resolveScope(input);
 
   const hits = Number(input.hits || process.env.MNEMOSYNE_HITS || 5);
-  const result = await recall(query, scope, { hits, escalate });
+
+  // HYBRID recall: semantic (concepts) + keyword (exact IDENTIFIERS only).
+  // Semantic owns the natural-language query. Keyword grep runs only on explicit
+  // identifiers (ticket / story ids, or short token-like queries) — the exact
+  // strings embeddings do NOT encode — giving DETERMINISTIC per-ticket recall.
+  // Keyword-exact hits merge FIRST so a definite identifier match surfaces at top.
+  const semantic = await recall(query, scope, { hits, escalate });
+
+  const identifiers = [];
+  if (input.ticket) identifiers.push(String(input.ticket));
+  if (input.story && input.story !== input.ticket) identifiers.push(String(input.story));
+  // a bare token-like query (single word, has a digit/dash, no spaces) is itself
+  // an identifier worth an exact lookup.
+  if (!identifiers.length && /^[\w./-]{6,}$/.test(query) && /[\d-]/.test(query)) {
+    identifiers.push(query);
+  }
+  const kwResults = [];
+  for (const id of identifiers) {
+    kwResults.push(await grep(id, scope, { hits: 3, escalate }));
+  }
+  // keyword first so exact-identifier chunks win dedup + sort above semantic.
+  const result = mergeResults(...kwResults, semantic);
+  result.total_hits =
+    (semantic.total_hits || 0) + kwResults.reduce((n, r) => n + (r.total_hits || 0), 0);
+  result.via = semantic.via;
 
   // If memory is entirely unreachable, stay silent (resilience) rather than
   // injecting an error into the agent's context.
-  if (result.via === "none") {
+  if (semantic.via === "none" && kwResults.every((r) => r.via === "none")) {
     process.stderr.write(
-      `[pre-recall] memory unreachable (${result.service_error || ""}); skipping injection\n`
+      `[pre-recall] memory unreachable (${semantic.service_error || ""}); skipping injection\n`
     );
     process.exit(0);
   }

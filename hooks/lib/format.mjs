@@ -23,15 +23,35 @@ function lineRange(hit) {
   return "";
 }
 
-// Flatten scopes[].hits[] into a single ranked list, tagging each with its layer.
+// mergeResults(...results) -> combined { scopes } from several recall/grep calls.
+export function mergeResults(...results) {
+  const scopes = [];
+  for (const r of results) {
+    if (r && Array.isArray(r.scopes)) scopes.push(...r.scopes);
+  }
+  return { scopes };
+}
+
+// Flatten scopes[].hits[] into a single ranked, DEDUPED list, tagged with layer.
+// Keyword (exact) hits sort FIRST — they are high-confidence identifier matches
+// (ticket IDs, tokens) — then semantic hits by score descending.
 export function flattenHits(recallResult) {
   const out = [];
+  const seen = new Set();
   for (const s of recallResult.scopes || []) {
     for (const h of s.hits || []) {
+      const key = `${h.full_path || h.location || h.source}#${h.chunk_index ?? h.chunk_span}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
       out.push({ ...h, layer: s.scope || h.collection });
     }
   }
-  out.sort((a, b) => (b.score || 0) - (a.score || 0));
+  out.sort((a, b) => {
+    const ak = a.match_type === "keyword" ? 1 : 0;
+    const bk = b.match_type === "keyword" ? 1 : 0;
+    if (ak !== bk) return bk - ak; // keyword-exact first
+    return (b.score || 0) - (a.score || 0);
+  });
   return out;
 }
 
@@ -60,8 +80,13 @@ export function formatPriorMemory(recallResult, meta = {}) {
   shown.forEach((h, i) => {
     const src = h.source || h.location || h.full_path || "(unknown)";
     const range = lineRange(h);
-    const score = h.score != null ? h.score.toFixed(2) : "?";
-    lines.push(`${i + 1}. [${h.layer} · score ${score}] ${src}${range ? " " + range : ""}`);
+    const conf =
+      h.match_type === "keyword"
+        ? "keyword-exact"
+        : h.score != null
+        ? `score ${h.score.toFixed(2)}`
+        : "score ?";
+    lines.push(`${i + 1}. [${h.layer} · ${conf}] ${src}${range ? " " + range : ""}`);
     const ex = trimExcerpt(h.text);
     if (ex) lines.push(`   > ${ex}`);
     if (h.full_path) lines.push(`   ↳ ${h.full_path}`);

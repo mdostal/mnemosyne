@@ -130,3 +130,24 @@ export async function remember(text, scope, opts = {}) {
     engine_output: out,
   };
 }
+
+// grep(query, scope, {hits, escalate, radius}) — KEYWORD scroll (no embedder).
+// Deterministic exact-string matching — the reliable path for identifiers
+// (ticket IDs, error codes, tokens) that semantic recall does not encode well.
+export async function grep(query, scope, opts = {}) {
+  if (!query || !String(query).trim()) {
+    const err = new Error("query is required");
+    err.status = 400;
+    throw err;
+  }
+  const args = ["grep", String(query), "--json", "--hits", String(opts.hits || 5)];
+  if (scope) args.push("--scope", String(scope));
+  if (opts.escalate) args.push("--escalate");
+  if (opts.radius != null) args.push("--radius", String(opts.radius));
+  const { stdout } = await run(args);
+  // grep --json returns a top-level array of {scope,collection,hits[]}.
+  // Normalize to the recall shape ({total_hits, scopes[]}) so consumers merge cleanly.
+  const scopesArr = JSON.parse(stdout);
+  const total = scopesArr.reduce((n, s) => n + (s.hits ? s.hits.length : 0), 0);
+  return { query: String(query), total_hits: total, scopes: scopesArr, match_mode: "keyword" };
+}

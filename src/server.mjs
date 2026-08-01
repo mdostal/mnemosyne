@@ -13,7 +13,7 @@
 // PORT env (default 8477).
 
 import http from "node:http";
-import { health, scopes, recall, remember } from "./engine.mjs";
+import { health, scopes, recall, remember, grep } from "./engine.mjs";
 
 const PORT = Number(process.env.PORT || 8477);
 const SERVICE = { god: "mnemosyne", role: "memory", version: "0.1.0" };
@@ -66,6 +66,7 @@ const server = http.createServer(async (req, res) => {
           "GET /scopes": "configured scopes + escalation ladders",
           "POST /recall": "{query, scope?, hits?, escalate?, min_score?, radius?} -> ranked hits w/ provenance",
           "POST /remember": "{text, scope?, tag?} -> write-back (index into scope collection)",
+          "POST /grep": "{query, scope?, hits?, escalate?, radius?} -> KEYWORD hits (exact-string, no embedder)",
         },
       });
     }
@@ -77,6 +78,16 @@ const server = http.createServer(async (req, res) => {
 
     if (route === "GET /scopes") {
       return send(res, 200, { ...SERVICE, ...(await scopes()) });
+    }
+
+    if (route === "POST /grep") {
+      const b = await readJson(req);
+      const result = await grep(b.query, b.scope, {
+        hits: b.hits,
+        escalate: b.escalate,
+        radius: b.radius,
+      });
+      return send(res, 200, { ...result, took_ms: Date.now() - t0 });
     }
 
     if (route === "POST /recall") {

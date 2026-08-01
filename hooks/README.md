@@ -25,6 +25,11 @@ corpus), so the hooks work with or without the service running.
   plus a short excerpt — because "Claude's memory is trash, it feeds WHOLE
   files." The agent opens the file or calls the memory tools for full detail and
   can **bubble up** to other layers.
+- **Hybrid recall (semantic + keyword).** `pre-recall` runs both **semantic**
+  recall (concepts) and **keyword** grep (exact identifiers — ticket IDs,
+  tokens, error codes that embeddings do *not* encode). Keyword-exact hits are
+  surfaced first. This is why per-ticket recall by an exact ID is deterministic,
+  while a brand-new single note's *semantic* rank against a large corpus is not.
 - **Role-scoped** (`hooks/lib/scope.mjs`): `orchestrator → top` (all-repo,
   escalates), `architect → repo scope` (escalates), `developer → repo slice`
   (no escalation). This is the **seam** the later layers grow into.

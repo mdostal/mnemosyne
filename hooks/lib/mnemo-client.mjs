@@ -100,6 +100,33 @@ export async function recall(query, scope, opts = {}) {
   }
 }
 
+// --- grep (keyword) ----------------------------------------------------------
+// Deterministic exact-string recall (ticket IDs, error codes, tokens) that
+// semantic search does not encode well. Service /grep primary, CLI fallback.
+// Normalized to the recall shape ({total_hits, scopes[]}). Never throws — an
+// empty keyword result is normal, not an error.
+export async function grep(query, scope, opts = {}) {
+  const payload = { query, scope, hits: opts.hits || 5, escalate: !!opts.escalate };
+  if (opts.radius != null) payload.radius = opts.radius;
+  try {
+    const r = await httpJson("POST", "/grep", payload);
+    return { ...r, via: "service" };
+  } catch {
+    try {
+      const args = ["grep", String(query), "--json", "--hits", String(payload.hits)];
+      if (scope) args.push("--scope", String(scope));
+      if (opts.escalate) args.push("--escalate");
+      if (opts.radius != null) args.push("--radius", String(opts.radius));
+      const { stdout } = await cli(args);
+      const scopesArr = JSON.parse(stdout);
+      const total = scopesArr.reduce((n, s) => n + (s.hits ? s.hits.length : 0), 0);
+      return { query: String(query), total_hits: total, scopes: scopesArr, via: "cli" };
+    } catch {
+      return { total_hits: 0, scopes: [], via: "none" };
+    }
+  }
+}
+
 // --- remember ----------------------------------------------------------------
 // Write-back. Service path is preferred (POST /remember). CLI fallback writes a
 // note file then indexes it (--no-prune, additive) — never wipes the corpus.
