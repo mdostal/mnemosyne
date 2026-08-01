@@ -12,7 +12,8 @@
   },
   "scripts": {
     "start": "node src/server.mjs",
-    "smoke": "node test/smoke.mjs"
+    "smoke": "node test/smoke.mjs",
+    "test:hooks": "node test/hooks.mjs"
   },
   "dependencies": {}
 }

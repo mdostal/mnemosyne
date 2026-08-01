@@ -1,0 +1,36 @@
+{
+  "//": "Drop these into a Claude Code settings.json `hooks` block to wire Mnemosyne v1 into the agent loop. Absolute paths — adjust ROOT to where the mnemosyne repo lives on the machine.",
+  "//ROOT": "/Users/dostal/Documents/work/dostal/code/mnemosyne",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /Users/dostal/Documents/work/dostal/code/mnemosyne/hooks/pre-recall.mjs"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /Users/dostal/Documents/work/dostal/code/mnemosyne/hooks/post-remember.mjs"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /Users/dostal/Documents/work/dostal/code/mnemosyne/hooks/post-remember.mjs"
+          }
+        ]
+      }
+    ]
+  }
+}
