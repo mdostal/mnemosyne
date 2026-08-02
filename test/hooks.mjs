@@ -64,11 +64,14 @@ const recalled = await runHook(PRE, {
 });
 ok(recalled.code === 0, `pre-recall exits 0 (non-blocking)`);
 let injected = "";
+let recalledJson = {};
 try {
-  const j = JSON.parse(recalled.out || "{}");
-  injected = j.hookSpecificOutput?.additionalContext || "";
+  recalledJson = JSON.parse(recalled.out || "{}");
+  injected = recalledJson.hookSpecificOutput?.additionalContext || "";
 } catch { /* */ }
 ok(injected.includes(token), `pre-recall recalls the stored token back into context (store->recall round-trip)`);
+ok(recalledJson.mnemosyne?.canonical_bundle === injected, `canonical bundle matches Claude additionalContext exactly`);
+ok(injected.includes("mnemosyne-cache-breakpoint"), `injected block includes the cache breakpoint marker`);
 ok(/keyword-exact/.test(injected), `token surfaced via deterministic keyword-exact match`);
 ok(/lines\s+\d+–\d+|chunk\s+\d+/.test(injected), `injected block carries line-range/chunk provenance (pointers, not whole files)`);
 ok(/Prior Memory/.test(injected), `injected block is a Prior Memory section`);
