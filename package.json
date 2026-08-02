@@ -12,6 +12,7 @@
   },
   "scripts": {
     "start": "node src/server.mjs",
+    "test": "node test/bundle.mjs",
     "smoke": "node test/smoke.mjs",
     "test:hooks": "node test/hooks.mjs"
   },

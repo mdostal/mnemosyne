@@ -24,13 +24,17 @@ A write routes to the right layer(s) and keeps the indexes coherent. Backends ar
 
 ## Status
 
-**Concept — staged for Minerva planning.** The design lives in **[`idea-brief.md`](./idea-brief.md)**.
-Minerva turns that brief into an epic + stories (`kickoff` + `plan`); execution follows via Auriga
-+ the swarm. Do **not** hand-file tickets from the brief — Minerva plans it.
+**Phase 1 v1 is implemented.** The service wraps the existing `swarm-memory`
+engine, and `hooks/` contains the runner-agnostic pre-recall/post-remember loop:
+small per-repo + shared memory bundles before a ticket, status-aware write-back
+after a run, and a cache-safe prompt layout that keeps the stable prefix
+separate from the variable ticket memory delta.
 
 ## Read next
 
 - **[`idea-brief.md`](./idea-brief.md)** — the full brief: the layer stack, the unified recall/write
   API, memory-over-find, continuous indexing, viewable in Consus/Janus, pluggable backends, and how
   it builds on the existing Qdrant + Obsidian setup.
+- **[`hooks/README.md`](./hooks/README.md)** — the v1 hook contract, prompt-cache layout, runner-neutral
+  bundle shape, env knobs, and proof commands.
 - `hive.config.yaml` — Hive workflow config for headless planning.
