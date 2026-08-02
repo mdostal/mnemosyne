@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# mnemosyne — start the memory god service.
+# Usage: bin/mnemosyne            # foreground
+#        PORT=8477 bin/mnemosyne
+set -euo pipefail
+export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
+exec node "$HERE/src/server.mjs"
