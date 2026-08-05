@@ -6,6 +6,7 @@
 //
 //   GET  /                 -> service info + endpoint list
 //   GET  /health           -> engine self-test (Qdrant/embedder/graph)
+//   GET  /healthz          -> liveness alias (always 200 if the process is up)
 //   GET  /scopes           -> configured scopes + escalation ladders
 //   POST /recall  {query, scope?, hits?, escalate?, min_score?, radius?}
 //   POST /remember {text, scope?, tag?}
@@ -63,6 +64,7 @@ const server = http.createServer(async (req, res) => {
           "Pantheon memory god — thin service wrapping the swarm-memory engine over the Qdrant SSOT.",
         endpoints: {
           "GET /health": "engine self-test (Qdrant + embedder + graph)",
+          "GET /healthz": "liveness alias (always 200) for external checkers",
           "GET /scopes": "configured scopes + escalation ladders",
           "POST /recall": "{query, scope?, hits?, escalate?, min_score?, radius?} -> ranked hits w/ provenance",
           "POST /remember": "{text, scope?, tag?} -> write-back (index into scope collection)",
@@ -74,6 +76,14 @@ const server = http.createServer(async (req, res) => {
     if (route === "GET /health") {
       const h = await health();
       return send(res, h.ok ? 200 : 503, { ...SERVICE, ...h });
+    }
+
+    // Liveness alias: process-up check only, no CLI shell-out. Deliberately
+    // always 200 (never mirrors /health's 503) so external checkers (Salus,
+    // Argus) never 404 or page on a transient engine hiccup — deep engine
+    // health stays on /health.
+    if (route === "GET /healthz") {
+      return send(res, 200, { ...SERVICE, alive: true });
     }
 
     if (route === "GET /scopes") {

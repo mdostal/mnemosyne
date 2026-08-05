@@ -20,6 +20,7 @@ Every memory op runs over the live Qdrant corpus; nothing is stubbed or mocked.
 |-----------------|-------------------------------------------------------------|---------|
 | `GET /`         | —                                                           | service info + endpoints |
 | `GET /health`   | —                                                           | engine self-test (`swarm-memory check`): Qdrant + embedder + graph |
+| `GET /healthz`  | —                                                           | liveness alias — always 200 if the process is up, so external checkers (Salus/Argus) don't 404 |
 | `GET /scopes`   | —                                                           | scopes → collections + escalation ladders |
 | `POST /recall`  | `{query, scope?, hits?, escalate?, min_score?, radius?}`    | ranked hits **with full provenance** (layer/collection, file, chunk span, embedder, retrieved_at) |
 | `POST /remember`| `{text, scope?, tag?}`                                       | write-back: persists a note + indexes (upsert, `--no-prune`) it into the scope's collection so it is immediately recallable |
@@ -41,6 +42,13 @@ Smoke test (health + scopes + recall + remember round-trip):
 
 ```bash
 MNEMOSYNE_URL=http://127.0.0.1:8477 npm run smoke
+```
+
+E2E round-trip probe (headless — health counts, healthz, tagged scratch write,
+recall-as-top-hit with provenance; cleans up its own scratch note file):
+
+```bash
+MNEMOSYNE_URL=http://127.0.0.1:8477 npm run test:e2e
 ```
 
 ## Port / route
