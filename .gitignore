@@ -1,3 +1,8 @@
 node_modules/
 .DS_Store
 *.log
+
+# Hive epic allowlisting
+.pHive/epics/*
+!.pHive/epics/pantheon-memory-consistent-hooks/
+!.pHive/epics/pantheon-memory-consistent-hooks/**

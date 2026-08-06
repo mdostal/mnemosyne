@@ -1,0 +1,72 @@
+name: pantheon-memory-consistent-hooks
+title: Consistent Memory + Auto-loading Recall Hooks
+target_codebase: /Users/dostal/.minerva/runs/d0aee757-47fc-4df8-98dc-c61b726bf01f/workspace
+methodology: tdd
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: main
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: []
+  roster: [orchestrator]
+  per_tag_reasoning: {}
+  confidence: 0.9
+  gate_decisions: {}
+
+description: |
+  Make Mnemosyne's memory CONSISTENT across all layers (no divergence between
+  file memory, Qdrant, and service) and AUTO-LOADING (pre/post hooks that
+  inject high-level context first before every turn and persist learnings
+  after). This is the HARD GATE before Firefly onboarding - the 8 Firefly repos
+  cannot integrate until memory is reliable and truthful.
+
+  Requirements addressed:
+  1. SINGLE CONSISTENT READ/WRITE - Qdrant as SSOT, write-through verification
+  2. PRE/POST RECALL HOOKS - Auto-installer, high-level-first injection
+  3. CONSISTENCY TEST - E2E coherence verification, drift detection
+  4. REDUCE BESPOKE LAYER - Inventory existing scripts, migrate or justify
+  5. VERIFY HEALTH SURFACE - Drift reporting in /health for god-cards
+
+stories:
+  - id: mc-01-write-through-consistency
+    title: Implement write-through consistency for POST /remember
+    complexity: medium
+    depends_on: []
+
+  - id: mc-02-reconciliation-helper
+    title: Add reconciliation helper to detect file/Qdrant drift
+    complexity: medium
+    depends_on: [mc-01-write-through-consistency]
+
+  - id: mc-03-health-drift-reporting
+    title: Extend GET /health to report drift_count
+    complexity: low
+    depends_on: [mc-02-reconciliation-helper]
+
+  - id: mc-04-hook-installer
+    title: Create hook installer script for auto-wiring pre/post hooks
+    complexity: medium
+    depends_on: [mc-03-health-drift-reporting]
+
+  - id: mc-05-high-level-first-injection
+    title: Implement high-level-first memory injection in pre-recall hook
+    complexity: medium
+    depends_on: [mc-04-hook-installer]
+
+  - id: mc-06-consistency-e2e-test
+    title: Extend E2E test with layer coherence and drift detection
+    complexity: medium
+    depends_on: [mc-01-write-through-consistency, mc-02-reconciliation-helper, mc-03-health-drift-reporting]
+
+  - id: mc-07-hook-integration-validation
+    title: Validate hook integration with live UserPromptSubmit/Stop events
+    complexity: low
+    depends_on: [mc-04-hook-installer, mc-05-high-level-first-injection]
+
+  - id: mc-08-bespoke-layer-inventory
+    title: Audit and inventory bespoke memory scripts
+    complexity: low
+    depends_on: []
