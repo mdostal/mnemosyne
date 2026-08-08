@@ -11,9 +11,37 @@ const DEFAULT_MEMORY_TOKEN_BUDGET = Number(
   process.env.MNEMOSYNE_MEMORY_TOKEN_BUDGET || 900
 );
 const DEFAULT_MAX_HITS = Number(process.env.MNEMOSYNE_MAX_HITS || 6);
+const DEFAULT_HIGH_LEVEL_TOKEN_BUDGET = Number(
+  process.env.MNEMOSYNE_HIGH_LEVEL_TOKEN_BUDGET || 300
+);
 
 export const CACHE_BREAKPOINT =
   "<!-- mnemosyne-cache-breakpoint: variable-ticket-memory-below -->";
+
+// Layer stack (meta -> enterprise -> project -> vector -> file), narrowest
+// number = highest priority. "Inject the high level first" — meta/enterprise
+// hits are never crowded out by noisy low-level (vector/file) hits, even when
+// the low-level hit scores higher. A hit with a missing/unrecognized layer is
+// treated as the lowest-priority tier (file).
+export const LAYER_PRIORITY = {
+  meta: 0,
+  enterprise: 1,
+  project: 2,
+  vector: 3,
+  file: 4,
+};
+const HIGH_LEVEL_MAX_PRIORITY = LAYER_PRIORITY.enterprise;
+
+function layerPriority(layer) {
+  const key = String(layer || "").toLowerCase();
+  return Object.prototype.hasOwnProperty.call(LAYER_PRIORITY, key)
+    ? LAYER_PRIORITY[key]
+    : LAYER_PRIORITY.file;
+}
+
+function isHighLevel(hit) {
+  return layerPriority(hit.layer) <= HIGH_LEVEL_MAX_PRIORITY;
+}
 
 export function estimateTokens(text) {
   return Math.ceil(String(text || "").length / 4);
@@ -60,8 +88,11 @@ export function mergeResults(...results) {
 }
 
 // Flatten scopes[].hits[] into a single ranked, DEDUPED list, tagged with layer.
-// Keyword (exact) hits sort FIRST — they are high-confidence identifier matches
-// (ticket IDs, tokens) — then semantic hits by score descending.
+// Ranked by (1) layer priority — meta/enterprise/project/vector/file, high
+// level first — then (2) keyword (exact) hits, since they are high-confidence
+// identifier matches (ticket IDs, tokens), then (3) semantic score descending.
+// A high-scoring low-level hit is still ranked below a low-scoring high-level
+// hit: a high-scoring file hit is less valuable than a low-scoring meta hit.
 export function flattenHits(recallResult) {
   const out = [];
   const seen = new Set();
@@ -70,10 +101,13 @@ export function flattenHits(recallResult) {
       const key = `${h.full_path || h.location || h.source}#${h.chunk_index ?? h.chunk_span}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      out.push({ ...h, layer: s.scope || h.collection });
+      out.push({ ...h, layer: h.layer || s.scope || h.collection });
     }
   }
   out.sort((a, b) => {
+    const ap = layerPriority(a.layer);
+    const bp = layerPriority(b.layer);
+    if (ap !== bp) return ap - bp; // high-level layer first
     const ak = a.match_type === "keyword" ? 1 : 0;
     const bk = b.match_type === "keyword" ? 1 : 0;
     if (ak !== bk) return bk - ak; // keyword-exact first
@@ -82,48 +116,78 @@ export function flattenHits(recallResult) {
   return out;
 }
 
+function renderHit(h, index) {
+  const src = h.source || h.location || h.full_path || "(unknown)";
+  const range = lineRange(h);
+  const conf =
+    h.match_type === "keyword"
+      ? "keyword-exact"
+      : h.score != null
+      ? `score ${h.score.toFixed(2)}`
+      : "score ?";
+  const candidate = [];
+  candidate.push(`${index + 1}. [${h.layer} · ${conf}] ${src}${range ? " " + range : ""}`);
+  const ex = trimExcerpt(h.text);
+  if (ex) candidate.push(`   > ${ex}`);
+  if (h.full_path) candidate.push(`   -> ${h.full_path}`);
+  return candidate.join("\n");
+}
+
+// Fill `shown` from `segmentHits`, spending at most `segmentBudget` tokens on
+// this segment (the first hit in a segment is always kept, even if it alone
+// exceeds the segment budget, so a segment with hits is never shown empty).
+function fillSegment(segmentHits, segmentBudget, max, shown) {
+  let segmentTokens = 0;
+  let skipped = 0;
+  for (const h of segmentHits) {
+    if (shown.length >= max) break;
+    const candidateText = renderHit(h, shown.length);
+    const candidateTokens = estimateTokens(candidateText);
+    if (segmentTokens > 0 && segmentTokens + candidateTokens > segmentBudget) {
+      skipped++;
+      continue;
+    }
+    shown.push(candidateText);
+    segmentTokens += candidateTokens;
+  }
+  return { segmentTokens, skipped };
+}
+
 function formatPriorMemoryDelta(recallResult, meta = {}) {
   const hits = flattenHits(recallResult);
   const max = Number(meta.max || DEFAULT_MAX_HITS);
   const tokenBudget = Number(meta.tokenBudget || DEFAULT_MEMORY_TOKEN_BUDGET);
-  const shown = [];
-  let estimatedTokens = 0;
-  let skippedForBudget = 0;
+  // Reserve a high-level (meta+enterprise) sub-budget so a handful of noisy
+  // low-level (project/vector/file) hits never crowd it out entirely — but
+  // cap it at that reservation so a busy meta layer can't consume the whole
+  // budget either, leaving nothing for lower layers.
+  const highLevelBudget = Math.min(
+    Number(meta.highLevelTokenBudget || DEFAULT_HIGH_LEVEL_TOKEN_BUDGET),
+    tokenBudget
+  );
 
-  for (const h of hits) {
-    if (shown.length >= max) break;
-    const src = h.source || h.location || h.full_path || "(unknown)";
-    const range = lineRange(h);
-    const conf =
-      h.match_type === "keyword"
-        ? "keyword-exact"
-        : h.score != null
-        ? `score ${h.score.toFixed(2)}`
-        : "score ?";
-    const candidate = [];
-    candidate.push(
-      `${shown.length + 1}. [${h.layer} · ${conf}] ${src}${range ? " " + range : ""}`
-    );
-    const ex = trimExcerpt(h.text);
-    if (ex) candidate.push(`   > ${ex}`);
-    if (h.full_path) candidate.push(`   -> ${h.full_path}`);
-    const candidateText = candidate.join("\n");
-    const candidateTokens = estimateTokens(candidateText);
-    if (shown.length > 0 && estimatedTokens + candidateTokens > tokenBudget) {
-      skippedForBudget++;
-      continue;
-    }
-    shown.push(candidateText);
-    estimatedTokens += candidateTokens;
-  }
+  const highLevelHits = hits.filter(isHighLevel);
+  const lowLevelHits = hits.filter((h) => !isHighLevel(h));
+
+  const shown = [];
+  const highLevelResult = fillSegment(highLevelHits, highLevelBudget, max, shown);
+  const lowLevelBudget = Math.max(tokenBudget - highLevelResult.segmentTokens, 0);
+  const lowLevelResult = fillSegment(lowLevelHits, lowLevelBudget, max, shown);
+
+  const highLevelTokens = highLevelResult.segmentTokens;
+  const estimatedTokens = highLevelTokens + lowLevelResult.segmentTokens;
+  const skippedForBudget = highLevelResult.skipped + lowLevelResult.skipped;
 
   if (shown.length === 0) {
-    return [
-      `<!-- mnemosyne-variable-memory scope=${meta.scope || "?"} role=${meta.role || "?"} total_hits=${recallResult.total_hits ?? 0} ticket=${meta.ticket || "-"} -->`,
-      `## Prior Memory Delta (Mnemosyne)`,
-      `No prior memory matched this task. Use the memory tools to look more up`,
-      `(POST ${meta.url || "/recall"}) or record a finding (POST /remember).`,
-    ].join("\n");
+    return {
+      text: [
+        `<!-- mnemosyne-variable-memory scope=${meta.scope || "?"} role=${meta.role || "?"} total_hits=${recallResult.total_hits ?? 0} ticket=${meta.ticket || "-"} -->`,
+        `## Prior Memory Delta (Mnemosyne)`,
+        `No prior memory matched this task. Use the memory tools to look more up`,
+        `(POST ${meta.url || "/recall"}) or record a finding (POST /remember).`,
+      ].join("\n"),
+      highLevelTokens: 0,
+    };
   }
 
   const lines = [];
@@ -145,12 +209,12 @@ function formatPriorMemoryDelta(recallResult, meta = {}) {
   lines.push(
     `memory-tools: recall more via POST ${meta.url || MNEMOSYNE_URL_PLACEHOLDER}/recall · record a finding via POST /remember (bubble up).`
   );
-  return lines.join("\n");
+  return { text: lines.join("\n"), highLevelTokens };
 }
 
 export function buildMemoryBundle(recallResult, meta = {}) {
   const cacheablePrefix = stableCachePrefix(meta);
-  const memoryDelta = formatPriorMemoryDelta(recallResult, meta);
+  const { text: memoryDelta, highLevelTokens } = formatPriorMemoryDelta(recallResult, meta);
   const text = [cacheablePrefix, CACHE_BREAKPOINT, memoryDelta].join("\n\n");
   return {
     text,
@@ -165,6 +229,7 @@ export function buildMemoryBundle(recallResult, meta = {}) {
       total_hits: recallResult.total_hits ?? 0,
       shown_hits: flattenHits(recallResult).slice(0, Number(meta.max || DEFAULT_MAX_HITS)).length,
       token_budget: Number(meta.tokenBudget || DEFAULT_MEMORY_TOKEN_BUDGET),
+      high_level_tokens_estimate: highLevelTokens,
     },
   };
 }
