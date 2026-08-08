@@ -23,6 +23,8 @@ export interface RunnerFallbackEvent {
 
 export interface RunnerChainOptions {
   onFallback?: (event: RunnerFallbackEvent) => void | Promise<void>;
+  fallbackEnabled?: boolean;
+  runnerPriorities?: Partial<Record<RunnerName, number>>;
 }
 
 const DEFAULT_RUNNER_PRIORITY: Record<'claude' | 'codex' | 'gemini', number> = {
@@ -34,16 +36,22 @@ const DEFAULT_RUNNER_PRIORITY: Record<'claude' | 'codex' | 'gemini', number> = {
 export class RunnerChain<TPrompt, TContext, TResult> {
   private readonly runners: readonly PlanningRunner<TPrompt, TContext, TResult>[];
   private readonly onFallback?: RunnerChainOptions['onFallback'];
+  private readonly fallbackEnabled: boolean;
 
   constructor(
     runners: readonly PlanningRunner<TPrompt, TContext, TResult>[],
     options: RunnerChainOptions = {},
   ) {
-    this.runners = [...runners].sort((left, right) => {
-      const leftPriority = left.priority ?? defaultPriority(left.name);
-      const rightPriority = right.priority ?? defaultPriority(right.name);
-      return leftPriority - rightPriority;
-    });
+    const configuredPriorities = options.runnerPriorities ?? {};
+    this.runners = [...runners]
+      .map((runner, index) => ({ runner, index }))
+      .sort((left, right) => {
+        const leftPriority = runnerPriority(left.runner, configuredPriorities);
+        const rightPriority = runnerPriority(right.runner, configuredPriorities);
+        return leftPriority - rightPriority || left.index - right.index;
+      })
+      .map(({ runner }) => runner);
+    this.fallbackEnabled = options.fallbackEnabled ?? true;
 
     if (options.onFallback !== undefined) {
       this.onFallback = options.onFallback;
@@ -59,7 +67,7 @@ export class RunnerChain<TPrompt, TContext, TResult> {
         continue;
       }
 
-      const nextRunner = this.runners[index + 1]?.name ?? null;
+      const nextRunner = this.fallbackEnabled ? this.runners[index + 1]?.name ?? null : null;
       let available: boolean;
 
       try {
@@ -72,6 +80,9 @@ export class RunnerChain<TPrompt, TContext, TResult> {
         const failure = failureFromUnavailableError(runner.name, 'availability', error);
         failures.push(failure);
         await this.logFallback(failure, nextRunner);
+        if (!this.fallbackEnabled) {
+          throw unavailableErrorFromFailure(failure);
+        }
         continue;
       }
 
@@ -84,6 +95,9 @@ export class RunnerChain<TPrompt, TContext, TResult> {
         };
         failures.push(failure);
         await this.logFallback(failure, nextRunner);
+        if (!this.fallbackEnabled) {
+          throw unavailableErrorFromFailure(failure);
+        }
         continue;
       }
 
@@ -97,6 +111,9 @@ export class RunnerChain<TPrompt, TContext, TResult> {
         const failure = failureFromUnavailableError(runner.name, 'invoke', error);
         failures.push(failure);
         await this.logFallback(failure, nextRunner);
+        if (!this.fallbackEnabled) {
+          throw unavailableErrorFromFailure(failure);
+        }
       }
     }
 
@@ -126,6 +143,13 @@ export class RunnerChain<TPrompt, TContext, TResult> {
   }
 }
 
+function runnerPriority<TPrompt, TContext, TResult>(
+  runner: PlanningRunner<TPrompt, TContext, TResult>,
+  configuredPriorities: Partial<Record<RunnerName, number>>,
+): number {
+  return runner.priority ?? configuredPriorities[runner.name] ?? defaultPriority(runner.name);
+}
+
 function defaultPriority(name: RunnerName): number {
   switch (name) {
     case 'claude':
@@ -152,4 +176,16 @@ function failureFromUnavailableError(
   };
 
   return failure;
+}
+
+function unavailableErrorFromFailure(failure: RunnerFailure): RunnerUnavailableError {
+  const options: { runner: string; code?: string } = {
+    runner: failure.runner,
+  };
+
+  if (failure.code !== undefined) {
+    options.code = failure.code;
+  }
+
+  return new RunnerUnavailableError(failure.reason, options);
 }

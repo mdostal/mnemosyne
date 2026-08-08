@@ -14,8 +14,8 @@
   "scripts": {
     "start": "node src/server.mjs",
     "build": "tsc --noEmit",
-    "test": "node test/bundle.mjs && node test/write-through.mjs && node test/review-auto-merge.mjs && vitest run lib/mnemosyne src/planning",
-    "test:contracts": "vitest run lib/mnemosyne src/planning",
+    "test": "node test/bundle.mjs && node test/write-through.mjs && node test/review-auto-merge.mjs && vitest run lib/mnemosyne src/planning src/config",
+    "test:contracts": "vitest run lib/mnemosyne src/planning src/config",
     "typecheck": "tsc --noEmit",
     "smoke": "node test/smoke.mjs",
     "test:e2e": "node test/e2e.mjs",
@@ -24,9 +24,13 @@
     "test:write-through": "node test/write-through.mjs"
   },
   "devDependencies": {
+    "@types/node": "^20.19.43",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "yaml": "^2.9.0"
   }
 }
