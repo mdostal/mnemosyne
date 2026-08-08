@@ -1,0 +1,90 @@
+#!/usr/bin/env node
+import fs from "node:fs/promises";
+import path from "node:path";
+import { homedir } from "node:os";
+import { grep } from "../src/engine.mjs";
+
+const args = process.argv.slice(2);
+const isJson = args.includes("--json");
+
+let limit = 0;
+const limitIdx = args.indexOf("--limit");
+if (limitIdx !== -1 && limitIdx + 1 < args.length) {
+  limit = parseInt(args[limitIdx + 1], 10);
+}
+
+const NOTES_DIR = process.env.MNEMOSYNE_NOTES_DIR || path.join(homedir(), ".local", "share", "mnemosyne", "notes");
+
+async function run() {
+  let files;
+  try {
+    files = await fs.readdir(NOTES_DIR);
+  } catch (err) {
+    if (err.code === "ENOENT") {
+      files = [];
+    } else {
+      throw err;
+    }
+  }
+
+  let mdFiles = files.filter(f => f.endsWith(".md"));
+  if (limit > 0) {
+    mdFiles = mdFiles.slice(0, limit);
+  }
+
+  const missingFiles = [];
+
+  for (const file of mdFiles) {
+    // Extract note ID from filename (e.g., 2026-08-01T00-33-15-581Z)
+    let noteId = file;
+    const match = file.match(/^(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)/);
+    if (match) {
+      noteId = match[1];
+    } else {
+      // Fallback: use the whole filename minus extension
+      noteId = file.replace(/\.md$/, "");
+    }
+
+    // Query swarm-memory to check if point exists
+    // We use grep (keyword search) which will match the timestamp/ID inside the file's content
+    const res = await grep(noteId, undefined, { escalate: true, hits: 20 });
+    
+    // Check if the file is in the provenance of any of the hits
+    let found = false;
+    for (const scopeData of res.scopes || []) {
+      for (const hit of scopeData.hits || []) {
+        if (hit.provenance?.source === file || hit.provenance?.full_path?.endsWith(file)) {
+          found = true;
+          break;
+        }
+      }
+      if (found) break;
+    }
+
+    if (!found) {
+      missingFiles.push(path.join(NOTES_DIR, file));
+    }
+  }
+
+  const driftCount = missingFiles.length;
+
+  if (isJson) {
+    console.log(JSON.stringify({ drift_count: driftCount, missing_files: missingFiles }, null, 2));
+  } else {
+    if (driftCount === 0) {
+      console.log("OK: all files synced");
+    } else {
+      console.log(`DRIFT: ${driftCount} files missing from Qdrant`);
+      for (const missing of missingFiles) {
+        console.log(`  - ${missing}`);
+      }
+    }
+  }
+
+  process.exit(driftCount === 0 ? 0 : 1);
+}
+
+run().catch(err => {
+  console.error("Error:", err);
+  process.exit(1);
+});
