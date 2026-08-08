@@ -87,7 +87,15 @@ export async function recall(query, scope, opts = {}) {
   if (opts.minScore != null) args.push("--min-score", String(opts.minScore));
   if (opts.radius != null) args.push("--radius", String(opts.radius));
   const { stdout } = await run(args);
-  return JSON.parse(stdout);
+  let vectorResults = JSON.parse(stdout);
+
+  // Merge code-graph layer
+  const { CodeGraphLayer } = await import("./layers/code-graph.mjs");
+  const { mergeLayerResults } = await import("./merge.mjs");
+  const graphLayer = new CodeGraphLayer();
+  const graphHits = await graphLayer.recall(String(query));
+  
+  return mergeLayerResults(vectorResults, graphHits);
 }
 
 // remember(text, scope, {tag}) — write-back. Persists the note to a file, then
