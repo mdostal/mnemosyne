@@ -14,8 +14,8 @@
   "scripts": {
     "start": "node src/server.mjs",
     "build": "tsc --noEmit",
-    "test": "node test/bundle.mjs && node test/write-through.mjs && vitest run lib/mnemosyne",
-    "test:contracts": "vitest run lib/mnemosyne",
+    "test": "node test/bundle.mjs && node test/write-through.mjs && vitest run lib/mnemosyne lib/minerva benchmarks",
+    "test:contracts": "vitest run lib/",
     "typecheck": "tsc --noEmit",
     "smoke": "node test/smoke.mjs",
     "test:e2e": "node test/e2e.mjs",
