@@ -86,8 +86,64 @@ export async function recall(query, scope, opts = {}) {
   if (opts.escalate) args.push("--escalate");
   if (opts.minScore != null) args.push("--min-score", String(opts.minScore));
   if (opts.radius != null) args.push("--radius", String(opts.radius));
-  const { stdout } = await run(args);
-  return JSON.parse(stdout);
+  
+  let vectorResult;
+  let vectorError = null;
+  try {
+    const { stdout } = await run(args);
+    vectorResult = JSON.parse(stdout);
+    
+    // Decorate provenance
+    if (vectorResult.scopes) {
+      for (const s of vectorResult.scopes) {
+        if (s.hits) {
+          for (const h of s.hits) {
+            h.provenance = h.provenance || {};
+            h.provenance.layer = "vector";
+          }
+        }
+      }
+    }
+  } catch (e) {
+    vectorError = e;
+    console.error(`[mnemosyne] ERROR recall: vector layer unavailable: ${e.message}`);
+    vectorResult = { total_hits: 0, scopes: [] };
+  }
+
+  // Escalation: vector -> file fallback on zero hits or error
+  if (vectorResult.total_hits === 0 || vectorError) {
+    if (!vectorError) {
+      console.log(`[mnemosyne] vector layer returned 0 hits for "${query}", falling back to file layer (grep)...`);
+    } else {
+      console.log(`[mnemosyne] escalating to file layer due to vector layer failure...`);
+    }
+    
+    try {
+      const fileResult = await grep(query, scope, opts);
+      fileResult.layers_attempted = ["vector", "file"];
+      
+      // Degraded marker if vector failed completely
+      if (vectorError) {
+        if (fileResult.scopes) {
+          for (const s of fileResult.scopes) {
+            if (s.hits) {
+              for (const h of s.hits) {
+                h.provenance = h.provenance || {};
+                h.provenance.degraded = true;
+              }
+            }
+          }
+        }
+      }
+      return fileResult;
+    } catch (fallbackErr) {
+      console.error(`[mnemosyne] ERROR recall: file layer fallback also failed: ${fallbackErr.message}`);
+      if (vectorError) throw vectorError; // throw original if both failed
+    }
+  }
+
+  vectorResult.layers_attempted = ["vector"];
+  return vectorResult;
 }
 
 // remember(text, scope, {tag}) — write-back. Persists the note to a file, then
@@ -179,6 +235,17 @@ export async function grep(query, scope, opts = {}) {
   // grep --json returns a top-level array of {scope,collection,hits[]}.
   // Normalize to the recall shape ({total_hits, scopes[]}) so consumers merge cleanly.
   const scopesArr = JSON.parse(stdout);
+  
+  // Decorate provenance
+  for (const s of scopesArr) {
+    if (s.hits) {
+      for (const h of s.hits) {
+        h.provenance = h.provenance || {};
+        h.provenance.layer = "file";
+      }
+    }
+  }
+  
   const total = scopesArr.reduce((n, s) => n + (s.hits ? s.hits.length : 0), 0);
   return { query: String(query), total_hits: total, scopes: scopesArr, match_mode: "keyword" };
 }
