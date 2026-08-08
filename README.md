@@ -30,6 +30,12 @@ small per-repo + shared memory bundles before a ticket, status-aware write-back
 after a run, and a cache-safe prompt layout that keeps the stable prefix
 separate from the variable ticket memory delta.
 
+## Install hooks
+
+`bin/mnemosyne-install-hooks` auto-wires `hooks/settings.hooks.json` into a
+Claude Code `settings.json` — see [`hooks/README.md`](./hooks/README.md#install-the-hooks)
+for usage.
+
 ## Read next
 
 - **[`idea-brief.md`](./idea-brief.md)** — the full brief: the layer stack, the unified recall/write

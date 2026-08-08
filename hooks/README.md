@@ -55,11 +55,27 @@ system/context block. Runner adapters do not reformat or rerank memory.
   `STATUS: in-progress|reviewed|full-send` + ticket + role, so recall can tell a
   work-in-progress note from full-send truth.
 
-## Wire it into the agent loop
+## Install the hooks
 
-Merge `hooks/settings.hooks.json` into a Claude Code `settings.json` (adjust the
-absolute ROOT path). That fires `pre-recall` on every prompt submit and
-`post-remember` on stop/subagent-stop.
+Run the installer instead of hand-editing `settings.json`:
+
+```bash
+bin/mnemosyne-install-hooks
+```
+
+It merges `hooks/settings.hooks.json` into `~/.claude/settings.json`, rewriting
+every hook `command` to an absolute path for **this** checkout (no manual ROOT
+editing), so `pre-recall` fires on `UserPromptSubmit` and `post-remember` fires
+on `Stop`/`SubagentStop`. Before writing, it probes `GET /healthz` on the
+Mnemosyne service (`MNEMOSYNE_URL`, default `http://127.0.0.1:8477`) and warns
+if it's unreachable — pass `--yes` to install anyway, or start the service
+first and re-run. Safe to re-run any time (e.g. after moving/re-cloning the
+repo): it updates each hook's path in place instead of duplicating entries, and
+backs up the previous `settings.json` to `settings.json.bak` first.
+
+Flags: `--yes` / `-y` skip the reachability prompt; `--settings <path>` target
+a `settings.json` other than the default; `--service-url <url>` probe a
+different Mnemosyne base URL.
 
 For plugin-hive step wiring or manual use, just pipe JSON in:
 
