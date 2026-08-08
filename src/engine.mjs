@@ -116,17 +116,48 @@ export async function remember(text, scope, opts = {}) {
   const header = `<!-- remembered via Mnemosyne @ ${new Date().toISOString()} scope=${useScope} -->\n`;
   await writeFile(file, header + String(text) + "\n", "utf8");
 
-  // Direct-mapped scope -> collection; index appends this one new file.
+  // Direct-mapped scope -> collection; index appends this one new file. The
+  // file above is already on disk and is kept regardless of what happens
+  // next — it is the recovery artifact for manual reconciliation if the
+  // Qdrant upsert below diverges from it.
   const args = ["index", collection, "--no-prune", file];
-  const { stdout, stderr } = await run(args);
-  const out = (stdout + stderr).trim();
+  let out;
+  try {
+    const { stdout, stderr } = await run(args);
+    out = (stdout + stderr).trim();
+  } catch (e) {
+    const detail = `${e.stdout || ""}${e.stderr || ""}`.trim() || e.message;
+    console.error(
+      `[mnemosyne] ERROR remember: swarm-memory index failed for scope=${useScope} file=${file}: ${detail}`
+    );
+    const err = new Error(
+      `write-through failed: index command errored, file kept at ${file} for recovery: ${detail}`
+    );
+    err.status = 500;
+    err.file = file;
+    throw err;
+  }
+
   const upserted = /upserted\s+(\d+)\s+chunks/i.exec(out);
+  const chunksUpserted = upserted ? Number(upserted[1]) : 0;
+  if (!(chunksUpserted > 0)) {
+    console.error(
+      `[mnemosyne] ERROR remember: swarm-memory index reported no upserted chunks for scope=${useScope} file=${file}: ${out || "(empty output)"}`
+    );
+    const err = new Error(
+      `write-through failed: Qdrant upsert did not confirm chunks_upserted, file kept at ${file} for recovery: ${out || "(empty output)"}`
+    );
+    err.status = 500;
+    err.file = file;
+    throw err;
+  }
+
   return {
     remembered: true,
     scope: useScope,
     collection,
     file,
-    chunks_upserted: upserted ? Number(upserted[1]) : null,
+    chunks_upserted: chunksUpserted,
     engine_output: out,
   };
 }
