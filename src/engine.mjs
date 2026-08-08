@@ -30,7 +30,7 @@ const CHILD_ENV = {
   PATH: `/opt/homebrew/bin:${homedir()}/.local/bin:${process.env.PATH || ""}`,
 };
 
-async function run(args, { timeout = CLI_TIMEOUT_MS } = {}) {
+export async function run(args, { timeout = CLI_TIMEOUT_MS } = {}) {
   const { stdout, stderr } = await execFileP(CLI, args, {
     timeout,
     maxBuffer: 32 * 1024 * 1024,
