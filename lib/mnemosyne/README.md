@@ -44,3 +44,7 @@ if (written.ok) {
 See [`layers/README.md`](./layers/README.md) for the underlying
 `FileLayerAdapter` provenance contract, and [`interfaces.ts`](./interfaces.ts)
 for the full `RecallResult`/`RememberResult` type contracts.
+
+Non-TypeScript consumers (CLI tools, non-TS agents) that cannot import this
+module directly can reach it over HTTP instead — see
+[`../../docs/http-api.md`](../../docs/http-api.md) for the `server.ts` wrapper.
