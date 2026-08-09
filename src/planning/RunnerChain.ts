@@ -3,6 +3,11 @@ import {
   RunnerUnavailableError,
   type RunnerFailure,
 } from '../errors/RunnerUnavailableError.js';
+import { logger as defaultLogger, type Logger } from '../observability/logger.js';
+import {
+  recordRunnerMetric as defaultMetricsRecorder,
+  type RunnerMetricEvent,
+} from '../observability/metrics.js';
 
 export type RunnerName = 'claude' | 'codex' | 'gemini' | (string & {});
 
@@ -25,6 +30,8 @@ export interface RunnerChainOptions {
   onFallback?: (event: RunnerFallbackEvent) => void | Promise<void>;
   fallbackEnabled?: boolean;
   runnerPriorities?: Partial<Record<RunnerName, number>>;
+  logger?: Logger;
+  metricsRecorder?: (event: RunnerMetricEvent) => void | Promise<void>;
 }
 
 const DEFAULT_RUNNER_PRIORITY: Record<'claude' | 'codex' | 'gemini', number> = {
@@ -37,6 +44,8 @@ export class RunnerChain<TPrompt, TContext, TResult> {
   private readonly runners: readonly PlanningRunner<TPrompt, TContext, TResult>[];
   private readonly onFallback?: RunnerChainOptions['onFallback'];
   private readonly fallbackEnabled: boolean;
+  private readonly logger: Logger;
+  private readonly metricsRecorder: (event: RunnerMetricEvent) => void | Promise<void>;
 
   constructor(
     runners: readonly PlanningRunner<TPrompt, TContext, TResult>[],
@@ -52,6 +61,8 @@ export class RunnerChain<TPrompt, TContext, TResult> {
       })
       .map(({ runner }) => runner);
     this.fallbackEnabled = options.fallbackEnabled ?? true;
+    this.logger = options.logger ?? defaultLogger;
+    this.metricsRecorder = options.metricsRecorder ?? defaultMetricsRecorder;
 
     if (options.onFallback !== undefined) {
       this.onFallback = options.onFallback;
@@ -79,6 +90,7 @@ export class RunnerChain<TPrompt, TContext, TResult> {
 
         const failure = failureFromUnavailableError(runner.name, 'availability', error);
         failures.push(failure);
+        await this.recordFailure(failure);
         await this.logFallback(failure, nextRunner);
         if (!this.fallbackEnabled) {
           throw unavailableErrorFromFailure(failure);
@@ -94,6 +106,7 @@ export class RunnerChain<TPrompt, TContext, TResult> {
           code: 'runner_unavailable',
         };
         failures.push(failure);
+        await this.recordFailure(failure);
         await this.logFallback(failure, nextRunner);
         if (!this.fallbackEnabled) {
           throw unavailableErrorFromFailure(failure);
@@ -101,8 +114,13 @@ export class RunnerChain<TPrompt, TContext, TResult> {
         continue;
       }
 
+      await this.recordAttempt(runner.name);
+      const startedAt = Date.now();
+
       try {
-        return await runner.invoke(prompt, context);
+        const result = await runner.invoke(prompt, context);
+        await this.recordSuccess(runner.name, Date.now() - startedAt);
+        return result;
       } catch (error) {
         if (!(error instanceof RunnerUnavailableError)) {
           throw error;
@@ -110,6 +128,7 @@ export class RunnerChain<TPrompt, TContext, TResult> {
 
         const failure = failureFromUnavailableError(runner.name, 'invoke', error);
         failures.push(failure);
+        await this.recordFailure(failure);
         await this.logFallback(failure, nextRunner);
         if (!this.fallbackEnabled) {
           throw unavailableErrorFromFailure(failure);
@@ -120,14 +139,46 @@ export class RunnerChain<TPrompt, TContext, TResult> {
     throw new AllRunnersUnavailableError(failures);
   }
 
+  private async recordAttempt(runner: RunnerName): Promise<void> {
+    const timestamp = new Date().toISOString();
+    this.logger.info('runner_attempt', { runner, timestamp });
+    await this.metricsRecorder({ event: 'runner_attempt', runner: String(runner), timestamp });
+  }
+
+  private async recordSuccess(runner: RunnerName, latencyMs: number): Promise<void> {
+    const timestamp = new Date().toISOString();
+    this.logger.info('runner_success', { runner, latencyMs, timestamp });
+    await this.metricsRecorder({
+      event: 'runner_success',
+      runner: String(runner),
+      latencyMs,
+      timestamp,
+    });
+  }
+
+  private async recordFailure(failure: RunnerFailure): Promise<void> {
+    const timestamp = new Date().toISOString();
+    this.logger.error('runner_failure', {
+      runner: failure.runner,
+      phase: failure.phase,
+      reason: failure.reason,
+      code: failure.code,
+      timestamp,
+    });
+    await this.metricsRecorder({
+      event: 'runner_failure',
+      runner: failure.runner,
+      phase: failure.phase,
+      reason: failure.reason,
+      code: failure.code,
+      timestamp,
+    });
+  }
+
   private async logFallback(
     failure: RunnerFailure,
     nextRunner: RunnerFallbackEvent['next_runner'],
   ): Promise<void> {
-    if (this.onFallback === undefined) {
-      return;
-    }
-
     const event: RunnerFallbackEvent = {
       runner: failure.runner,
       phase: failure.phase,
@@ -139,7 +190,23 @@ export class RunnerChain<TPrompt, TContext, TResult> {
       event.code = failure.code;
     }
 
-    await this.onFallback(event);
+    if (nextRunner !== null) {
+      const timestamp = new Date().toISOString();
+      this.logger.warn('fallback_triggered', { ...event, timestamp });
+      await this.metricsRecorder({
+        event: 'fallback_triggered',
+        runner: event.runner,
+        phase: event.phase,
+        reason: event.reason,
+        next_runner: event.next_runner,
+        code: event.code,
+        timestamp,
+      });
+    }
+
+    if (this.onFallback !== undefined) {
+      await this.onFallback(event);
+    }
   }
 }
 
