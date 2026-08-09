@@ -62,11 +62,12 @@ Smoke test (health + scopes + recall + remember round-trip):
 MNEMOSYNE_URL=http://127.0.0.1:8477 npm run smoke
 ```
 
-E2E round-trip probe (headless — health counts, healthz, tagged scratch write,
-recall-as-top-hit with provenance; cleans up its own scratch note file):
+Minerva-style client integration test (headless — imports `MnemosyneClient`,
+checks vector provenance and file fallback, starts the client HTTP API, and
+verifies `POST /recall` matches the library result):
 
 ```bash
-MNEMOSYNE_URL=http://127.0.0.1:8477 npm run test:e2e
+npm run test:e2e
 ```
 
 ## Port / route

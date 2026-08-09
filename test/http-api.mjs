@@ -66,6 +66,7 @@ async function main() {
       ...process.env,
       MNEMOSYNE_PORT: String(PORT),
       MNEMOSYNE_ROOT_DIR: root,
+      SWARM_MEMORY_BIN: "/nonexistent/swarm-memory-http-api-test",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
