@@ -3,6 +3,28 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { MnemosyneClient } from '../client.js';
+import type { Hit, RecallResult } from '../interfaces.js';
+import type { LayerAdapter, RecallOptions } from '../layers/LayerAdapter.js';
+
+function stubVectorLayer(recall: (query: string, options?: RecallOptions) => Promise<RecallResult>): LayerAdapter {
+  return { layer: 'vector', recall };
+}
+
+function vectorHit(overrides: Partial<Hit> = {}): Hit {
+  return {
+    content: 'a semantic match',
+    provenance: {
+      layer: 'vector',
+      source: 'qdrant:point:123',
+      chunk_span: { index: 0 },
+      index_timestamp: '2026-08-01T00:00:00Z',
+      content_hash: 'deadbeef',
+      embedder: 'nomic-embed-text',
+      retrieval_time: '2026-08-09T00:00:00Z',
+    },
+    ...overrides,
+  };
+}
 
 const tempRoots: string[] = [];
 
@@ -135,5 +157,126 @@ describe('MnemosyneClient', () => {
     }
     expect(result.layer).toBe('vector');
     expect(result.provenance.layer).toBe('vector');
+  });
+
+  it('queries the vector layer before falling back to the file layer', async () => {
+    const root = await makeTempRoot();
+    await writeFile(path.join(root, 'notes.md'), 'a target line\n', 'utf8');
+
+    const vectorLayer = stubVectorLayer(async (query, options) => ({
+      ok: true,
+      query,
+      scope: options?.scope ?? 'project',
+      intent: options?.intent ?? 'narrow',
+      hits: [vectorHit()],
+      layers_queried: ['vector'],
+      layers_skipped: [],
+      escalated: false,
+      degraded: false,
+    }));
+
+    const client = new MnemosyneClient({ rootDirectory: root, vectorLayer });
+    const result = await client.recall('target', 'project');
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.error.message);
+    }
+    expect(result.layers_queried).toEqual(['vector']);
+    expect(result.hits).toHaveLength(1);
+    expect(result.hits[0]?.provenance.layer).toBe('vector');
+    expect(result.escalated).toBe(false);
+    expect(result.degraded).toBe(false);
+  });
+
+  it('escalates to the file layer when the vector layer succeeds with zero hits', async () => {
+    const root = await makeTempRoot();
+    await writeFile(path.join(root, 'notes.md'), 'a target line\n', 'utf8');
+
+    const vectorLayer = stubVectorLayer(async (query, options) => ({
+      ok: true,
+      query,
+      scope: options?.scope ?? 'project',
+      intent: options?.intent ?? 'narrow',
+      hits: [],
+      layers_queried: ['vector'],
+      layers_skipped: [],
+      escalated: false,
+      degraded: false,
+    }));
+
+    const client = new MnemosyneClient({ rootDirectory: root, vectorLayer });
+    const result = await client.recall('target', 'project');
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.error.message);
+    }
+    expect(result.layers_queried).toEqual(['vector', 'file']);
+    expect(result.escalated).toBe(true);
+    expect(result.degraded).toBe(false);
+    expect(result.hits).toHaveLength(1);
+    expect(result.hits[0]?.provenance.layer).toBe('file');
+  });
+
+  it('falls back to the file layer with loud degradation when the vector layer fails', async () => {
+    const root = await makeTempRoot();
+    await writeFile(path.join(root, 'notes.md'), 'a target line\n', 'utf8');
+
+    const vectorLayer = stubVectorLayer(async (query, options) => ({
+      ok: false,
+      query,
+      scope: options?.scope ?? 'project',
+      intent: options?.intent ?? 'narrow',
+      error: {
+        layer: 'vector',
+        message: 'swarm-memory is not installed or not on PATH',
+        code: 'not_installed',
+      },
+    }));
+
+    const client = new MnemosyneClient({ rootDirectory: root, vectorLayer });
+    const result = await client.recall('target', 'project');
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.error.message);
+    }
+    expect(result.layers_queried).toEqual(['file']);
+    expect(result.layers_skipped).toEqual([
+      {
+        layer: 'vector',
+        reason: 'not_installed',
+        detail: 'swarm-memory is not installed or not on PATH',
+      },
+    ]);
+    expect(result.degraded).toBe(true);
+    expect(result.hits).toHaveLength(1);
+    expect(result.hits[0]?.provenance.layer).toBe('file');
+  });
+
+  it('returns RecallFailure when both vector and file layers fail', async () => {
+    const missingRoot = path.join(tmpdir(), `mnemosyne-client-missing-${process.pid}`);
+
+    const vectorLayer = stubVectorLayer(async (query, options) => ({
+      ok: false,
+      query,
+      scope: options?.scope ?? 'project',
+      intent: options?.intent ?? 'narrow',
+      error: {
+        layer: 'vector',
+        message: 'swarm-memory is not installed or not on PATH',
+        code: 'not_installed',
+      },
+    }));
+
+    const client = new MnemosyneClient({ rootDirectory: missingRoot, vectorLayer });
+    const result = await client.recall('needle', 'project');
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error('expected recall to fail');
+    }
+    expect(result.error.layer).toBe('file');
   });
 });

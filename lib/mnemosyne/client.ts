@@ -5,6 +5,7 @@
  * talking to any layer (or HTTP) directly.
  *
  * Story: s2-02-client-library (epic: mnemosyne-operational-slice-2)
+ * Updated: s2-05-vector-layer-adapter adds the vector layer ahead of file.
  *
  * NOTE on sync vs. async: `interfaces.ts` declares `RecallFn`/`RememberFn`
  * as synchronous for contract-literalism reasons (see that file's docs on
@@ -12,18 +13,24 @@
  * `Promise<...>` instead, per the story's accepted async/sync mismatch —
  * every layer adapter does real I/O and cannot be synchronous.
  *
- * Layer selection is hardcoded to the file layer for this story; vector and
- * code-graph layers are added by later stories in this epic.
+ * Layer selection: vector layer is queried first (semantic recall). If it
+ * fails outright (swarm-memory unreachable/not installed), that failure is
+ * recorded as a skipped layer and the file layer serves the whole request
+ * instead (loud failure — never silently dropped). If the vector layer
+ * succeeds but finds nothing, the file layer is queried too and the result
+ * is marked `escalated`. Code-graph layer is added by a later story.
  */
 
 import { createHash } from 'node:crypto';
 import { FileLayerAdapter } from './layers/FileLayerAdapter.js';
 import type { LayerAdapter } from './layers/LayerAdapter.js';
+import { VectorLayerAdapter } from './layers/VectorLayerAdapter.js';
 import type {
   Content,
   Hit,
   Intent,
   Layer,
+  LayerSkip,
   RecallResult,
   RememberResult,
   Scope,
@@ -32,13 +39,17 @@ import type {
 export interface MnemosyneClientOptions {
   /** Directory the file layer searches. Defaults to `process.cwd()`. */
   rootDirectory?: string;
+  /** Override the vector layer adapter (mainly for tests). Defaults to a real `VectorLayerAdapter`. */
+  vectorLayer?: LayerAdapter;
 }
 
 export class MnemosyneClient {
   private readonly fileLayer: LayerAdapter;
+  private readonly vectorLayer: LayerAdapter;
 
   constructor(options: MnemosyneClientOptions = {}) {
     this.fileLayer = new FileLayerAdapter(options.rootDirectory ?? process.cwd());
+    this.vectorLayer = options.vectorLayer ?? new VectorLayerAdapter();
   }
 
   async recall(query: string, scope: Scope, intent?: Intent): Promise<RecallResult> {
@@ -59,14 +70,53 @@ export class MnemosyneClient {
       };
     }
 
-    const result = await this.fileLayer.recall(query, { scope, intent: resolvedIntent });
-    if (!result.ok) {
-      return result;
+    const recallOptions = { scope, intent: resolvedIntent };
+    const layersQueried: Layer[] = [];
+    const layersSkipped: LayerSkip[] = [];
+    let hits: Hit[];
+    let degraded = false;
+    let escalated = false;
+
+    const vectorResult = await this.vectorLayer.recall(query, recallOptions);
+    if (vectorResult.ok) {
+      layersQueried.push('vector');
+      hits = vectorResult.hits;
+
+      if (hits.length === 0) {
+        escalated = true;
+        const fileResult = await this.fileLayer.recall(query, recallOptions);
+        if (!fileResult.ok) {
+          return fileResult;
+        }
+        layersQueried.push('file');
+        hits = fileResult.hits;
+      }
+    } else {
+      degraded = true;
+      layersSkipped.push({
+        layer: 'vector',
+        reason: vectorResult.error.code ?? 'vector_unreachable',
+        detail: vectorResult.error.message,
+      });
+
+      const fileResult = await this.fileLayer.recall(query, recallOptions);
+      if (!fileResult.ok) {
+        return fileResult;
+      }
+      layersQueried.push('file');
+      hits = fileResult.hits;
     }
 
     return {
-      ...result,
-      hits: mergeHits(result.hits),
+      ok: true,
+      query,
+      scope,
+      intent: resolvedIntent,
+      hits: mergeHits(hits),
+      layers_queried: layersQueried,
+      layers_skipped: layersSkipped,
+      escalated,
+      degraded,
     };
   }
 
