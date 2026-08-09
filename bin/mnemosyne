@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
-# mnemosyne — start the memory god service.
-# Usage: bin/mnemosyne            # foreground
+# mnemosyne — start the memory god service, or run a CLI subcommand.
+# Usage: bin/mnemosyne                         # start service (foreground)
 #        PORT=8477 bin/mnemosyne
+#        bin/mnemosyne reindex <scope> [--dir <path>] [--url <base-url>]
 set -euo pipefail
 export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
+
+if [ "${1:-}" = "reindex" ]; then
+  shift
+  exec node "$HERE/bin/mnemosyne-reindex.mjs" "$@"
+fi
+
 exec node "$HERE/src/server.mjs"
