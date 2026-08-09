@@ -5,7 +5,8 @@
  * talking to any layer (or HTTP) directly.
  *
  * Story: s2-02-client-library (epic: mnemosyne-operational-slice-2)
- * Updated: s2-05-vector-layer-adapter adds the vector layer ahead of file.
+ * Updated: s2-07-code-graph-layer-adapter adds structural impact recall
+ * ahead of vector/file.
  *
  * NOTE on sync vs. async: `interfaces.ts` declares `RecallFn`/`RememberFn`
  * as synchronous for contract-literalism reasons (see that file's docs on
@@ -13,15 +14,14 @@
  * `Promise<...>` instead, per the story's accepted async/sync mismatch —
  * every layer adapter does real I/O and cannot be synchronous.
  *
- * Layer selection: vector layer is queried first (semantic recall). If it
- * fails outright (swarm-memory unreachable/not installed), that failure is
- * recorded as a skipped layer and the file layer serves the whole request
- * instead (loud failure — never silently dropped). If the vector layer
- * succeeds but finds nothing, the file layer is queried too and the result
- * is marked `escalated`. Code-graph layer is added by a later story.
+ * Layer selection: code-graph is queried first for structural impact recall.
+ * If it has no hits, Mnemosyne falls through to vector recall, then the file
+ * layer as the final floor. Layer failures are recorded as skipped layers and
+ * surfaced through `degraded: true` — never silently dropped.
  */
 
 import { createHash } from 'node:crypto';
+import { CodeGraphLayerAdapter } from './layers/CodeGraphLayerAdapter.js';
 import { FileLayerAdapter } from './layers/FileLayerAdapter.js';
 import type { LayerAdapter } from './layers/LayerAdapter.js';
 import { VectorLayerAdapter } from './layers/VectorLayerAdapter.js';
@@ -39,15 +39,19 @@ import type {
 export interface MnemosyneClientOptions {
   /** Directory the file layer searches. Defaults to `process.cwd()`. */
   rootDirectory?: string;
+  /** Override the code-graph adapter (mainly for tests). Defaults to a real `CodeGraphLayerAdapter`. */
+  codeGraphLayer?: LayerAdapter;
   /** Override the vector layer adapter (mainly for tests). Defaults to a real `VectorLayerAdapter`. */
   vectorLayer?: LayerAdapter;
 }
 
 export class MnemosyneClient {
+  private readonly codeGraphLayer: LayerAdapter;
   private readonly fileLayer: LayerAdapter;
   private readonly vectorLayer: LayerAdapter;
 
   constructor(options: MnemosyneClientOptions = {}) {
+    this.codeGraphLayer = options.codeGraphLayer ?? new CodeGraphLayerAdapter();
     this.fileLayer = new FileLayerAdapter(options.rootDirectory ?? process.cwd());
     this.vectorLayer = options.vectorLayer ?? new VectorLayerAdapter();
   }
@@ -77,9 +81,38 @@ export class MnemosyneClient {
     let degraded = false;
     let escalated = false;
 
+    const codeGraphResult = await this.codeGraphLayer.recall(query, recallOptions);
+    if (codeGraphResult.ok) {
+      layersQueried.push('code-graph');
+      degraded = degraded || codeGraphResult.degraded;
+      hits = codeGraphResult.hits;
+
+      if (hits.length > 0) {
+        return {
+          ok: true,
+          query,
+          scope,
+          intent: resolvedIntent,
+          hits: mergeHits(hits),
+          layers_queried: layersQueried,
+          layers_skipped: layersSkipped,
+          escalated,
+          degraded,
+        };
+      }
+    } else {
+      degraded = true;
+      layersSkipped.push({
+        layer: 'code-graph',
+        reason: codeGraphResult.error.code ?? 'code_graph_unavailable',
+        detail: codeGraphResult.error.message,
+      });
+    }
+
     const vectorResult = await this.vectorLayer.recall(query, recallOptions);
     if (vectorResult.ok) {
       layersQueried.push('vector');
+      degraded = degraded || vectorResult.degraded;
       hits = vectorResult.hits;
 
       if (hits.length === 0) {

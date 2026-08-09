@@ -10,7 +10,7 @@ Story: `s2-03-http-service` (epic: `mnemosyne-operational-slice-2`).
 > **Not the same service as `src/server.mjs`.** `src/server.mjs` (`:8477`) is
 > the production service wrapping the swarm-memory/Qdrant engine. This API
 > (`lib/mnemosyne/server.ts`, default `:3141`) wraps the newer
-> `MnemosyneClient` (file layer only, as of this story). They run as separate
+> `MnemosyneClient` (code-graph/vector/file routing). They run as separate
 > processes on separate ports and do not share routes.
 
 ## Run

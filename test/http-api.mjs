@@ -66,6 +66,8 @@ async function main() {
       ...process.env,
       MNEMOSYNE_PORT: String(PORT),
       MNEMOSYNE_ROOT_DIR: root,
+      SWARM_MEMORY_BIN: "/definitely/missing/swarm-memory",
+      SWARM_MEMORY_GRAPH_DB: path.join(root, "missing-graph.sqlite"),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

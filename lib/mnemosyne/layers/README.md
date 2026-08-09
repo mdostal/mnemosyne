@@ -49,7 +49,38 @@ resolved from `PATH`, overridable via the `SWARM_MEMORY_BIN` environment
 variable or the adapter's `command` constructor option (the latter is what
 tests use to point at a fixture double instead of a live Qdrant).
 
-`MnemosyneClient` queries the vector layer before falling back to the file
-layer: a vector layer failure is recorded as a skipped layer and the file
-layer serves the whole request (`degraded: true`); a vector layer success
-with zero hits escalates to the file layer too (`escalated: true`).
+## Code-Graph Layer
+
+`CodeGraphLayerAdapter` answers "what breaks if I change this?" with
+swarm-memory's typed impact graph. It shells out to:
+
+```text
+swarm-memory graph impact <node> --json
+```
+
+The graph command walks reverse impact edges, so a query for `src/core.ts`
+returns files/modules that depend on it through edges such as `depends_on`,
+`cites`, and `implements`. Each hit is unranked structural provenance:
+
+- `provenance.layer = "code-graph"`
+- `provenance.source = <affected graph node/file>`
+- `provenance.chunk_span = null`
+- `provenance.index_timestamp = null` for CLI hits, or the edge `created_at`
+  timestamp for SQLite fallback hits
+- `provenance.content_hash = null`
+- `provenance.embedder = null`
+- `provenance.retrieval_time = <ISO 8601 search timestamp>`
+
+If the graph CLI is unavailable, times out, exits non-zero, or returns
+malformed JSON, the adapter opens the swarm-memory SQLite graph read-only and
+walks `edges.dst -> edges.src` directly. The SQLite path defaults to
+`SWARM_MEMORY_GRAPH_DB`, `~/.local/share/swarm-memory/graph.sqlite`, then the
+older `~/.config/swarm-memory/graph.*` paths; tests can pass `dbPath`
+explicitly.
+
+`MnemosyneClient` queries the code-graph layer first. If it returns hits,
+those structural impact hits serve the request. If code-graph has zero hits,
+the client falls through to vector recall and then the file layer. A layer
+failure is recorded as a skipped layer and the eventual result is marked
+`degraded: true`; a vector success with zero hits still escalates to the file
+layer (`escalated: true`).
