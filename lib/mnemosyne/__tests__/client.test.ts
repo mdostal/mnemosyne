@@ -10,6 +10,20 @@ function stubVectorLayer(recall: (query: string, options?: RecallOptions) => Pro
   return { layer: 'vector', recall };
 }
 
+function unavailableVectorLayer(): LayerAdapter {
+  return stubVectorLayer(async (query, options) => ({
+    ok: false,
+    query,
+    scope: options?.scope ?? 'project',
+    intent: options?.intent ?? 'narrow',
+    error: {
+      layer: 'vector',
+      message: 'swarm-memory is not installed or not on PATH',
+      code: 'not_installed',
+    },
+  }));
+}
+
 function vectorHit(overrides: Partial<Hit> = {}): Hit {
   return {
     content: 'a semantic match',
@@ -47,7 +61,7 @@ describe('MnemosyneClient', () => {
     const root = await makeTempRoot();
     await writeFile(path.join(root, 'notes.md'), 'a target line\n', 'utf8');
 
-    const client = new MnemosyneClient({ rootDirectory: root });
+    const client = new MnemosyneClient({ rootDirectory: root, vectorLayer: unavailableVectorLayer() });
     const result = await client.recall('target', 'project');
 
     expect(result.ok).toBe(true);
@@ -77,7 +91,7 @@ describe('MnemosyneClient', () => {
 
   it('propagates RecallFailure from the file layer without swallowing it into empty hits', async () => {
     const missingRoot = path.join(tmpdir(), `mnemosyne-client-missing-${process.pid}`);
-    const client = new MnemosyneClient({ rootDirectory: missingRoot });
+    const client = new MnemosyneClient({ rootDirectory: missingRoot, vectorLayer: unavailableVectorLayer() });
 
     const result = await client.recall('needle', 'project');
 
@@ -93,7 +107,7 @@ describe('MnemosyneClient', () => {
     const filePath = path.join(root, 'multi.md');
     await writeFile(filePath, ['omega target', 'alpha', 'target line'].join('\n'), 'utf8');
 
-    const client = new MnemosyneClient({ rootDirectory: root });
+    const client = new MnemosyneClient({ rootDirectory: root, vectorLayer: unavailableVectorLayer() });
     const result = await client.recall('target', 'project');
 
     expect(result.ok).toBe(true);
@@ -110,7 +124,7 @@ describe('MnemosyneClient', () => {
     const root = await makeTempRoot();
     await writeFile(path.join(root, 'source.ts'), 'const needle = true;\n', 'utf8');
 
-    const client = new MnemosyneClient({ rootDirectory: root });
+    const client = new MnemosyneClient({ rootDirectory: root, vectorLayer: unavailableVectorLayer() });
     const result = await client.recall('needle', 'enterprise', 'broad');
 
     expect(result.ok).toBe(true);
