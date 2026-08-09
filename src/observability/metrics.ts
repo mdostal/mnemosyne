@@ -1,6 +1,28 @@
 import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
+export type MetricFields = Record<string, unknown>;
+
+export interface Metrics {
+  histogram(name: string, value: number, fields?: MetricFields): void;
+  counter(name: string, value?: number, fields?: MetricFields): void;
+}
+
+export interface MetricSample {
+  type: 'histogram' | 'counter';
+  name: string;
+  value: number;
+  timestamp: string;
+  fields: MetricFields;
+}
+
+const metricSamples: MetricSample[] = [];
+
+export const metrics: Metrics = {
+  histogram: (name, value, fields) => recordMetricSample('histogram', name, value, fields),
+  counter: (name, value = 1, fields) => recordMetricSample('counter', name, value, fields),
+};
+
 export const DEFAULT_METRICS_EVENTS_PATH = path.join(
   '.pHive',
   'metrics',
@@ -83,6 +105,32 @@ export async function queryRunnerMetrics(
   summary.fallbackRate = summary.totalAttempts > 0 ? summary.totalFallbacks / summary.totalAttempts : 0;
 
   return summary;
+}
+
+export function getMetricSamples(): MetricSample[] {
+  return metricSamples.map((sample) => ({
+    ...sample,
+    fields: { ...sample.fields },
+  }));
+}
+
+export function resetMetricSamples(): void {
+  metricSamples.splice(0, metricSamples.length);
+}
+
+function recordMetricSample(
+  type: MetricSample['type'],
+  name: string,
+  value: number,
+  fields: MetricFields = {},
+): void {
+  metricSamples.push({
+    type,
+    name,
+    value,
+    timestamp: new Date().toISOString(),
+    fields: { ...fields },
+  });
 }
 
 async function readMetricEvents(filePath: string): Promise<RunnerMetricEvent[]> {
