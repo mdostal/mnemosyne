@@ -36,6 +36,20 @@ separate from the variable ticket memory delta.
 Claude Code `settings.json` — see [`hooks/README.md`](./hooks/README.md#install-the-hooks)
 for usage.
 
+## Tests
+
+Run the Minerva-style end-to-end integration test with:
+
+```bash
+npm run test:e2e
+```
+
+The test imports `MnemosyneClient`, recalls `authentication flow` from the
+project scope, verifies vector provenance, forces vector degradation to confirm
+file-layer fallback, starts the client HTTP API, and checks that `POST /recall`
+matches the library result. It uses a temporary fake `swarm-memory` executable,
+so it does not require live Qdrant access.
+
 ## Read next
 
 - **[`idea-brief.md`](./idea-brief.md)** — the full brief: the layer stack, the unified recall/write
