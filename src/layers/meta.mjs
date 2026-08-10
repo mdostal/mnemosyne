@@ -24,10 +24,10 @@ export class MetaLayer {
             console.warn(`[mnemosyne] Meta layer vault not found at ${this.directory}`);
             return null;
         }
-        
+
         const m = await scopeMap();
         const collection = m.scopes[this.scope] || m.fallback_collection || 'claude_knowledge';
-        
+
         const args = ["index", collection, "--no-prune", this.directory];
         try {
             const { stdout, stderr } = await run(args, { timeout: 300_000 });
@@ -50,10 +50,10 @@ export class MetaLayer {
 
     async remember(text, opts = {}) {
         await fs.mkdir(this.directory, { recursive: true });
-        
+
         const m = await scopeMap();
         const collection = m.scopes[this.scope] || m.fallback_collection || 'claude_knowledge';
-        
+
         const stamp = new Date().toISOString().replace(/[:.]/g, "-");
         const tag = (opts.tag || "note").replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 40);
         const file = path.join(this.directory, `${stamp}-${tag}.md`);
@@ -75,7 +75,7 @@ export class MetaLayer {
 
         const upserted = /upserted\s+(\d+)\s+chunks/i.exec(out);
         const chunksUpserted = upserted ? Number(upserted[1]) : 0;
-        
+
         return {
             remembered: true,
             scope: this.scope,

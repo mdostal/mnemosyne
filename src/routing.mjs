@@ -12,7 +12,7 @@ const layers = [
 export async function layeredRecall(query, opts = {}) {
     // Attempt graceful degradation: meta -> enterprise -> project -> lower layers (engine recall)
     const results = [];
-    
+
     for (const layer of layers) {
         try {
             if (await layer.isAvailable()) {
@@ -29,7 +29,7 @@ export async function layeredRecall(query, opts = {}) {
             }
         }
     }
-    
+
     // Lower layer fallback (engine recall without specific layer scope, let it use default/escalate)
     try {
         const engineResult = await engineRecall(query, null, opts);
@@ -42,21 +42,21 @@ export async function layeredRecall(query, opts = {}) {
     if (results.length === 0) {
         return { total_hits: 0, scopes: [] };
     }
-    
+
     let total_hits = 0;
     const allScopes = [];
-    
+
     for (const res of results) {
         if (res && res.scopes) {
             total_hits += res.total_hits || 0;
             allScopes.push(...res.scopes);
         }
     }
-    
+
     // De-duplicate scopes by name? Or just return as merged
     const mergedScopes = [];
     const scopeMap = new Map();
-    
+
     for (const s of allScopes) {
         if (!scopeMap.has(s.scope)) {
             scopeMap.set(s.scope, { ...s, hits: [...(s.hits || [])] });
@@ -68,19 +68,19 @@ export async function layeredRecall(query, opts = {}) {
             // Assuming the engine handles returning unique chunks, but across layers might differ.
         }
     }
-    
+
     return { query, total_hits, scopes: mergedScopes };
 }
 
 export async function layeredRemember(text, scope, opts = {}) {
     // Route to appropriate layer based on scope
     const layer = layers.find(l => l.scope === scope);
-    
+
     if (layer) {
         // If a layer handles this scope, use engine's remember which maps the scope correctly
         return engineRemember(text, scope, opts);
     }
-    
+
     // Fallback to normal engine remember
     return engineRemember(text, scope, opts);
 }

@@ -9,9 +9,9 @@
  *
  * Distinct from `src/server.mjs` (the production `:8477` service wrapping
  * the swarm-memory/Qdrant engine): this service wraps the newer
- * `MnemosyneClient` (file layer only, see client.ts), runs on its own port
- * (`MNEMOSYNE_PORT`, default 3141), and does not share routes or process
- * with it.
+ * `MnemosyneClient` (code-graph/vector/file routing, see client.ts), runs on
+ * its own port (`MNEMOSYNE_PORT`, default 3141), and does not share routes or
+ * process with it.
  *
  *   GET  /health            -> layer availability status
  *   POST /recall  {query, scope, intent?}            -> RecallResult

@@ -10,17 +10,40 @@ function stubVectorLayer(recall: (query: string, options?: RecallOptions) => Pro
   return { layer: 'vector', recall };
 }
 
-function unavailableVectorLayer(): LayerAdapter {
-  return stubVectorLayer(async (query, options) => ({
-    ok: false,
+function stubCodeGraphLayer(
+  recall: (query: string, options?: RecallOptions) => Promise<RecallResult>,
+): LayerAdapter {
+  return { layer: 'code-graph', recall };
+}
+
+function unavailableLayer(layer: 'code-graph' | 'vector'): LayerAdapter {
+  return {
+    layer,
+    recall: async (query, options) => ({
+      ok: false,
+      query,
+      scope: options?.scope ?? 'project',
+      intent: options?.intent ?? 'narrow',
+      error: {
+        layer,
+        message: `${layer} unavailable`,
+        code: 'not_installed',
+      },
+    }),
+  };
+}
+
+function emptyCodeGraphLayer(): LayerAdapter {
+  return stubCodeGraphLayer(async (query, options) => ({
+    ok: true,
     query,
     scope: options?.scope ?? 'project',
     intent: options?.intent ?? 'narrow',
-    error: {
-      layer: 'vector',
-      message: 'swarm-memory is not installed or not on PATH',
-      code: 'not_installed',
-    },
+    hits: [],
+    layers_queried: ['code-graph'],
+    layers_skipped: [],
+    escalated: false,
+    degraded: false,
   }));
 }
 
@@ -35,6 +58,22 @@ function vectorHit(overrides: Partial<Hit> = {}): Hit {
       content_hash: 'deadbeef',
       embedder: 'nomic-embed-text',
       retrieval_time: '2026-08-09T00:00:00Z',
+    },
+    ...overrides,
+  };
+}
+
+function codeGraphHit(overrides: Partial<Hit> = {}): Hit {
+  return {
+    content: 'src/consumer.ts --depends_on--> src/core.ts',
+    provenance: {
+      layer: 'code-graph',
+      source: 'src/consumer.ts',
+      chunk_span: null,
+      index_timestamp: '2026-08-09T00:00:00Z',
+      content_hash: null,
+      embedder: null,
+      retrieval_time: '2026-08-09T00:00:01Z',
     },
     ...overrides,
   };
@@ -61,7 +100,11 @@ describe('MnemosyneClient', () => {
     const root = await makeTempRoot();
     await writeFile(path.join(root, 'notes.md'), 'a target line\n', 'utf8');
 
-    const client = new MnemosyneClient({ rootDirectory: root, vectorLayer: unavailableVectorLayer() });
+    const client = new MnemosyneClient({
+      rootDirectory: root,
+      codeGraphLayer: unavailableLayer('code-graph'),
+      vectorLayer: unavailableLayer('vector'),
+    });
     const result = await client.recall('target', 'project');
 
     expect(result.ok).toBe(true);
@@ -77,7 +120,11 @@ describe('MnemosyneClient', () => {
 
   it('returns RecallFailure for an empty query', async () => {
     const root = await makeTempRoot();
-    const client = new MnemosyneClient({ rootDirectory: root });
+    const client = new MnemosyneClient({
+      rootDirectory: root,
+      codeGraphLayer: unavailableLayer('code-graph'),
+      vectorLayer: unavailableLayer('vector'),
+    });
 
     const result = await client.recall('   ', 'project');
 
@@ -91,7 +138,11 @@ describe('MnemosyneClient', () => {
 
   it('propagates RecallFailure from the file layer without swallowing it into empty hits', async () => {
     const missingRoot = path.join(tmpdir(), `mnemosyne-client-missing-${process.pid}`);
-    const client = new MnemosyneClient({ rootDirectory: missingRoot, vectorLayer: unavailableVectorLayer() });
+    const client = new MnemosyneClient({
+      rootDirectory: missingRoot,
+      codeGraphLayer: unavailableLayer('code-graph'),
+      vectorLayer: unavailableLayer('vector'),
+    });
 
     const result = await client.recall('needle', 'project');
 
@@ -107,7 +158,11 @@ describe('MnemosyneClient', () => {
     const filePath = path.join(root, 'multi.md');
     await writeFile(filePath, ['omega target', 'alpha', 'target line'].join('\n'), 'utf8');
 
-    const client = new MnemosyneClient({ rootDirectory: root, vectorLayer: unavailableVectorLayer() });
+    const client = new MnemosyneClient({
+      rootDirectory: root,
+      codeGraphLayer: unavailableLayer('code-graph'),
+      vectorLayer: unavailableLayer('vector'),
+    });
     const result = await client.recall('target', 'project');
 
     expect(result.ok).toBe(true);
@@ -124,7 +179,11 @@ describe('MnemosyneClient', () => {
     const root = await makeTempRoot();
     await writeFile(path.join(root, 'source.ts'), 'const needle = true;\n', 'utf8');
 
-    const client = new MnemosyneClient({ rootDirectory: root, vectorLayer: unavailableVectorLayer() });
+    const client = new MnemosyneClient({
+      rootDirectory: root,
+      codeGraphLayer: unavailableLayer('code-graph'),
+      vectorLayer: unavailableLayer('vector'),
+    });
     const result = await client.recall('needle', 'enterprise', 'broad');
 
     expect(result.ok).toBe(true);
@@ -173,7 +232,51 @@ describe('MnemosyneClient', () => {
     expect(result.provenance.layer).toBe('vector');
   });
 
-  it('queries the vector layer before falling back to the file layer', async () => {
+  it('queries the code-graph layer before vector recall and returns impact hits', async () => {
+    const root = await makeTempRoot();
+    await writeFile(path.join(root, 'notes.md'), 'a target line\n', 'utf8');
+    let vectorCalls = 0;
+
+    const codeGraphLayer = stubCodeGraphLayer(async (query, options) => ({
+      ok: true,
+      query,
+      scope: options?.scope ?? 'project',
+      intent: options?.intent ?? 'narrow',
+      hits: [codeGraphHit()],
+      layers_queried: ['code-graph'],
+      layers_skipped: [],
+      escalated: false,
+      degraded: false,
+    }));
+    const vectorLayer = stubVectorLayer(async (query, options) => {
+      vectorCalls += 1;
+      return {
+        ok: true,
+        query,
+        scope: options?.scope ?? 'project',
+        intent: options?.intent ?? 'narrow',
+        hits: [vectorHit()],
+        layers_queried: ['vector'],
+        layers_skipped: [],
+        escalated: false,
+        degraded: false,
+      };
+    });
+
+    const client = new MnemosyneClient({ rootDirectory: root, codeGraphLayer, vectorLayer });
+    const result = await client.recall('src/core.ts', 'project');
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.error.message);
+    }
+    expect(result.layers_queried).toEqual(['code-graph']);
+    expect(result.hits).toHaveLength(1);
+    expect(result.hits[0]?.provenance.layer).toBe('code-graph');
+    expect(vectorCalls).toBe(0);
+  });
+
+  it('queries the vector layer when code-graph succeeds with zero hits', async () => {
     const root = await makeTempRoot();
     await writeFile(path.join(root, 'notes.md'), 'a target line\n', 'utf8');
 
@@ -189,14 +292,18 @@ describe('MnemosyneClient', () => {
       degraded: false,
     }));
 
-    const client = new MnemosyneClient({ rootDirectory: root, vectorLayer });
+    const client = new MnemosyneClient({
+      rootDirectory: root,
+      codeGraphLayer: emptyCodeGraphLayer(),
+      vectorLayer,
+    });
     const result = await client.recall('target', 'project');
 
     expect(result.ok).toBe(true);
     if (!result.ok) {
       throw new Error(result.error.message);
     }
-    expect(result.layers_queried).toEqual(['vector']);
+    expect(result.layers_queried).toEqual(['code-graph', 'vector']);
     expect(result.hits).toHaveLength(1);
     expect(result.hits[0]?.provenance.layer).toBe('vector');
     expect(result.escalated).toBe(false);
@@ -219,14 +326,18 @@ describe('MnemosyneClient', () => {
       degraded: false,
     }));
 
-    const client = new MnemosyneClient({ rootDirectory: root, vectorLayer });
+    const client = new MnemosyneClient({
+      rootDirectory: root,
+      codeGraphLayer: emptyCodeGraphLayer(),
+      vectorLayer,
+    });
     const result = await client.recall('target', 'project');
 
     expect(result.ok).toBe(true);
     if (!result.ok) {
       throw new Error(result.error.message);
     }
-    expect(result.layers_queried).toEqual(['vector', 'file']);
+    expect(result.layers_queried).toEqual(['code-graph', 'vector', 'file']);
     expect(result.escalated).toBe(true);
     expect(result.degraded).toBe(false);
     expect(result.hits).toHaveLength(1);
@@ -249,14 +360,18 @@ describe('MnemosyneClient', () => {
       },
     }));
 
-    const client = new MnemosyneClient({ rootDirectory: root, vectorLayer });
+    const client = new MnemosyneClient({
+      rootDirectory: root,
+      codeGraphLayer: emptyCodeGraphLayer(),
+      vectorLayer,
+    });
     const result = await client.recall('target', 'project');
 
     expect(result.ok).toBe(true);
     if (!result.ok) {
       throw new Error(result.error.message);
     }
-    expect(result.layers_queried).toEqual(['file']);
+    expect(result.layers_queried).toEqual(['code-graph', 'file']);
     expect(result.layers_skipped).toEqual([
       {
         layer: 'vector',
@@ -284,7 +399,11 @@ describe('MnemosyneClient', () => {
       },
     }));
 
-    const client = new MnemosyneClient({ rootDirectory: missingRoot, vectorLayer });
+    const client = new MnemosyneClient({
+      rootDirectory: missingRoot,
+      codeGraphLayer: emptyCodeGraphLayer(),
+      vectorLayer,
+    });
     const result = await client.recall('needle', 'project');
 
     expect(result.ok).toBe(false);

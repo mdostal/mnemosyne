@@ -27,15 +27,17 @@
     "test:http-api": "node test/http-api.mjs",
     "test:reindex": "node test/reindex.mjs"
   },
-  "dependencies": {
-    "tsx": "^4.23.11",
-    "yaml": "^2.9.0"
-  },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^20.19.43",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "tsx": "^4.23.11",
+    "yaml": "^2.9.0"
   }
 }
