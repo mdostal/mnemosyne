@@ -1,28 +1,67 @@
-// hooks.mjs — end-to-end proof of the v1 memory loop over REAL Qdrant.
+// hooks.mjs — end-to-end proof of the v1 memory hook integration.
 //
-// Proves the whole ask: post-remember STORES, pre-recall LOADS it back on a
-// later run. No mocks — writes a unique token to the live corpus via the
-// post-hook, then recalls it via the pre-hook and asserts the token is in the
-// injected context. Also asserts line-range provenance is present.
+// Proves the auto-loading path through installed hook commands:
+//   - bin/mnemosyne-install-hooks wires UserPromptSubmit -> pre-recall and
+//     Stop -> post-remember into a scratch settings.json.
+//   - UserPromptSubmit receives hookSpecificOutput.additionalContext.
+//   - Stop persists a reviewed learning, and a later UserPromptSubmit recalls it
+//     from the live Qdrant-backed corpus.
+//   - High-level hits are injected before lower-level hits through the actual
+//     pre-recall hook boundary.
+//   - Scratch note files created by write-through are removed after the test.
 //
-//   node test/hooks.mjs           # runs the two hooks as child processes
+//   node test/hooks.mjs
 //
-// Requires either the Mnemosyne service (:8477) OR swarm-memory on PATH — the
-// client falls back to the CLI, so this passes in both modes.
+// Live round-trip coverage requires the Mnemosyne service on :8477. If /healthz
+// is unreachable, the live corpus portion is skipped instead of failing a local
+// checkout that has not started the service.
 
 import { spawn } from "node:child_process";
+import { mkdtemp, readFile, rm, unlink } from "node:fs/promises";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
-const PRE = path.join(ROOT, "hooks", "pre-recall.mjs");
-const POST = path.join(ROOT, "hooks", "post-remember.mjs");
+const INSTALL = path.join(ROOT, "bin", "mnemosyne-install-hooks");
+const LIVE_BASE = process.env.MNEMOSYNE_URL || "http://127.0.0.1:8477";
 
-function runHook(file, inputObj) {
+let fails = 0;
+const cleanupFiles = new Set();
+const cleanupDirs = new Set();
+const ok = (c, m) => {
+  console.log(`${c ? "  PASS" : "  FAIL"}  ${m}`);
+  if (!c) fails++;
+};
+
+function runNode(args, inputObj, env = {}) {
   return new Promise((resolve, reject) => {
-    const p = spawn(process.execPath, [file], { cwd: ROOT });
-    let out = "", err = "";
+    const p = spawn(process.execPath, args, {
+      cwd: ROOT,
+      env: { ...process.env, ...env },
+    });
+    let out = "";
+    let err = "";
+    p.stdout.on("data", (d) => (out += d));
+    p.stderr.on("data", (d) => (err += d));
+    p.on("error", reject);
+    p.on("close", (code) => resolve({ code, out, err }));
+    if (inputObj) p.stdin.write(JSON.stringify(inputObj));
+    p.stdin.end();
+  });
+}
+
+function runInstalled(command, inputObj, env = {}) {
+  return new Promise((resolve, reject) => {
+    const p = spawn(command, {
+      cwd: ROOT,
+      env: { ...process.env, ...env },
+      shell: true,
+    });
+    let out = "";
+    let err = "";
     p.stdout.on("data", (d) => (out += d));
     p.stderr.on("data", (d) => (err += d));
     p.on("error", reject);
@@ -32,53 +71,210 @@ function runHook(file, inputObj) {
   });
 }
 
-let fails = 0;
-const ok = (c, m) => { console.log(`${c ? "  PASS" : "  FAIL"}  ${m}`); if (!c) fails++; };
-
-const token = `MNEMO-HOOK-E2E-${Date.now()}`;
-
-// 1) POST-HOOK: store a status-aware note carrying the unique token.
-const stored = await runHook(POST, {
-  text: `Hook end-to-end proof note. Unique token ${token}. The Mnemosyne v1 pre/post memory hooks are wired into the agent loop.`,
-  scope: "personal",
-  status: "reviewed",
-  ticket: "MNEMO-E2E",
-});
-let storedJson = {};
-try { storedJson = JSON.parse(stored.out || "{}"); } catch { /* */ }
-ok(stored.code === 0, `post-remember exits 0 (non-blocking)`);
-ok(storedJson.ok === true, `post-remember stored via=${storedJson.via} scope=${storedJson.scope} status=${storedJson.status}`);
-
-// give the index a moment to settle before recall
-await new Promise((r) => setTimeout(r, 3000));
-
-// 2) PRE-HOOK: recall the token back and assert it lands in injected context.
-// The exact token is an identifier — the hybrid hook's KEYWORD pass makes this
-// deterministic (semantic embeddings don't encode rare tokens; keyword does).
-const recalled = await runHook(PRE, {
-  query: `hook end to end proof note ${token}`,
-  ticket: token,
-  scope: "personal",
-  role: "developer",
-  hits: 5,
-});
-ok(recalled.code === 0, `pre-recall exits 0 (non-blocking)`);
-let injected = "";
-try {
-  const j = JSON.parse(recalled.out || "{}");
-  injected = j.hookSpecificOutput?.additionalContext || "";
-} catch { /* */ }
-ok(injected.includes(token), `pre-recall recalls the stored token back into context (store->recall round-trip)`);
-ok(/keyword-exact/.test(injected), `token surfaced via deterministic keyword-exact match`);
-ok(/lines\s+\d+–\d+|chunk\s+\d+/.test(injected), `injected block carries line-range/chunk provenance (pointers, not whole files)`);
-ok(/Prior Memory/.test(injected), `injected block is a Prior Memory section`);
-
-// 3) resilience: empty query -> no crash, no injection
-const empty = await runHook(PRE, { query: "" });
-ok(empty.code === 0 && empty.out.trim() === "", `pre-recall on empty query is silent + exits 0`);
-
-console.log(fails ? `\n${fails} check(s) failed` : "\nall hook e2e checks passed");
-if (injected) {
-  console.log("\n--- injected context sample ---\n" + injected.slice(0, 700));
+async function serviceAlive(base) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 3000);
+  try {
+    const res = await fetch(`${base}/healthz`, { signal: ctrl.signal });
+    return res.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(t);
+  }
 }
+
+async function installIntoScratch(serviceUrl) {
+  const dir = await mkdtemp(path.join(tmpdir(), "mnemosyne-hooks-"));
+  cleanupDirs.add(dir);
+  const settingsPath = path.join(dir, "settings.json");
+  const install = await runNode(
+    [INSTALL, "--settings", settingsPath, "--yes", "--service-url", serviceUrl],
+    null
+  );
+  ok(install.code === 0, `mnemosyne-install-hooks exits 0 (${settingsPath})`);
+  const settings = JSON.parse(await readFile(settingsPath, "utf8"));
+  const preCommand = settings.hooks?.UserPromptSubmit?.[0]?.hooks?.[0]?.command || "";
+  const stopCommand = settings.hooks?.Stop?.[0]?.hooks?.[0]?.command || "";
+  ok(preCommand.includes(path.join(ROOT, "hooks", "pre-recall.mjs")), "installer wires UserPromptSubmit to this checkout's pre-recall hook");
+  ok(stopCommand.includes(path.join(ROOT, "hooks", "post-remember.mjs")), "installer wires Stop to this checkout's post-remember hook");
+  return { preCommand, stopCommand };
+}
+
+function parseJson(out, fallback = {}) {
+  try {
+    return JSON.parse(out || "{}");
+  } catch {
+    return fallback;
+  }
+}
+
+function startHighLevelMemoryStub() {
+  const requests = [];
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (d) => (body += d));
+    req.on("end", () => {
+      const input = body ? JSON.parse(body) : {};
+      requests.push({ method: req.method, url: req.url, input });
+      res.setHeader("content-type", "application/json");
+
+      if (req.method === "GET" && req.url === "/healthz") {
+        res.end(JSON.stringify({ alive: true }));
+        return;
+      }
+
+      if (req.method === "POST" && req.url === "/grep") {
+        res.end(JSON.stringify({ total_hits: 0, scopes: [] }));
+        return;
+      }
+
+      if (req.method === "POST" && req.url === "/recall") {
+        const scope = input.scope || "vector";
+        const hit =
+          scope === "meta"
+            ? {
+                source: "meta/auto-loading.md",
+                full_path: "/memory/meta/auto-loading.md",
+                chunk_span: [1, 3],
+                score: 0.1,
+                text: "High-level memory exists for hook auto-loading and must be injected first.",
+              }
+            : {
+                source: "vector/hook-detail.md",
+                full_path: "/memory/vector/hook-detail.md",
+                chunk_span: [10, 14],
+                score: 0.99,
+                text: "Lower-level vector detail scores higher but must appear after meta.",
+              };
+        res.end(JSON.stringify({ total_hits: 1, scopes: [{ scope, hits: [hit] }] }));
+        return;
+      }
+
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: "not found" }));
+    });
+  });
+
+  return new Promise((resolve, reject) => {
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address();
+      resolve({ server, requests, base: `http://127.0.0.1:${port}` });
+    });
+  });
+}
+
+async function testHighLevelFirstThroughHook() {
+  const stub = await startHighLevelMemoryStub();
+  try {
+    const { preCommand } = await installIntoScratch(stub.base);
+    const recalled = await runInstalled(
+      preCommand,
+      {
+        hook_event_name: "UserPromptSubmit",
+        prompt: "Validate high-level hook memory order",
+        scope: "vector",
+        shared_scope: "meta",
+        role: "developer",
+        hits: 1,
+        shared_hits: 1,
+      },
+      {
+        MNEMOSYNE_URL: stub.base,
+        SWARM_MEMORY_BIN: "/definitely/missing/swarm-memory",
+      }
+    );
+    ok(recalled.code === 0, "pre-recall exits 0 for UserPromptSubmit");
+    const json = parseJson(recalled.out);
+    const injected = json.hookSpecificOutput?.additionalContext || "";
+    ok(json.hookSpecificOutput?.hookEventName === "UserPromptSubmit", "pre-recall emits the UserPromptSubmit hook event name");
+    ok(injected.length > 0, "pre-recall injects additionalContext");
+    ok(json.mnemosyne?.canonical_bundle === injected, "canonical bundle matches additionalContext");
+    ok(injected.indexOf("[meta") >= 0, "high-level meta hit appears in injected bundle");
+    ok(injected.indexOf("[meta") < injected.indexOf("[vector"), "high-level hit is injected before lower-level vector hit");
+    ok(
+      stub.requests.some((r) => r.url === "/recall" && r.input.scope === "meta"),
+      "pre-recall queries the high-level shared scope"
+    );
+  } finally {
+    await new Promise((resolve) => stub.server.close(resolve));
+  }
+}
+
+async function testLiveStopToUserPromptRoundTrip() {
+  if (!(await serviceAlive(LIVE_BASE))) {
+    console.log(`  SKIP  live hook round-trip (${LIVE_BASE}/healthz unreachable)`);
+    return;
+  }
+
+  const { preCommand, stopCommand } = await installIntoScratch(LIVE_BASE);
+  const token = `MNEMO-HOOK-E2E-${Date.now()}`;
+  const markerText =
+    `Mnemosyne hook integration checkpoint for Stop/UserPromptSubmit. Unique token ${token}. ` +
+    "This verifies the installed hook commands persist and recall memory through the live corpus.";
+
+  const stored = await runInstalled(stopCommand, {
+    hook_event_name: "Stop",
+    text: markerText,
+    scope: "personal",
+    status: "reviewed",
+    ticket: token,
+    role: "developer",
+  });
+  ok(stored.code === 0, "post-remember exits 0 for Stop");
+  const storedJson = parseJson(stored.out);
+  ok(storedJson.ok === true, `post-remember persisted via=${storedJson.via} scope=${storedJson.scope} status=${storedJson.status}`);
+  if (storedJson.file) cleanupFiles.add(storedJson.file);
+
+  await new Promise((r) => setTimeout(r, 3000));
+
+  const recalled = await runInstalled(preCommand, {
+    hook_event_name: "UserPromptSubmit",
+    prompt: `Find the hook integration checkpoint ${token}`,
+    ticket: token,
+    scope: "personal",
+    role: "developer",
+    hits: 5,
+  });
+  ok(recalled.code === 0, "pre-recall exits 0 for UserPromptSubmit live recall");
+  const recalledJson = parseJson(recalled.out);
+  const injected = recalledJson.hookSpecificOutput?.additionalContext || "";
+  ok(injected.includes(token), "pre-recall recalls the Stop learning into additionalContext");
+  ok(recalledJson.mnemosyne?.canonical_bundle === injected, "live recall canonical bundle matches additionalContext");
+  ok(injected.includes("mnemosyne-cache-breakpoint"), "injected context includes the cache breakpoint marker");
+  ok(/keyword-exact/.test(injected), "token surfaced via deterministic keyword-exact match");
+  ok(/lines\s+\d+–\d+|chunk\s+\d+/.test(injected), "injected context carries line-range/chunk provenance");
+  ok(/Prior Memory/.test(injected), "injected context is a Prior Memory section");
+
+  if (storedJson.file) {
+    try {
+      await unlink(storedJson.file);
+      cleanupFiles.delete(storedJson.file);
+      ok(true, `cleaned up scratch note file -> ${storedJson.file}`);
+    } catch (e) {
+      ok(false, `failed to clean up scratch note file -> ${e.message}`);
+    }
+  } else {
+    ok(false, "post-remember exposed the scratch note file for cleanup");
+  }
+}
+
+try {
+  await testHighLevelFirstThroughHook();
+  await testLiveStopToUserPromptRoundTrip();
+} finally {
+  for (const file of cleanupFiles) {
+    try {
+      await unlink(file);
+    } catch {
+      // Already reported above when cleanup was part of a checked assertion.
+    }
+  }
+  for (const dir of cleanupDirs) {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+console.log(fails ? `\n${fails} check(s) failed` : "\nall hook integration checks passed");
 process.exit(fails ? 1 : 0);

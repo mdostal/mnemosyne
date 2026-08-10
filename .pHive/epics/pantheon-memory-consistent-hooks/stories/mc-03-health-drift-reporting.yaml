@@ -1,0 +1,128 @@
+id: mc-03-health-drift-reporting
+epic: pantheon-memory-consistent-hooks
+title: Extend GET /health to report drift_count
+status: pending
+complexity: low
+methodology: tdd
+depends_on: [mc-02-reconciliation-helper]
+
+description: |
+  Extend the GET /health endpoint to call the reconcile helper and include
+  drift_count in the response. This makes drift visible via the health surface
+  so god-cards (Janus, Salus) can detect silent divergence.
+
+  Add last_check timestamp to prevent stale health caching.
+
+acceptance_criteria:
+  - "Given GET /health, when drift exists, then response includes drift_count field with count > 0"
+  - "Given GET /health, when no drift, then response includes drift_count: 0"
+  - "Given GET /health, when called, then response includes last_check ISO timestamp"
+  - "Given cached health result >5min old, when god-card reads it, then god-card flags staleness (verified by integration test)"
+
+steps:
+  - id: test-spec
+    description: |
+      Write failing tests for health drift reporting:
+      - Test: health response includes drift_count field
+      - Test: health response includes last_check timestamp
+      - Test: drift_count matches reconcile helper output
+      - Mock reconcile calls to test both 0 and N drift scenarios
+    agent: tester
+    depends_on: []
+  - id: implement
+    description: |
+      Modify src/engine.mjs health() to:
+      1. Call bin/mnemosyne-reconcile --json
+      2. Parse drift_count from output
+      3. Add drift_count + last_check to health response
+      Handle reconcile failures gracefully (report drift_count: null)
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review health endpoint changes and ensure backward compatibility
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/.minerva/runs/d0aee757-47fc-4df8-98dc-c61b726bf01f/workspace
+  tech_stack:
+    runtime: Node.js
+    http: Node built-in http module
+  key_files:
+    - path: src/engine.mjs
+      purpose: Contains health() function that runs swarm-memory check
+    - path: src/server.mjs
+      purpose: GET /health route handler
+    - path: test/e2e.mjs
+      purpose: E2E test that verifies /health response shape
+
+files_to_modify:
+  - file: src/engine.mjs
+    change: Add reconcile call + drift_count to health() return value
+  - file: test/e2e.mjs
+    change: Add drift_count assertion to health check
+
+code_examples:
+  - title: Current health() implementation
+    file: src/engine.mjs
+    snippet: |
+      export async function health() {
+        try {
+          const { stdout, stderr } = await run(['check'], { timeout: 30_000 });
+          const text = stdout + stderr;
+          const ok = /result:\s*PASS/i.test(text);
+          return { ok, engine: 'swarm-memory', detail: text.trim() };
+        } catch (e) {
+          return { ok: false, engine: 'swarm-memory', error: String(e.message || e) };
+        }
+      }
+
+design_decisions:
+  - decision: Call reconcile on every /health request (not cached)
+    rationale: Drift can happen at any time, health must reflect current state
+  - decision: Return drift_count: null on reconcile failure (not omit field)
+    rationale: Explicit null signals "couldn't check" vs 0 "checked, no drift"
+  - decision: Add last_check timestamp
+    rationale: God-cards can detect stale cached responses
+
+cross_cutting:
+  - concern: provenance-completeness
+    action: "Include last_check timestamp in health response for staleness detection"
+  - concern: loud-failure
+    action: "Report drift_count explicitly - don't hide divergence even if ok=true"
+
+risks:
+  - severity: low
+    description: Reconcile call might slow down /health response
+    mitigation: Set timeout on reconcile call, return partial health if it times out
+  - severity: low
+    description: Backward compatibility - existing god-cards might not expect new fields
+    mitigation: Add fields (don't remove), god-cards ignore unknown fields
+
+references:
+  - path: SERVICE.md
+    relevant_excerpt: |
+      GET /health   -> engine self-test (Qdrant + embedder + graph)
+      GET /healthz  -> liveness alias (always 200 if the process is up)
+  - path: test/e2e.mjs
+    relevant_excerpt: |
+      const health = await j('GET', '/health');
+      ok(health.status === 200 && health.body.ok === true, `health -> ok=${health.body.ok}`);
+
+metric:
+  applies: true
+  name: health_response_time
+  direction: down
+  unit: milliseconds
+  baseline: 2000-3000
+  target: <5000
+  window: p95 over 24h
+  source:
+    kind: events
+    ref: .pHive/metrics/events/health-latency.jsonl
+  verify_at: mc-06-consistency-e2e-test
+  owner: tester

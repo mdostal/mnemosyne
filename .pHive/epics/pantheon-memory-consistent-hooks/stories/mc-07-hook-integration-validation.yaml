@@ -1,0 +1,121 @@
+id: mc-07-hook-integration-validation
+epic: pantheon-memory-consistent-hooks
+title: Validate hook integration with live UserPromptSubmit/Stop events
+status: pending
+complexity: low
+methodology: tdd
+depends_on: [mc-04-hook-installer, mc-05-high-level-first-injection]
+
+description: |
+  Add test/hooks.mjs test that verifies hooks fire correctly on
+  UserPromptSubmit and Stop events, memory is injected, and learnings are
+  persisted. This proves the "auto-loading" requirement works end-to-end.
+
+acceptance_criteria:
+  - "Given hooks installed via bin/mnemosyne-install-hooks, when UserPromptSubmit event fires, then pre-recall hook injects memory bundle into context"
+  - "Given Stop event fires, when post-remember hook runs, then learning is persisted and recallable"
+  - "Given high-level memory exists, when pre-recall runs, then high-level hits appear in injected bundle"
+  - "Given hooks test passes, when it completes, then it cleans up its scratch notes"
+
+steps:
+  - id: test-spec
+    description: |
+      Write test/hooks.mjs (may already exist - extend it):
+      - Test: Simulate UserPromptSubmit, verify hook output includes additionalContext
+      - Test: Simulate Stop, verify post-remember persists to Qdrant
+      - Test: Round-trip with high-level layer hit, verify it appears first
+      Use live Qdrant corpus (like existing test/hooks.mjs pattern)
+    agent: tester
+    depends_on: []
+  - id: implement
+    description: |
+      Extend or create test/hooks.mjs:
+      1. Call pre-recall hook with stdin JSON (query + scope)
+      2. Parse hookSpecificOutput.additionalContext from stdout
+      3. Assert bundle includes expected memory hits
+      4. Call post-remember hook with learning text
+      5. Sleep briefly, recall the learning, verify it's indexed
+      6. Clean up scratch notes
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review hook test - does it prove auto-loading works?
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/.minerva/runs/d0aee757-47fc-4df8-98dc-c61b726bf01f/workspace
+  tech_stack:
+    runtime: Node.js
+    testing: Custom (no framework)
+  key_files:
+    - path: test/hooks.mjs
+      purpose: May already exist - validates hook contract over live corpus
+    - path: hooks/pre-recall.mjs
+      purpose: Pre-hook under test
+    - path: hooks/post-remember.mjs
+      purpose: Post-hook under test
+
+files_to_modify:
+  - file: test/hooks.mjs
+    change: Extend with high-level-first validation (if file exists) or create new
+
+code_examples:
+  - title: Hook invocation pattern
+    file: hooks/README.md
+    snippet: |
+      echo '{"query":"ATT retainer pricing","scope":"att","role":"developer"}' \
+        | node hooks/pre-recall.mjs
+
+      echo '{"text":"Decided X because Y","scope":"att","status":"reviewed"}' \
+        | node hooks/post-remember.mjs
+
+design_decisions:
+  - decision: Test against live Qdrant corpus (not mocked)
+    rationale: Hooks are integration points - unit tests can't catch real failures
+  - decision: Clean up scratch notes after test
+    rationale: Avoid polluting corpus with test noise
+  - decision: Test high-level-first explicitly
+    rationale: REQ 2 specifically mentions "inject the high level first"
+
+cross_cutting:
+  - concern: existing-infrastructure
+    action: "Test uses personal scope to avoid polluting production collections"
+  - concern: loud-failure
+    action: "Test verifies hook failures are logged, don't silently break agent loop"
+
+risks:
+  - severity: low
+    description: Test might fail if Mnemosyne service is down
+    mitigation: Test checks /healthz first, skips if service unreachable
+  - severity: low
+    description: Test cleanup might fail, leaving scratch notes
+    mitigation: Use e2e cleanup pattern (unlink note file)
+
+references:
+  - path: hooks/README.md
+    relevant_excerpt: |
+      Prove it:
+      node test/bundle.mjs
+      node test/hooks.mjs
+
+      test/hooks.mjs stores a unique token via post-remember, then recalls it
+      via pre-recall and asserts the token lands in the injected context.
+
+metric:
+  applies: true
+  name: hook_integration_test_pass_rate
+  direction: up
+  unit: ratio
+  baseline: 1.0
+  target: 1.0
+  window: per-commit
+  source:
+    kind: manual
+    ref: CI test output
+  verify_at: integrate
+  owner: tester
