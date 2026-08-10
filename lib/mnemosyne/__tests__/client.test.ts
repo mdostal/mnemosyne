@@ -5,8 +5,81 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../../../src/observability/logger.js';
 import type { Metrics } from '../../../src/observability/metrics.js';
 import { MnemosyneClient, type MnemosyneClientOptions } from '../client.js';
-import type { RecallResult } from '../interfaces.js';
-import type { LayerAdapter } from '../layers/LayerAdapter.js';
+import type { Hit, RecallResult } from '../interfaces.js';
+import type { LayerAdapter, RecallOptions } from '../layers/LayerAdapter.js';
+
+function stubVectorLayer(recall: (query: string, options?: RecallOptions) => Promise<RecallResult>): LayerAdapter {
+  return { layer: 'vector', recall };
+}
+
+function stubCodeGraphLayer(
+  recall: (query: string, options?: RecallOptions) => Promise<RecallResult>,
+): LayerAdapter {
+  return { layer: 'code-graph', recall };
+}
+
+function unavailableLayer(layer: 'code-graph' | 'vector'): LayerAdapter {
+  return {
+    layer,
+    recall: async (query, options) => ({
+      ok: false,
+      query,
+      scope: options?.scope ?? 'project',
+      intent: options?.intent ?? 'narrow',
+      error: {
+        layer,
+        message: `${layer} unavailable`,
+        code: 'not_installed',
+      },
+    }),
+  };
+}
+
+function emptyCodeGraphLayer(): LayerAdapter {
+  return stubCodeGraphLayer(async (query, options) => ({
+    ok: true,
+    query,
+    scope: options?.scope ?? 'project',
+    intent: options?.intent ?? 'narrow',
+    hits: [],
+    layers_queried: ['code-graph'],
+    layers_skipped: [],
+    escalated: false,
+    degraded: false,
+  }));
+}
+
+function vectorHit(overrides: Partial<Hit> = {}): Hit {
+  return {
+    content: 'a semantic match',
+    provenance: {
+      layer: 'vector',
+      source: 'qdrant:point:123',
+      chunk_span: { index: 0 },
+      index_timestamp: '2026-08-01T00:00:00Z',
+      content_hash: 'deadbeef',
+      embedder: 'nomic-embed-text',
+      retrieval_time: '2026-08-09T00:00:00Z',
+    },
+    ...overrides,
+  };
+}
+
+function codeGraphHit(overrides: Partial<Hit> = {}): Hit {
+  return {
+    content: 'src/consumer.ts --depends_on--> src/core.ts',
+    provenance: {
+      layer: 'code-graph',
+      source: 'src/consumer.ts',
+      chunk_span: null,
+      index_timestamp: '2026-08-09T00:00:00Z',
+      content_hash: null,
+      embedder: null,
+      retrieval_time: '2026-08-09T00:00:01Z',
+    },
+    ...overrides,
+  };
+}
 
 const tempRoots: string[] = [];
 const silentLogger: Logger = {
@@ -27,6 +100,8 @@ async function makeTempRoot(): Promise<string> {
 
 function makeClient(options: MnemosyneClientOptions = {}): MnemosyneClient {
   return new MnemosyneClient({
+    codeGraphLayer: unavailableLayer('code-graph'),
+    vectorLayer: unavailableLayer('vector'),
     logger: silentLogger,
     metrics: silentMetrics,
     ...options,
@@ -248,7 +323,7 @@ describe('MnemosyneClient', () => {
         query,
         scope: options?.scope ?? 'project',
         intent: options?.intent ?? 'narrow',
-        hits: [],
+        hits: [vectorHit()],
         layers_queried: ['vector'],
         layers_skipped: [],
         escalated: false,
@@ -256,7 +331,12 @@ describe('MnemosyneClient', () => {
       })),
     };
 
-    const client = makeClient({ layerAdapter: degradedLayer, logger, metrics });
+    const client = makeClient({
+      codeGraphLayer: emptyCodeGraphLayer(),
+      vectorLayer: degradedLayer,
+      logger,
+      metrics,
+    });
     await client.recall('target', 'project');
 
     expect(logger.warn).toHaveBeenCalledWith('layer_degraded', {
@@ -303,5 +383,186 @@ describe('MnemosyneClient', () => {
         ok: true,
       }),
     );
+  });
+
+  it('queries the code-graph layer before vector recall and returns impact hits', async () => {
+    const root = await makeTempRoot();
+    await writeFile(path.join(root, 'notes.md'), 'a target line\n', 'utf8');
+    let vectorCalls = 0;
+
+    const codeGraphLayer = stubCodeGraphLayer(async (query, options) => ({
+      ok: true,
+      query,
+      scope: options?.scope ?? 'project',
+      intent: options?.intent ?? 'narrow',
+      hits: [codeGraphHit()],
+      layers_queried: ['code-graph'],
+      layers_skipped: [],
+      escalated: false,
+      degraded: false,
+    }));
+    const vectorLayer = stubVectorLayer(async (query, options) => {
+      vectorCalls += 1;
+      return {
+        ok: true,
+        query,
+        scope: options?.scope ?? 'project',
+        intent: options?.intent ?? 'narrow',
+        hits: [vectorHit()],
+        layers_queried: ['vector'],
+        layers_skipped: [],
+        escalated: false,
+        degraded: false,
+      };
+    });
+
+    const client = makeClient({ rootDirectory: root, codeGraphLayer, vectorLayer });
+    const result = await client.recall('src/core.ts', 'project');
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.error.message);
+    }
+    expect(result.layers_queried).toEqual(['code-graph']);
+    expect(result.hits).toHaveLength(1);
+    expect(result.hits[0]?.provenance.layer).toBe('code-graph');
+    expect(vectorCalls).toBe(0);
+  });
+
+  it('queries the vector layer when code-graph succeeds with zero hits', async () => {
+    const root = await makeTempRoot();
+    await writeFile(path.join(root, 'notes.md'), 'a target line\n', 'utf8');
+
+    const vectorLayer = stubVectorLayer(async (query, options) => ({
+      ok: true,
+      query,
+      scope: options?.scope ?? 'project',
+      intent: options?.intent ?? 'narrow',
+      hits: [vectorHit()],
+      layers_queried: ['vector'],
+      layers_skipped: [],
+      escalated: false,
+      degraded: false,
+    }));
+
+    const client = makeClient({
+      rootDirectory: root,
+      codeGraphLayer: emptyCodeGraphLayer(),
+      vectorLayer,
+    });
+    const result = await client.recall('target', 'project');
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.error.message);
+    }
+    expect(result.layers_queried).toEqual(['code-graph', 'vector']);
+    expect(result.hits).toHaveLength(1);
+    expect(result.hits[0]?.provenance.layer).toBe('vector');
+    expect(result.escalated).toBe(false);
+    expect(result.degraded).toBe(false);
+  });
+
+  it('escalates to the file layer when the vector layer succeeds with zero hits', async () => {
+    const root = await makeTempRoot();
+    await writeFile(path.join(root, 'notes.md'), 'a target line\n', 'utf8');
+
+    const vectorLayer = stubVectorLayer(async (query, options) => ({
+      ok: true,
+      query,
+      scope: options?.scope ?? 'project',
+      intent: options?.intent ?? 'narrow',
+      hits: [],
+      layers_queried: ['vector'],
+      layers_skipped: [],
+      escalated: false,
+      degraded: false,
+    }));
+
+    const client = makeClient({
+      rootDirectory: root,
+      codeGraphLayer: emptyCodeGraphLayer(),
+      vectorLayer,
+    });
+    const result = await client.recall('target', 'project');
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.error.message);
+    }
+    expect(result.layers_queried).toEqual(['code-graph', 'vector', 'file']);
+    expect(result.escalated).toBe(true);
+    expect(result.degraded).toBe(false);
+    expect(result.hits).toHaveLength(1);
+    expect(result.hits[0]?.provenance.layer).toBe('file');
+  });
+
+  it('falls back to the file layer with loud degradation when the vector layer fails', async () => {
+    const root = await makeTempRoot();
+    await writeFile(path.join(root, 'notes.md'), 'a target line\n', 'utf8');
+
+    const vectorLayer = stubVectorLayer(async (query, options) => ({
+      ok: false,
+      query,
+      scope: options?.scope ?? 'project',
+      intent: options?.intent ?? 'narrow',
+      error: {
+        layer: 'vector',
+        message: 'swarm-memory is not installed or not on PATH',
+        code: 'not_installed',
+      },
+    }));
+
+    const client = makeClient({
+      rootDirectory: root,
+      codeGraphLayer: emptyCodeGraphLayer(),
+      vectorLayer,
+    });
+    const result = await client.recall('target', 'project');
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.error.message);
+    }
+    expect(result.layers_queried).toEqual(['code-graph', 'file']);
+    expect(result.layers_skipped).toEqual([
+      {
+        layer: 'vector',
+        reason: 'not_installed',
+        detail: 'swarm-memory is not installed or not on PATH',
+      },
+    ]);
+    expect(result.degraded).toBe(true);
+    expect(result.hits).toHaveLength(1);
+    expect(result.hits[0]?.provenance.layer).toBe('file');
+  });
+
+  it('returns RecallFailure when both vector and file layers fail', async () => {
+    const missingRoot = path.join(tmpdir(), `mnemosyne-client-missing-${process.pid}`);
+
+    const vectorLayer = stubVectorLayer(async (query, options) => ({
+      ok: false,
+      query,
+      scope: options?.scope ?? 'project',
+      intent: options?.intent ?? 'narrow',
+      error: {
+        layer: 'vector',
+        message: 'swarm-memory is not installed or not on PATH',
+        code: 'not_installed',
+      },
+    }));
+
+    const client = makeClient({
+      rootDirectory: missingRoot,
+      codeGraphLayer: emptyCodeGraphLayer(),
+      vectorLayer,
+    });
+    const result = await client.recall('needle', 'project');
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error('expected recall to fail');
+    }
+    expect(result.error.layer).toBe('file');
   });
 });

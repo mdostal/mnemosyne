@@ -7,7 +7,7 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { writeFile, mkdir } from "node:fs/promises";
+import { writeFile, mkdir, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -30,7 +30,7 @@ const CHILD_ENV = {
   PATH: `/opt/homebrew/bin:${homedir()}/.local/bin:${process.env.PATH || ""}`,
 };
 
-async function run(args, { timeout = CLI_TIMEOUT_MS } = {}) {
+export async function run(args, { timeout = CLI_TIMEOUT_MS } = {}) {
   const { stdout, stderr } = await execFileP(CLI, args, {
     timeout,
     maxBuffer: 32 * 1024 * 1024,
@@ -248,4 +248,76 @@ export async function grep(query, scope, opts = {}) {
   
   const total = scopesArr.reduce((n, s) => n + (s.hits ? s.hits.length : 0), 0);
   return { query: String(query), total_hits: total, scopes: scopesArr, match_mode: "keyword" };
+}
+
+// reindex — bulk (re)index files into Qdrant, for initial index builds or
+// recovering a stale index. Extensions + ignored directories to scan.
+const REINDEX_EXTENSIONS = new Set([".ts", ".md", ".yaml", ".yml"]);
+const REINDEX_IGNORED_DIRECTORIES = new Set([".git", "node_modules", "dist", "build", "coverage"]);
+
+async function* walkReindexable(directory) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  for (const entry of entries) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      if (!REINDEX_IGNORED_DIRECTORIES.has(entry.name)) {
+        yield* walkReindexable(entryPath);
+      }
+      continue;
+    }
+    if (entry.isFile() && REINDEX_EXTENSIONS.has(path.extname(entry.name))) {
+      yield entryPath;
+    }
+  }
+}
+
+// reindex(scope, {directory}) — scans `directory` (default cwd) for
+// .ts/.md/.yaml(.yml) files and indexes each one into the scope's Qdrant
+// collection, one file at a time (mirrors `remember`'s file-by-file
+// contract) so a single bad file does not abort the whole run. Indexing is
+// append-only and idempotent (swarm-memory upserts/dedupes by content), so a
+// reindex is always safe to retry in full after a partial failure — no
+// resume bookkeeping needed. Per-file failures are collected and returned,
+// never silently dropped.
+export async function reindex(scope, opts = {}) {
+  const m = await scopeMap();
+  const useScope = scope || m.default_scope;
+  const collection = m.scopes[useScope];
+  if (!collection) {
+    const err = new Error(
+      `unknown scope '${useScope}'. known: ${Object.keys(m.scopes).join(", ")}`
+    );
+    err.status = 400;
+    throw err;
+  }
+
+  const directory = opts.directory || process.cwd();
+  const files = [];
+  for await (const file of walkReindexable(directory)) {
+    files.push(file);
+  }
+
+  const errors = [];
+  let filesIndexed = 0;
+  for (const file of files) {
+    try {
+      await run(["index", collection, file]);
+      filesIndexed += 1;
+    } catch (e) {
+      const detail = `${e.stdout || ""}${e.stderr || ""}`.trim() || e.message;
+      console.error(
+        `[mnemosyne] ERROR reindex: swarm-memory index failed for scope=${useScope} file=${file}: ${detail}`
+      );
+      errors.push({ file, error: detail });
+    }
+  }
+
+  return {
+    scope: useScope,
+    collection,
+    directory,
+    files_scanned: files.length,
+    files_indexed: filesIndexed,
+    errors,
+  };
 }

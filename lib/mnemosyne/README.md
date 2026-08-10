@@ -26,12 +26,16 @@ if (written.ok) {
 
 ## Behavior
 
-- `recall(query, scope, intent?)` queries the file layer (the only layer
-  wired up as of this story; vector and code-graph layers are added by later
-  stories) and merges hits from the same source into chunk order. An empty
-  or whitespace-only `query` returns `RecallFailure` without touching any
-  layer. Layer failures (e.g. an unreachable root directory) are returned
-  as-is — never silently downgraded to an empty `hits: []`.
+- `recall(query, scope, intent?)` queries the vector layer (semantic recall
+  via the `swarm-memory` CLI) first, then merges hits from the same source
+  into chunk order. If the vector layer is unreachable, that failure is
+  recorded in `layers_skipped` and the file layer serves the whole request
+  (`degraded: true`). If the vector layer succeeds but finds nothing, the
+  file layer is queried too and the result is marked `escalated: true`.
+  Code-graph layer is added by a later story. An empty or whitespace-only
+  `query` returns `RecallFailure` without touching any layer. Layer failures
+  that leave no usable result (e.g. an unreachable file layer root directory)
+  are returned as-is — never silently downgraded to an empty `hits: []`.
 - `remember(content, scope, layer?)` is a stub for this story: it always
   succeeds and returns provenance for the resolved layer (`layer` if given,
   else `'file'`), but does not persist anything yet. The write path is a
@@ -40,3 +44,7 @@ if (written.ok) {
 See [`layers/README.md`](./layers/README.md) for the underlying
 `FileLayerAdapter` provenance contract, and [`interfaces.ts`](./interfaces.ts)
 for the full `RecallResult`/`RememberResult` type contracts.
+
+Non-TypeScript consumers (CLI tools, non-TS agents) that cannot import this
+module directly can reach it over HTTP instead — see
+[`../../docs/http-api.md`](../../docs/http-api.md) for the `server.ts` wrapper.
