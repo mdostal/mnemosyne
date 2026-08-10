@@ -6,14 +6,16 @@
 //
 //   GET  /                 -> service info + endpoint list
 //   GET  /health           -> engine self-test (Qdrant/embedder/graph)
+//   GET  /healthz          -> liveness alias (always 200 if the process is up)
 //   GET  /scopes           -> configured scopes + escalation ladders
 //   POST /recall  {query, scope?, hits?, escalate?, min_score?, radius?}
 //   POST /remember {text, scope?, tag?}
+//   POST /reindex {scope, directory?}
 //
 // PORT env (default 8477).
 
 import http from "node:http";
-import { health, scopes, recall, remember, grep } from "./engine.mjs";
+import { health, scopes, recall, remember, grep, reindex } from "./engine.mjs";
 
 const PORT = Number(process.env.PORT || 8477);
 const SERVICE = { god: "mnemosyne", role: "memory", version: "0.1.0" };
@@ -63,10 +65,12 @@ const server = http.createServer(async (req, res) => {
           "Pantheon memory god — thin service wrapping the swarm-memory engine over the Qdrant SSOT.",
         endpoints: {
           "GET /health": "engine self-test (Qdrant + embedder + graph)",
+          "GET /healthz": "liveness alias (always 200) for external checkers",
           "GET /scopes": "configured scopes + escalation ladders",
           "POST /recall": "{query, scope?, hits?, escalate?, min_score?, radius?} -> ranked hits w/ provenance",
           "POST /remember": "{text, scope?, tag?} -> write-back (index into scope collection)",
           "POST /grep": "{query, scope?, hits?, escalate?, radius?} -> KEYWORD hits (exact-string, no embedder)",
+          "POST /reindex": "{scope, directory?} -> bulk (re)index a directory; runs async, returns immediately",
         },
       });
     }
@@ -74,6 +78,14 @@ const server = http.createServer(async (req, res) => {
     if (route === "GET /health") {
       const h = await health();
       return send(res, h.ok ? 200 : 503, { ...SERVICE, ...h });
+    }
+
+    // Liveness alias: process-up check only, no CLI shell-out. Deliberately
+    // always 200 (never mirrors /health's 503) so external checkers (Salus,
+    // Argus) never 404 or page on a transient engine hiccup — deep engine
+    // health stays on /health.
+    if (route === "GET /healthz") {
+      return send(res, 200, { ...SERVICE, alive: true });
     }
 
     if (route === "GET /scopes") {
@@ -109,6 +121,30 @@ const server = http.createServer(async (req, res) => {
       const b = await readJson(req);
       const result = await remember(b.text, b.scope, { tag: b.tag });
       return send(res, 200, { ...result, took_ms: Date.now() - t0 });
+    }
+
+    if (route === "POST /reindex") {
+      const b = await readJson(req);
+      if (!b.scope || !String(b.scope).trim()) {
+        const err = new Error("scope is required");
+        err.status = 400;
+        throw err;
+      }
+      const scope = String(b.scope);
+      const directory = b.directory ? String(b.directory) : undefined;
+      // Fire-and-forget: reindex can take minutes, so the request returns
+      // immediately and the run continues (and logs its outcome) in the
+      // background — no progress tracking in slice-2 (MVP).
+      reindex(scope, { directory })
+        .then((result) => {
+          console.log(
+            `[mnemosyne] reindex complete scope=${scope} files_indexed=${result.files_indexed}/${result.files_scanned} errors=${result.errors.length}`
+          );
+        })
+        .catch((e) => {
+          console.error(`[mnemosyne] ERROR reindex: scope=${scope} failed: ${e.message}`);
+        });
+      return send(res, 202, { status: "started", scope, directory: directory || process.cwd() });
     }
 
     return send(res, 404, { error: "not found", route });

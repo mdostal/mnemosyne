@@ -1,0 +1,123 @@
+id: mc-06-consistency-e2e-test
+epic: pantheon-memory-consistent-hooks
+title: Extend E2E test with layer coherence and drift detection
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [mc-01-write-through-consistency, mc-02-reconciliation-helper, mc-03-health-drift-reporting]
+
+description: |
+  Extend test/e2e.mjs to verify layer consistency: that a remembered note
+  appears in both file system AND Qdrant with matching provenance, and that
+  /health reports drift_count accurately.
+
+  This is the "consistency test" from REQ 3 - proves write-then-recall is
+  coherent across layers and that stale/lying status is detected.
+
+acceptance_criteria:
+  - "Given POST /remember succeeds, when checking file system, then note file exists at returned path"
+  - "Given POST /recall after remember, when top hit provenance is checked, then provenance.full_path matches remembered file basename"
+  - "Given POST /remember succeeded, when GET /health is called, then drift_count === 0"
+  - "Given simulated Qdrant upsert failure, when GET /health is called, then drift_count > 0"
+
+steps:
+  - id: test-spec
+    description: |
+      Extend test/e2e.mjs with coherence checks:
+      - AC1: file exists at remember.body.file path (already done)
+      - AC2: recall provenance.full_path matches file basename
+      - AC3: health drift_count === 0 after successful remember
+      - AC4: Mock upsert failure scenario, verify drift detected
+      Reuse existing remember → recall round-trip setup
+    agent: tester
+    depends_on: []
+  - id: implement
+    description: |
+      Add coherence assertions to test/e2e.mjs:
+      1. After recall, extract topHit.provenance.full_path
+      2. Assert basename matches remember.body.file
+      3. Call GET /health, assert drift_count === 0
+      4. (Optional stretch) Simulate upsert failure, verify drift > 0
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review E2E test coverage - does it catch layer divergence?
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/.minerva/runs/d0aee757-47fc-4df8-98dc-c61b726bf01f/workspace
+  tech_stack:
+    runtime: Node.js
+    testing: Custom (no framework)
+  key_files:
+    - path: test/e2e.mjs
+      purpose: Round-trip probe - remember → recall → provenance verification
+    - path: src/engine.mjs
+      purpose: remember() and recall() implementations under test
+
+files_to_modify:
+  - file: test/e2e.mjs
+    change: Add coherence + drift_count assertions to existing flow
+
+code_examples:
+  - title: Existing E2E remember → recall flow
+    file: test/e2e.mjs
+    snippet: |
+      const remember = await j('POST', '/remember', {
+        text: markerText,
+        scope: 'personal',
+        tag: 'e2e-scratch',
+      });
+      const recall = await j('POST', '/recall', { query: markerText, scope: 'personal' });
+      const topHit = recall.body.scopes?.[0]?.hits?.[0];
+      ok(topHit?.text.includes(token), 'top hit is the remembered marker');
+
+design_decisions:
+  - decision: Use basename match (not full path match)
+    rationale: Qdrant provenance may have abbreviated path, basename is stable
+  - decision: Test drift_count === 0 (not just ok=true)
+    rationale: REQ 3 specifically requires drift detection test
+  - decision: Stretch goal for upsert failure simulation
+    rationale: Hard to mock in E2E without test doubles, defer to unit tests
+
+cross_cutting:
+  - concern: provenance-completeness
+    action: "Verify provenance.full_path field exists and is non-null"
+  - concern: loud-failure
+    action: "Test explicitly checks drift_count, doesn't assume ok=true means no drift"
+
+risks:
+  - severity: low
+    description: Provenance path format might change in swarm-memory updates
+    mitigation: Use flexible basename match, not exact string equality
+  - severity: low
+    description: Drift_count might lag (reconcile not run yet)
+    mitigation: E2E test gives 2s settle time after remember (existing pattern)
+
+references:
+  - path: test/e2e.mjs
+    relevant_excerpt: |
+      // AC3 — recall it back as the TOP hit, with provenance (location + score).
+      ok(
+        !!topHit?.provenance?.full_path && typeof topHit?.score === 'number',
+        `recall top hit carries provenance -> location=${topHit?.provenance?.full_path}`
+      );
+
+metric:
+  applies: true
+  name: e2e_test_pass_rate
+  direction: up
+  unit: ratio
+  baseline: 1.0
+  target: 1.0
+  window: per-commit
+  source:
+    kind: manual
+    ref: CI test output
+  verify_at: integrate
+  owner: tester

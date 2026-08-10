@@ -1,0 +1,141 @@
+id: mc-04-hook-installer
+epic: pantheon-memory-consistent-hooks
+title: Create hook installer script for auto-wiring pre/post hooks
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [mc-03-health-drift-reporting]
+
+description: |
+  Create bin/mnemosyne-install-hooks that merges hooks/settings.hooks.json into
+  ~/.claude/settings.json, converting relative paths to absolute and validating
+  Mnemosyne service reachability before enabling.
+
+  This achieves the "auto-loading" requirement - hooks fire automatically on
+  UserPromptSubmit and Stop events without manual settings.json editing.
+
+acceptance_criteria:
+  - "Given bin/mnemosyne-install-hooks, when run, then it merges hooks/settings.hooks.json into ~/.claude/settings.json"
+  - "Given relative paths in hooks/settings.hooks.json, when installer runs, then it converts them to absolute paths based on current repo location"
+  - "Given Mnemosyne service unreachable, when installer runs, then it warns and prompts to install anyway or abort"
+  - "Given hooks already installed, when installer runs again, then it updates paths (idempotent) and confirms 'hooks already installed, paths updated'"
+
+steps:
+  - id: test-spec
+    description: |
+      Write failing tests for hook installer:
+      - Test: merges hooks into settings.json without duplicates
+      - Test: converts relative → absolute paths
+      - Test: warns on unreachable service, prompts user
+      - Test: idempotent - re-running updates paths, doesn't duplicate
+      Use temp settings.json for testing
+    agent: tester
+    depends_on: []
+  - id: implement
+    description: |
+      Create bin/mnemosyne-install-hooks script:
+      1. Check Mnemosyne service reachable (curl GET /healthz)
+      2. Read hooks/settings.hooks.json
+      3. Convert relative paths to absolute (replace ./ with repo root)
+      4. Read ~/.claude/settings.json (create if absent)
+      5. Merge hooks (dedupe by hook name)
+      6. Write back to ~/.claude/settings.json
+      7. Confirm success or warn on service unreachable
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review installer for edge cases (missing settings.json, permission errors)
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/.minerva/runs/d0aee757-47fc-4df8-98dc-c61b726bf01f/workspace
+  tech_stack:
+    runtime: Bash or Node.js
+    editor: Claude Code (settings.json format)
+  key_files:
+    - path: hooks/settings.hooks.json
+      purpose: Hook wiring template with relative paths
+    - path: hooks/pre-recall.mjs
+      purpose: Pre-hook script to wire
+    - path: hooks/post-remember.mjs
+      purpose: Post-hook script to wire
+
+files_to_modify:
+  - file: bin/mnemosyne-install-hooks
+    change: Create new installer script
+  - file: README.md
+    change: Add installation section referencing bin/mnemosyne-install-hooks
+
+code_examples:
+  - title: Claude Code settings.json hook shape
+    file: hooks/settings.hooks.json
+    snippet: |
+      {
+        "tools": {
+          "bash": {
+            "hooks": {
+              "UserPromptSubmit": {
+                "command": "./hooks/pre-recall.mjs",
+                "stdin": "{\"prompt\": \"{{prompt}}\"}"
+              },
+              "Stop": {
+                "command": "./hooks/post-remember.mjs"
+              }
+            }
+          }
+        }
+      }
+
+design_decisions:
+  - decision: Validate service reachability before installing
+    rationale: Hooks fail silently if service is down - warn user upfront
+  - decision: Make installer idempotent
+    rationale: Users may re-run after updating repo, shouldn't duplicate hooks
+  - decision: Convert relative → absolute paths
+    rationale: Hooks run from arbitrary CWD, relative paths break
+
+cross_cutting:
+  - concern: documentation
+    action: "Update README.md with installation steps: 1) start service, 2) run installer"
+  - concern: loud-failure
+    action: "Warn prominently if service is unreachable - don't silently install broken hooks"
+
+risks:
+  - severity: medium
+    description: Installer might corrupt settings.json on merge failure
+    mitigation: Back up settings.json before writing, restore on error
+  - severity: low
+    description: Paths might break if repo is moved after install
+    mitigation: Document that re-running installer updates paths
+
+references:
+  - path: hooks/README.md
+    relevant_excerpt: |
+      Wire it into the agent loop:
+      Merge hooks/settings.hooks.json into a Claude Code settings.json (adjust the
+      absolute ROOT path).
+  - path: hooks/settings.hooks.json
+    relevant_excerpt: |
+      # Template with relative paths to be converted by installer
+
+parallel_allowed: true
+parallel_rationale: read-only
+
+metric:
+  applies: true
+  name: hook_installation_success_rate
+  direction: up
+  unit: ratio
+  baseline: 0
+  target: 0.95
+  window: per-user-install
+  source:
+    kind: manual
+    ref: User survey - did installer complete without errors?
+  verify_at: mc-07-hook-integration-validation
+  owner: developer

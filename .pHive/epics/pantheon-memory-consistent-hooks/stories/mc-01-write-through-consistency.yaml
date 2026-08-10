@@ -1,0 +1,127 @@
+id: mc-01-write-through-consistency
+epic: pantheon-memory-consistent-hooks
+title: Implement write-through consistency for POST /remember
+status: pending
+complexity: medium
+methodology: tdd
+
+description: |
+  Implement atomic write-through for POST /remember so that file write + Qdrant
+  upsert are verified as a transaction. Currently, /remember writes a note file
+  and calls swarm-memory, but doesn't verify the Qdrant upsert succeeded. This
+  creates a divergence risk where the file exists but the Qdrant point doesn't.
+
+  This story makes the write operation LOUD-FAIL on divergence: if the Qdrant
+  upsert fails, we log loudly, keep the file (recovery artifact), and return
+  an error to the caller.
+
+acceptance_criteria:
+  - "Given a POST /remember request, when the file write succeeds but Qdrant upsert fails, then the response returns 500 with error detail and keeps the file"
+  - "Given a POST /remember request, when both file write and Qdrant upsert succeed, then the response confirms chunks_upserted > 0"
+  - "Given a Qdrant upsert failure, when it occurs, then stderr logs the error with ERROR prefix"
+  - "Given a successful /remember, when checking the file system, then the note file exists at the returned path"
+
+steps:
+  - id: test-spec
+    description: |
+      Write failing tests for write-through transaction contract:
+      - Test: file write succeeds + upsert fails → 500 error + file kept
+      - Test: both succeed → 200 + chunks_upserted > 0
+      - Test: upsert failure logs to stderr with ERROR prefix
+      Use test doubles to simulate swarm-memory CLI failures.
+    agent: tester
+    depends_on: []
+  - id: implement
+    description: |
+      Modify src/engine.mjs remember() to verify swarm-memory exit code and
+      parse JSON output for chunks_upserted. On failure: log to stderr, keep
+      file, throw error. On success: return chunks_upserted count.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review implementation and tests for loud-failure contract compliance
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/.minerva/runs/d0aee757-47fc-4df8-98dc-c61b726bf01f/workspace
+  tech_stack:
+    runtime: Node.js
+    modules: ESM
+    testing: Custom (no framework)
+  key_files:
+    - path: src/engine.mjs
+      purpose: Contains remember() function that shells out to swarm-memory
+    - path: src/server.mjs
+      purpose: POST /remember route handler that calls engine.remember()
+    - path: test/e2e.mjs
+      purpose: End-to-end test that verifies remember → recall round-trip
+
+files_to_modify:
+  - file: src/engine.mjs
+    change: Add exit code check and chunks_upserted verification to remember()
+  - file: test/e2e.mjs
+    change: Extend with write-through failure scenario tests
+
+code_examples:
+  - title: Current remember() implementation pattern
+    file: src/engine.mjs
+    snippet: |
+      export async function remember(text, scope, opts = {}) {
+        const noteFile = await writeNoteFile(text, scope, opts.tag);
+        const { stdout } = await run(['remember', '--scope', scope, '--file', noteFile]);
+        const result = JSON.parse(stdout);
+        return { ...result, file: noteFile };
+      }
+
+design_decisions:
+  - decision: Keep file on Qdrant upsert failure
+    rationale: File is the recovery artifact for manual reconciliation
+  - decision: Return 500 (not 200 with warning) on upsert failure
+    rationale: Loud failure contract - caller must know write didn't fully succeed
+  - decision: Verify chunks_upserted > 0 instead of trusting exit code alone
+    rationale: Exit code 0 doesn't guarantee indexing happened
+
+cross_cutting:
+  - concern: loud-failure
+    action: "Emit ERROR log on upsert failure, return 500 to caller, include failure detail in response"
+  - concern: existing-infrastructure
+    action: "Preserve swarm-memory CLI contract - use existing --scope --file flags, don't modify internal state"
+
+risks:
+  - severity: medium
+    description: swarm-memory CLI might return exit 0 even on partial failure
+    mitigation: Parse JSON output for chunks_upserted field as definitive signal
+  - severity: low
+    description: File accumulation if upserts fail repeatedly
+    mitigation: Document that files are recovery artifacts, add reconcile helper in later story
+
+references:
+  - path: SERVICE.md
+    relevant_excerpt: |
+      Guardrails honored:
+      - Wraps the existing engine — no new store, no re-embed
+      - remember is additive (--no-prune, upsert of a brand-new note file only)
+      - Qdrant collections (SSOT) are never wiped
+  - path: hooks/README.md
+    relevant_excerpt: |
+      Resilience contract: this hook NEVER blocks the agent loop. Any failure →
+      exit 0 with no effect — a memory problem never breaks a ticket.
+
+metric:
+  applies: true
+  name: remember_write_through_failures
+  direction: down
+  unit: count
+  baseline: unknown
+  target: 0
+  window: per-deployment
+  source:
+    kind: events
+    ref: .pHive/metrics/events/write-through-failures.jsonl
+  verify_at: mc-06-consistency-e2e-test
+  owner: tester

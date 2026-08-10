@@ -1,0 +1,87 @@
+id: qdrant-placement-rules
+epic: ingest-a10ab2c1
+title: Qdrant Org-Tree Placement Rules
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [qdrant-inventory]
+
+description: |
+  Define how Qdrant collections map to org-tree nodes based on collection metadata.
+  Implements heuristic-based placement with operator override capability.
+
+acceptance_criteria:
+  - "Given collection metadata with 'project-' prefix, when placement engine runs, then collection maps to project-scoped org-tree node"
+  - "Given collection metadata with 'enterprise-' prefix, when placement engine runs, then collection maps to enterprise-scoped node"
+  - "Given collection metadata with no scope hint, when placement engine runs, then collection defaults to enterprise-scoped with override flag"
+  - "Given placement rules tested on sample data, when edge cases run (missing metadata, ambiguous names), then unit tests pass"
+
+steps:
+  - id: research
+    description: Review org-tree hierarchy structure and collection naming patterns from inventory
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests for placement engine:
+      - Project-scoped detection (collection name contains "project-")
+      - Enterprise-scoped detection (collection name contains "enterprise-")
+      - Default enterprise with override flag
+      - Edge cases (missing metadata, empty names)
+      Do NOT read implementation — tests define expected behavior.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      Implement placement_engine.py to make tests pass:
+      - Heuristic-based classification
+      - Org-tree path generation
+      - Override flag for ambiguous cases
+      Do not modify tests.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review placement logic and test coverage
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/ingest-a10ab2c1
+    agent: developer
+    depends_on: [review]
+
+context:
+  tech_stack:
+    languages: [python]
+  key_files:
+    - path: .pHive/epics/ingest-a10ab2c1/inventory/qdrant-collections.yaml
+      purpose: Collection metadata input for placement rules
+
+files_to_modify:
+  - file: mnemosyne/placement_engine.py
+    change: Implement Qdrant collection placement logic (new file)
+  - file: mnemosyne/tests/test_placement.py
+    change: Unit tests for placement rules (new file)
+  - file: .pHive/epics/ingest-a10ab2c1/docs/placement-rules.md
+    change: Document placement heuristics and override process (new file)
+
+design_decisions:
+  - decision: Heuristic-based placement with operator override
+    rationale: Collection names may not follow consistent conventions; allow manual tagging for ambiguous cases
+
+risks:
+  - severity: low
+    description: Heuristics misclassify collections
+    mitigation: Dry-run mode shows placement before committing; operator can review + override
+
+metric:
+  applies: true
+  name: placement_classification_accuracy
+  direction: up
+  unit: percentage
+  baseline: 0.0
+  target: 0.95
+  window: story-integrate
+  source:
+    kind: manual
+    ref: manual review of placement decisions on inventory data
+  verify_at: integrate
+  owner: reviewer
