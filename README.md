@@ -1,36 +1,118 @@
-# mnemosyne
+# Mnemosyne
 
-**Mnemosyne** — the Pantheon's **Memory god** (Greek titaness of memory).
+**The Pantheon's Memory god** — one unified layer that *writes and recalls* across every memory scope the swarm has, so **"memory over find"** becomes the default retrieval path for every agent instead of `grep`/`find`.
 
-The single, unified layer that **writes and recalls across every memory scope the swarm has** —
-so *memory over find* is the default retrieval path, not grep. It **unifies memory infrastructure
-we already run** (remote Qdrant Cloud vector memory + [`swarm-memory`](https://github.com/mdostal/swarm-memory),
-plus the hive's Obsidian knowledge vault) behind one contract — it does not reinvent them.
+Named for the Greek titaness of memory.
+
+## What & why
+
+The swarm already runs real memory infrastructure — remote **Qdrant Cloud** vector memory (via [`swarm-memory`](https://github.com/mdostal/swarm-memory)), a code/docs impact graph, and the hive's **Obsidian** knowledge vault (Consus's knowledge home). The problem is that these are **separate, manually wired, and un-unified**: no single service owns the layer stack, no one `recall`/`remember` API spans them, and so agents fall back to `find`/`grep` because the memory path isn't the obvious one.
+
+Mnemosyne exists as its own god so that **one service owns the memory contract** for the whole Pantheon. It **unifies infrastructure we already run** behind a single, escalating, provenance-tracked API — it does **not** reinvent the vector DB, the embedder, or the vault. Every other god calls Mnemosyne to remember and recall; Mnemosyne routes writes to the right layer and walks the stack on reads.
 
 ## The layer stack
 
+Memory is organized as an ordered, escalating stack — meta (broad) to file (raw). A recall walks the layers and merges/ranks hits **with provenance**; a write routes to the correct layer(s) and keeps indexes coherent.
+
 ```
-meta (hive Obsidian vault — Consus knowledge home / top-level)
-  → enterprise (org-wide knowledge + standards)
-    → project (per-project working memory)
-      → code-graph (typed impact graph: depends_on / cites / implements)
-        → vector (Qdrant Cloud — default backend, semantic recall)
-          → file (raw grep — loud-failure floor)
+meta        (hive Obsidian vault — Consus knowledge home / canonical truth)
+  → enterprise   (org-wide knowledge + standards, promoted from approved CBAs)
+    → project    (per-project working memory, decisions, context)
+      → code-graph   (typed impact graph: depends_on / cites / implements)
+        → vector     (Qdrant Cloud — default backend, semantic recall)
+          → file     (raw grep — loud-failure floor)
 ```
 
-A recall walks the stack (narrow→broad, escalating) and returns ranked hits **with provenance**.
-A write routes to the right layer(s) and keeps the indexes coherent. Backends are **pluggable**
-(Qdrant default + swappable; Obsidian default meta store + swappable).
+Backends are **pluggable**: Qdrant is the *default* vector backend but the slot is swappable (any OpenAI-compatible embeddings / alternate vector store); Obsidian is the default meta store but the meta layer is a contract, not a hard dependency. Slot config is owned by **Vesta**.
+
+## Architecture
+
+```mermaid
+flowchart TB
+  subgraph pantheon["Pantheon gods (callers)"]
+    minerva["Minerva<br/>planner"]
+    argus["Argus<br/>metrics"]
+    swarm["swarm agents"]
+  end
+
+  subgraph mnemosyne["Mnemosyne — memory god"]
+    api["recall(query, scope, intent)<br/>remember(content, scope, layer?)"]
+    router["layer router + escalation<br/>(narrow↔broad, merge + rank)"]
+    prov["provenance stamping<br/>(7 fields per hit)"]
+    idx["continuous indexing<br/>(Multica-native schedule)"]
+    api --> router --> prov
+  end
+
+  subgraph layers["Layer stack (pluggable slots)"]
+    meta["meta — Obsidian vault"]
+    ent["enterprise"]
+    proj["project"]
+    cg["code-graph"]
+    vec["vector — Qdrant Cloud"]
+    file["file — grep (loud floor)"]
+  end
+
+  minerva --> api
+  argus --> api
+  swarm --> api
+
+  router --> meta
+  router --> ent
+  router --> proj
+  router --> cg
+  router --> vec
+  router --> file
+
+  idx -.keeps fresh.-> vec
+  idx -.keeps fresh.-> cg
+  idx -.keeps fresh.-> meta
+
+  vec -->|wraps| sm[("swarm-memory<br/>+ Qdrant Cloud")]
+  cg -->|wraps| sm
+
+  api -.decision + metric record.-> argus
+
+  consus["Consus / Janus<br/>(read model: browse layers,<br/>trace provenance, spot stale scopes)"] --> api
+```
+
+Mnemosyne fills the **memory capability slot** in Pantheon: one god per capability, ABI-swappable, owns its own memory, runs standalone, standard interface. It is a **library/service** other gods call — it does not plan, orchestrate, or route work. Every recall/write logs a decision + metric record (to Argus/Metis) like every other god.
+
+## How it fits
+
+- **Host / framework:** [pantheon-v2](https://github.com/mdostal/pantheon-v2) — the core host that assembles gods behind shared contracts.
+- **Substrate:** work is planned and executed on [Multica](https://github.com/firefly-events/multica) with the [plugin-hive](https://firefly-events.github.io/plugin-hive/) SDLC (kickoff → plan → execute → review → test → ship). Continuous indexing schedules are **Multica-native** (no localized cron).
+- **Sibling gods it talks to:** **Minerva** (planner) and swarm agents are the primary recall callers; **Consus** / **Janus** provide the human read model (browse layers, trace a recall's provenance, spot stale scopes); **Vesta** owns which backend fills each layer slot; **Argus** / **Metis** receive the decision + metric records.
+- **Builds on:** [`swarm-memory`](https://github.com/mdostal/swarm-memory) (Qdrant-backed semantic memory + code/docs impact graph) — adopted/wrapped as the vector and code-graph layers, **not** rewritten.
+
+## Quickstart
+
+> **Heads up:** Mnemosyne is a **scaffold** — the planning artifacts exist, the runnable service does not yet. There is no source code, no server, and no `recall`/`remember` binary to invoke today. The commands below are the workflow that will produce it. See **[VISION.md](./VISION.md)** for exactly what runs now vs. next.
+
+Clone and inspect the plan:
+
+```bash
+gh repo clone mdostal/mnemosyne
+cd mnemosyne
+
+# The design brief (the source of truth for the plan)
+$EDITOR idea-brief.md
+
+# The Minerva-planned epic + stories
+ls .pHive/epics/mnemosyne-foundation/stories/
+cat .pHive/epics/mnemosyne-foundation/epic.yaml
+```
+
+Execution runs through plugin-hive, headless, per the Pantheon SDLC:
+
+```bash
+# planning is already committed on main (Minerva)
+/hive:execute mnemosyne-foundation     # build the planned stories
+/hive:review                           # agent-verified review
+/hive:test                             # test swarm
+```
+
+The underlying vector memory Mnemosyne will wrap is **already live** — it runs today through `swarm-memory` against remote Qdrant Cloud (credential at `~/.config/swarm-memory/qdrant.key`; **do not wipe** existing collections or the Obsidian vault — Mnemosyne is additive).
 
 ## Status
 
-**Concept — staged for Minerva planning.** The design lives in **[`idea-brief.md`](./idea-brief.md)**.
-Minerva turns that brief into an epic + stories (`kickoff` + `plan`); execution follows via Auriga
-+ the swarm. Do **not** hand-file tickets from the brief — Minerva plans it.
-
-## Read next
-
-- **[`idea-brief.md`](./idea-brief.md)** — the full brief: the layer stack, the unified recall/write
-  API, memory-over-find, continuous indexing, viewable in Consus/Janus, pluggable backends, and how
-  it builds on the existing Qdrant + Obsidian setup.
-- `hive.config.yaml` — Hive workflow config for headless planning.
+**Scaffold** — Minerva-planned epic (`mnemosyne-foundation`) with 7 pending stories committed to `main`; runtime is TBD (TypeScript or Python) and no code has been written yet. The infrastructure it unifies (Qdrant Cloud + `swarm-memory` + the Obsidian vault) is live and separate. Trajectory, rungs, and good first contributions are in **[VISION.md](./VISION.md)**.
