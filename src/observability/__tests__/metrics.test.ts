@@ -2,7 +2,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { queryRunnerMetrics, recordRunnerMetric } from '../metrics.js';
+import {
+  getMetricSamples,
+  metrics,
+  queryRunnerMetrics,
+  recordRunnerMetric,
+  resetMetricSamples,
+} from '../metrics.js';
 
 describe('metrics', () => {
   let dir: string;
@@ -15,6 +21,7 @@ describe('metrics', () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+    resetMetricSamples();
   });
 
   it('Given no events file exists, when metrics are queried, then an empty summary is returned', async () => {
@@ -64,5 +71,27 @@ describe('metrics', () => {
       fallbackRate: 0.5,
       runnerDistribution: { claude: 1, codex: 1 },
     });
+  });
+
+  it('Given recall instrumentation records samples, when metrics are read, then histogram and counter samples are available', () => {
+    metrics.histogram('recall_duration_ms', 12, { scope: 'project', ok: true });
+    metrics.counter('layer_degraded_total', 1, { layer: 'vector', scope: 'project' });
+
+    expect(getMetricSamples()).toEqual([
+      expect.objectContaining({
+        type: 'histogram',
+        name: 'recall_duration_ms',
+        value: 12,
+        fields: { scope: 'project', ok: true },
+        timestamp: expect.any(String),
+      }),
+      expect.objectContaining({
+        type: 'counter',
+        name: 'layer_degraded_total',
+        value: 1,
+        fields: { layer: 'vector', scope: 'project' },
+        timestamp: expect.any(String),
+      }),
+    ]);
   });
 });
