@@ -86,32 +86,16 @@ Mnemosyne fills the **memory capability slot** in Pantheon: one god per capabili
 
 ## Quickstart
 
-> **Heads up:** Mnemosyne is a **scaffold** — the planning artifacts exist, the runnable service does not yet. There is no source code, no server, and no `recall`/`remember` binary to invoke today. The commands below are the workflow that will produce it. See **[VISION.md](./VISION.md)** for exactly what runs now vs. next.
-
-Clone and inspect the plan:
-
 ```bash
 gh repo clone mdostal/mnemosyne
 cd mnemosyne
-
-# The design brief (the source of truth for the plan)
-$EDITOR idea-brief.md
-
-# The Minerva-planned epic + stories
-ls .pHive/epics/mnemosyne-foundation/stories/
-cat .pHive/epics/mnemosyne-foundation/epic.yaml
+npm install
+npm test
 ```
 
-Execution runs through plugin-hive, headless, per the Pantheon SDLC:
+See `npm run` in `package.json` for the service entrypoint, and [`hooks/README.md`](./hooks/README.md) to wire the pre-recall/post-remember hooks into an agent runner.
 
-```bash
-# planning is already committed on main (Minerva)
-/hive:execute mnemosyne-foundation     # build the planned stories
-/hive:review                           # agent-verified review
-/hive:test                             # test swarm
-```
-
-The underlying vector memory Mnemosyne will wrap is **already live** — it runs today through `swarm-memory` against remote Qdrant Cloud (credential at `~/.config/swarm-memory/qdrant.key`; **do not wipe** existing collections or the Obsidian vault — Mnemosyne is additive).
+The underlying vector memory Mnemosyne wraps is **already live** — it runs today through `swarm-memory` against remote Qdrant Cloud (credential at `~/.config/swarm-memory/qdrant.key`; **do not wipe** existing collections or the Obsidian vault — Mnemosyne is additive).
 
 ## Status
 
