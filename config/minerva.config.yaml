@@ -1,0 +1,14 @@
+# Default runner preferences. Put real API keys in environment variables or an
+# ignored local config selected with MINERVA_CONFIG_PATH.
+runners:
+  fallback:
+    enabled: true
+  claude:
+    api_key_env: ANTHROPIC_API_KEY
+    priority: 10
+  codex:
+    api_key_env: OPENAI_API_KEY
+    priority: 20
+  gemini:
+    api_key_env: GOOGLE_API_KEY
+    priority: 30
