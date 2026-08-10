@@ -86,7 +86,7 @@ export async function recall(query, scope, opts = {}) {
   if (opts.escalate) args.push("--escalate");
   if (opts.minScore != null) args.push("--min-score", String(opts.minScore));
   if (opts.radius != null) args.push("--radius", String(opts.radius));
-  
+
   let vectorResult;
   let vectorError = null;
   try {
@@ -109,6 +109,8 @@ export async function recall(query, scope, opts = {}) {
     console.error(`[mnemosyne] ERROR recall: vector layer unavailable: ${e.message}`);
     vectorResult = { total_hits: 0, scopes: [] };
   }
+
+  let recallResult = vectorResult;
 
   // Escalation: vector -> file fallback on zero hits or error
   if (vectorResult.total_hits === 0 || vectorError) {
@@ -135,15 +137,24 @@ export async function recall(query, scope, opts = {}) {
           }
         }
       }
-      return fileResult;
+      recallResult = fileResult;
     } catch (fallbackErr) {
       console.error(`[mnemosyne] ERROR recall: file layer fallback also failed: ${fallbackErr.message}`);
       if (vectorError) throw vectorError; // throw original if both failed
     }
   }
 
-  vectorResult.layers_attempted = ["vector"];
-  return vectorResult;
+  recallResult.layers_attempted = recallResult.layers_attempted || ["vector"];
+
+  // Merge the code-graph layer after the vector/file recall path has selected
+  // its best available result.
+  const { CodeGraphLayer } = await import("./layers/code-graph.mjs");
+  const { mergeLayerResults } = await import("./merge.mjs");
+  const graphLayer = new CodeGraphLayer();
+  const graphHits = await graphLayer.recall(String(query));
+  const merged = mergeLayerResults(recallResult, graphHits);
+  merged.layers_attempted = [...recallResult.layers_attempted, "code-graph"];
+  return merged;
 }
 
 // remember(text, scope, {tag}) — write-back. Persists the note to a file, then

@@ -119,6 +119,12 @@ const server = http.createServer(async (req, res) => {
 
     if (route === "POST /remember") {
       const b = await readJson(req);
+      if (b.layer === "code-graph") {
+        const { CodeGraphLayer } = await import("./layers/code-graph.mjs");
+        const graph = new CodeGraphLayer();
+        const result = await graph.remember(b.src, b.predicate, b.dst);
+        return send(res, 200, { ...result, took_ms: Date.now() - t0 });
+      }
       const result = await remember(b.text, b.scope, { tag: b.tag });
       return send(res, 200, { ...result, took_ms: Date.now() - t0 });
     }
