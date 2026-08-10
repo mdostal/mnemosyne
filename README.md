@@ -86,33 +86,50 @@ Mnemosyne fills the **memory capability slot** in Pantheon: one god per capabili
 
 ## Quickstart
 
-> **Heads up:** Mnemosyne is a **scaffold** — the planning artifacts exist, the runnable service does not yet. There is no source code, no server, and no `recall`/`remember` binary to invoke today. The commands below are the workflow that will produce it. See **[VISION.md](./VISION.md)** for exactly what runs now vs. next.
-
-Clone and inspect the plan:
-
 ```bash
 gh repo clone mdostal/mnemosyne
 cd mnemosyne
-
-# The design brief (the source of truth for the plan)
-$EDITOR idea-brief.md
-
-# The Minerva-planned epic + stories
-ls .pHive/epics/mnemosyne-foundation/stories/
-cat .pHive/epics/mnemosyne-foundation/epic.yaml
+npm install
+npm test
 ```
 
-Execution runs through plugin-hive, headless, per the Pantheon SDLC:
+See `npm run` in `package.json` for the service entrypoint, and [`hooks/README.md`](./hooks/README.md) to wire the pre-recall/post-remember hooks into an agent runner.
 
-```bash
-# planning is already committed on main (Minerva)
-/hive:execute mnemosyne-foundation     # build the planned stories
-/hive:review                           # agent-verified review
-/hive:test                             # test swarm
-```
-
-The underlying vector memory Mnemosyne will wrap is **already live** — it runs today through `swarm-memory` against remote Qdrant Cloud (credential at `~/.config/swarm-memory/qdrant.key`; **do not wipe** existing collections or the Obsidian vault — Mnemosyne is additive).
+The underlying vector memory Mnemosyne wraps is **already live** — it runs today through `swarm-memory` against remote Qdrant Cloud (credential at `~/.config/swarm-memory/qdrant.key`; **do not wipe** existing collections or the Obsidian vault — Mnemosyne is additive).
 
 ## Status
 
-**Scaffold** — Minerva-planned epic (`mnemosyne-foundation`) with 7 pending stories committed to `main`; runtime is TBD (TypeScript or Python) and no code has been written yet. The infrastructure it unifies (Qdrant Cloud + `swarm-memory` + the Obsidian vault) is live and separate. Trajectory, rungs, and good first contributions are in **[VISION.md](./VISION.md)**.
+**Phase 1 v1 is implemented.** The service wraps the existing `swarm-memory`
+engine, and `hooks/` contains the runner-agnostic pre-recall/post-remember loop:
+small per-repo + shared memory bundles before a ticket, status-aware write-back
+after a run, and a cache-safe prompt layout that keeps the stable prefix
+separate from the variable ticket memory delta.
+
+## Install hooks
+
+`bin/mnemosyne-install-hooks` auto-wires `hooks/settings.hooks.json` into a
+Claude Code `settings.json` — see [`hooks/README.md`](./hooks/README.md#install-the-hooks)
+for usage.
+
+## Tests
+
+Run the Minerva-style end-to-end integration test with:
+
+```bash
+npm run test:e2e
+```
+
+The test imports `MnemosyneClient`, recalls `authentication flow` from the
+project scope, verifies vector provenance, forces vector degradation to confirm
+file-layer fallback, starts the client HTTP API, and checks that `POST /recall`
+matches the library result. It uses a temporary fake `swarm-memory` executable,
+so it does not require live Qdrant access.
+
+## Read next
+
+- **[`idea-brief.md`](./idea-brief.md)** — the full brief: the layer stack, the unified recall/write
+  API, memory-over-find, continuous indexing, viewable in Consus/Janus, pluggable backends, and how
+  it builds on the existing Qdrant + Obsidian setup.
+- **[`hooks/README.md`](./hooks/README.md)** — the v1 hook contract, prompt-cache layout, runner-neutral
+  bundle shape, env knobs, and proof commands.
+- `hive.config.yaml` — Hive workflow config for headless planning.
