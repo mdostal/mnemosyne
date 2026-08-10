@@ -1,5 +1,12 @@
 // test/vector.mjs - integration tests for vector layer fallback and provenance
-import { recall, grep } from "../src/engine.mjs";
+import { fileURLToPath } from "node:url";
+
+const FIXTURE = fileURLToPath(new URL("./fixtures/fake-swarm-memory", import.meta.url));
+process.env.SWARM_MEMORY_BIN = FIXTURE;
+process.env.FAKE_SWARM_MODE = "success";
+process.env.MNEMO_TEST_NODE = process.execPath;
+
+const { recall, grep } = await import("../src/engine.mjs?vector-test");
 
 async function runTests() {
   console.log("Running vector layer tests...");

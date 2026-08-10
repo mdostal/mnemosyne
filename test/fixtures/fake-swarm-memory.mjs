@@ -12,7 +12,7 @@
 // Independent of FAKE_SWARM_MODE, `index` fails for any path containing the
 // literal substring "REINDEX_FAIL" — lets reindex.mjs simulate a single bad
 // file mid-run without needing a whole extra mode.
-const [, , cmd, , filePath] = process.argv;
+const [, , cmd, ...args] = process.argv;
 const mode = process.env.FAKE_SWARM_MODE || "success";
 
 if (cmd === "config") {
@@ -28,7 +28,7 @@ if (cmd === "config") {
 }
 
 if (cmd === "index") {
-  if (mode === "hard-fail" || (filePath && filePath.includes("REINDEX_FAIL"))) {
+  if (mode === "hard-fail" || args.some((arg) => arg.includes("REINDEX_FAIL"))) {
     process.stderr.write("fake swarm-memory: qdrant upsert connection refused\n");
     process.exit(1);
   }
@@ -37,6 +37,59 @@ if (cmd === "index") {
     process.exit(0);
   }
   process.stdout.write("indexed 1 file(s), upserted 3 chunks into test_collection\n");
+  process.exit(0);
+}
+
+if (cmd === "recall") {
+  const query = args[0] || "";
+  const minScoreFlag = args.indexOf("--min-score");
+  const minScore = minScoreFlag === -1 ? 0 : Number(args[minScoreFlag + 1] || 0);
+  const isEmpty = query.includes("nonexistent_guid_fallback_") || minScore >= 0.999;
+
+  process.stdout.write(
+    JSON.stringify({
+      query,
+      total_hits: isEmpty ? 0 : 1,
+      scopes: [
+        {
+          scope: "personal",
+          collection: "test_collection",
+          hits: isEmpty
+            ? []
+            : [
+                {
+                  text: "test semantic query fixture hit",
+                  score: 0.91,
+                  source: "fake-swarm-memory",
+                },
+              ],
+        },
+      ],
+    })
+  );
+  process.exit(0);
+}
+
+if (cmd === "grep") {
+  const query = args[0] || "";
+  const isEmpty = query.includes("nonexistent_guid_fallback_");
+
+  process.stdout.write(
+    JSON.stringify([
+      {
+        scope: "personal",
+        collection: "test_collection",
+        hits: isEmpty
+          ? []
+          : [
+              {
+                text: "test keyword fixture hit",
+                source: "fake-swarm-memory",
+              },
+            ],
+      },
+    ])
+  );
   process.exit(0);
 }
 
