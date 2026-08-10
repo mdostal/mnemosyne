@@ -1,0 +1,228 @@
+#!/usr/bin/env node
+// mnemosyne-install-hooks — auto-wire hooks/settings.hooks.json into a Claude
+// Code settings.json, so pre-recall/post-remember fire on UserPromptSubmit /
+// Stop / SubagentStop without hand-editing settings.json.
+//
+// Usage:
+//   bin/mnemosyne-install-hooks [--yes] [--settings <path>] [--service-url <url>]
+//
+//   --yes            skip the reachability prompt and install even if the
+//                     Mnemosyne service looks unreachable
+//   --settings PATH  settings.json to merge into (default ~/.claude/settings.json)
+//   --service-url URL  Mnemosyne base URL to probe (default http://127.0.0.1:8477)
+//
+// Idempotent: re-running recomputes each hook's command from THIS repo's
+// current location and updates it in place instead of duplicating entries —
+// safe to re-run after moving/re-cloning the repo.
+
+import { readFileSync, writeFileSync, existsSync, copyFileSync, renameSync, mkdirSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
+import readline from "node:readline";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+export const REPO_ROOT = path.resolve(__dirname, "..");
+export const TEMPLATE_PATH = path.join(REPO_ROOT, "hooks", "settings.hooks.json");
+export const DEFAULT_SETTINGS_PATH = path.join(homedir(), ".claude", "settings.json");
+export const DEFAULT_SERVICE_URL = process.env.MNEMOSYNE_URL || "http://127.0.0.1:8477";
+
+// --- path rewriting ----------------------------------------------------------
+// Rewrites any "hooks/<file>.mjs" fragment inside a command string — whether
+// relative ("./hooks/x.mjs") or an absolute path baked in from a different
+// machine/checkout — to point at repoRoot's hooks/ dir.
+export function absolutizeCommand(command, repoRoot) {
+  return command.replace(/\S*\bhooks\/[\w.-]+\.mjs\b/g, (match) => {
+    const rel = match.slice(match.indexOf("hooks/"));
+    return path.join(repoRoot, rel);
+  });
+}
+
+export function absolutizeTemplate(template, repoRoot) {
+  const out = JSON.parse(JSON.stringify(template));
+  for (const groups of Object.values(out.hooks || {})) {
+    for (const group of groups) {
+      for (const hook of group.hooks || []) {
+        if (typeof hook.command === "string") {
+          hook.command = absolutizeCommand(hook.command, repoRoot);
+        }
+      }
+    }
+  }
+  return out;
+}
+
+// --- merge ---------------------------------------------------------------
+// Dedupe key is the hook script's basename within its event, so re-running
+// after the repo moves updates the existing entry's command in place rather
+// than appending a duplicate. Entries for unrelated tools/scripts are left
+// untouched.
+function scriptName(command) {
+  const m = /hooks\/([\w.-]+\.mjs)\b/.exec(command || "");
+  return m ? m[1] : command;
+}
+
+export function mergeHooks(existingHooksBlock, template) {
+  const merged = existingHooksBlock ? JSON.parse(JSON.stringify(existingHooksBlock)) : {};
+  const added = [];
+  const updated = [];
+
+  for (const [event, groups] of Object.entries(template.hooks || {})) {
+    merged[event] = merged[event] || [];
+    for (const group of groups) {
+      for (const hook of group.hooks || []) {
+        const name = scriptName(hook.command);
+        let found = null;
+        for (const existingGroup of merged[event]) {
+          for (const existingHook of existingGroup.hooks || []) {
+            if (scriptName(existingHook.command) === name) {
+              found = existingHook;
+              break;
+            }
+          }
+          if (found) break;
+        }
+        if (found) {
+          if (found.command !== hook.command) {
+            found.command = hook.command;
+            updated.push(`${event}:${name}`);
+          }
+        } else {
+          merged[event].push({ hooks: [{ ...hook }] });
+          added.push(`${event}:${name}`);
+        }
+      }
+    }
+  }
+  return { merged, added, updated };
+}
+
+// --- reachability ----------------------------------------------------------
+// Probes /healthz (liveness alias — always 200 if the process is up, no
+// engine self-test) rather than /health, so a degraded engine (503) doesn't
+// get mistaken for "service unreachable".
+export async function checkServiceReachable(serviceUrl, timeoutMs = 3000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${serviceUrl}/healthz`, { signal: ctrl.signal });
+    return res.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+function promptYesNo(question) {
+  return new Promise((resolve) => {
+    if (!process.stdin.isTTY) return resolve(false);
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(/^y(es)?$/i.test(answer.trim()));
+    });
+  });
+}
+
+// --- settings.json I/O -------------------------------------------------------
+export function readSettings(settingsPath) {
+  if (!existsSync(settingsPath)) return {};
+  const raw = readFileSync(settingsPath, "utf8").trim();
+  if (!raw) return {};
+  return JSON.parse(raw);
+}
+
+// Backs up the previous settings.json (settings.json.bak), then writes via a
+// temp-file + rename so a failed/partial write never corrupts the original.
+export function writeSettingsAtomic(settingsPath, settings) {
+  mkdirSync(path.dirname(settingsPath), { recursive: true });
+  if (existsSync(settingsPath)) {
+    copyFileSync(settingsPath, `${settingsPath}.bak`);
+  }
+  const tmpPath = `${settingsPath}.tmp-${process.pid}`;
+  writeFileSync(tmpPath, JSON.stringify(settings, null, 2) + "\n", "utf8");
+  renameSync(tmpPath, settingsPath);
+}
+
+// --- core run --------------------------------------------------------------
+export async function run({ settingsPath, serviceUrl, yes, log = console.log, warn = console.error } = {}) {
+  settingsPath = settingsPath || DEFAULT_SETTINGS_PATH;
+  serviceUrl = serviceUrl || DEFAULT_SERVICE_URL;
+
+  const reachable = await checkServiceReachable(serviceUrl);
+  if (!reachable) {
+    warn(
+      `⚠ Mnemosyne service unreachable at ${serviceUrl} — hooks will install but will silently no-op until it's running.`
+    );
+    if (!yes) {
+      const proceed = await promptYesNo("Install hooks anyway? [y/N] ");
+      if (!proceed) {
+        log("Aborted: Mnemosyne service unreachable and installation was not confirmed.");
+        return { installed: false, reason: "service_unreachable" };
+      }
+    }
+  }
+
+  let templateRaw;
+  try {
+    templateRaw = readFileSync(TEMPLATE_PATH, "utf8");
+  } catch (e) {
+    throw new Error(`cannot read hook template at ${TEMPLATE_PATH}: ${e.message}`);
+  }
+  const template = absolutizeTemplate(JSON.parse(templateRaw), REPO_ROOT);
+
+  let settings;
+  try {
+    settings = readSettings(settingsPath);
+  } catch (e) {
+    throw new Error(`${settingsPath} contains invalid JSON — refusing to overwrite it: ${e.message}`);
+  }
+
+  const { merged, added, updated } = mergeHooks(settings.hooks, template);
+  settings.hooks = merged;
+
+  try {
+    writeSettingsAtomic(settingsPath, settings);
+  } catch (e) {
+    throw new Error(`failed to write ${settingsPath} (previous version preserved at ${settingsPath}.bak): ${e.message}`);
+  }
+
+  if (added.length === 0) {
+    log(`hooks already installed, paths updated (${settingsPath})`);
+  } else {
+    log(
+      `installed ${added.length} hook(s)${updated.length ? `, updated ${updated.length} existing` : ""} in ${settingsPath}`
+    );
+  }
+
+  return { installed: true, added, updated, settingsPath };
+}
+
+// --- CLI ---------------------------------------------------------------
+function parseArgs(argv) {
+  const args = { yes: false, settingsPath: undefined, serviceUrl: undefined };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--yes" || a === "-y") args.yes = true;
+    else if (a === "--settings") args.settingsPath = argv[++i];
+    else if (a === "--service-url") args.serviceUrl = argv[++i];
+  }
+  return args;
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  try {
+    const result = await run(args);
+    process.exit(result.installed ? 0 : 1);
+  } catch (e) {
+    console.error(`mnemosyne-install-hooks: ${e.message || e}`);
+    process.exit(1);
+  }
+}
+
+const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isDirectRun) {
+  main();
+}

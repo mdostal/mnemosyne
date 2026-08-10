@@ -47,19 +47,44 @@ system/context block. Runner adapters do not reformat or rerank memory.
   `repository`, `cwd`, or env. `pre-recall` also queries a small shared/global
   scope (`MNEMOSYNE_SHARED_SCOPE`, default `top`) and lets the bundle budget
   decide what survives.
-- **Small variable delta.** Hits are sorted keyword-exact first, then by score,
-  deduped by source/chunk, capped by max hit count, and kept within
-  `MNEMOSYNE_MEMORY_TOKEN_BUDGET` (default about 900 tokens). Lower-ranked hits
-  are omitted instead of bloating the ticket prompt.
+- **Small variable delta, high-level first.** Hits are sorted by **layer
+  priority first** — `meta` → `enterprise` → `project` → `vector` → `file`
+  (missing/unrecognized layer is treated as `file`, the lowest priority) — then
+  keyword-exact first, then by score, deduped by source/chunk, capped by max
+  hit count, and kept within `MNEMOSYNE_MEMORY_TOKEN_BUDGET` (default about 900
+  tokens). A high-scoring low-level hit still ranks below a low-scoring
+  high-level hit: a high-scoring file hit is less valuable than a low-scoring
+  meta hit. Up to `MNEMOSYNE_HIGH_LEVEL_TOKEN_BUDGET` (default 300, about a
+  third of the budget) is reserved for `meta`+`enterprise` hits so they're
+  never crowded out by noisy low-level hits — and capped at that reservation so
+  a busy meta layer can't consume the whole budget either. When there are no
+  high-level hits, the full budget is available to lower layers (no wasted
+  space). Lower-ranked hits are omitted instead of bloating the ticket prompt.
 - **Status-aware write-back** (`post-remember.mjs`): every stored note is stamped
   `STATUS: in-progress|reviewed|full-send` + ticket + role, so recall can tell a
   work-in-progress note from full-send truth.
 
-## Wire it into the agent loop
+## Install the hooks
 
-Merge `hooks/settings.hooks.json` into a Claude Code `settings.json` (adjust the
-absolute ROOT path). That fires `pre-recall` on every prompt submit and
-`post-remember` on stop/subagent-stop.
+Run the installer instead of hand-editing `settings.json`:
+
+```bash
+bin/mnemosyne-install-hooks
+```
+
+It merges `hooks/settings.hooks.json` into `~/.claude/settings.json`, rewriting
+every hook `command` to an absolute path for **this** checkout (no manual ROOT
+editing), so `pre-recall` fires on `UserPromptSubmit` and `post-remember` fires
+on `Stop`/`SubagentStop`. Before writing, it probes `GET /healthz` on the
+Mnemosyne service (`MNEMOSYNE_URL`, default `http://127.0.0.1:8477`) and warns
+if it's unreachable — pass `--yes` to install anyway, or start the service
+first and re-run. Safe to re-run any time (e.g. after moving/re-cloning the
+repo): it updates each hook's path in place instead of duplicating entries, and
+backs up the previous `settings.json` to `settings.json.bak` first.
+
+Flags: `--yes` / `-y` skip the reachability prompt; `--settings <path>` target
+a `settings.json` other than the default; `--service-url <url>` probe a
+different Mnemosyne base URL.
 
 For plugin-hive step wiring or manual use, just pipe JSON in:
 
@@ -95,6 +120,7 @@ optional `scope`, `role`, `status`, `ticket`.
 | `MNEMOSYNE_SHARED_SCOPE` | `top` | small shared/global recall scope |
 | `MNEMOSYNE_SHARED_HITS` | `2` | shared/global recall hit count |
 | `MNEMOSYNE_MEMORY_TOKEN_BUDGET` | `900` | approximate token cap for the variable delta |
+| `MNEMOSYNE_HIGH_LEVEL_TOKEN_BUDGET` | `300` | token cap reserved for `meta`+`enterprise` layer hits within the delta budget |
 | `MNEMOSYNE_RUNNER` | `generic` | runner label for diagnostics; does not alter bundle text |
 | `SWARM_MEMORY_BIN` | `swarm-memory` | CLI fallback binary |
 

@@ -111,6 +111,7 @@ async function main() {
     ticket,
     via: result.via,
     collection: result.collection || null,
+    file: result.file || null,
     chunks_upserted: result.chunks_upserted ?? null,
     error: result.remembered ? undefined : (result.service_error || result.cli_error),
   };
