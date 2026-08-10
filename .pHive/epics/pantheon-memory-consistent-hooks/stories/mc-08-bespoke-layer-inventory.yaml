@@ -1,0 +1,96 @@
+id: mc-08-bespoke-layer-inventory
+epic: pantheon-memory-consistent-hooks
+title: Audit and inventory bespoke memory scripts
+status: pending
+complexity: low
+methodology: classic
+depends_on: []
+parallel_allowed: true
+parallel_rationale: read-only
+
+description: |
+  Audit ~/.multica, ~/bin, and project directories for bespoke memory-related
+  scripts that paper over gaps. Document findings in
+  docs/bespoke-inventory.md with justification for any that stay.
+
+  This addresses REQ 4: "Reduce bespoke layer - note (do not silently drop)
+  anything that stays a script."
+
+acceptance_criteria:
+  - "Given ~/.multica directory, when audit runs, then all memory-related scripts are listed with purpose"
+  - "Given ~/bin directory, when audit runs, then all scripts referencing Mnemosyne/swarm-memory/Qdrant are inventoried"
+  - "Given crontab, when audit runs, then memory-related cron jobs are listed"
+  - "Given docs/bespoke-inventory.md, when it's written, then each script has status: [migrate|keep|archive] with justification"
+
+steps:
+  - id: research
+    description: |
+      Search for bespoke scripts:
+      - ls ~/.multica (if exists)
+      - ls ~/bin | grep -i 'memo\|qdrant\|swarm'
+      - crontab -l | grep -i 'memo\|qdrant\|swarm'
+      - grep -r 'mnemosyne\|swarm-memory' ~/Documents/work/dostal/code/
+      Document each finding
+    agent: researcher
+    depends_on: []
+  - id: implement
+    description: |
+      Create docs/bespoke-inventory.md:
+      1. List each discovered script with path
+      2. Extract purpose (from comments or filename)
+      3. Assess: should it migrate to Mnemosyne, stay, or archive?
+      4. For "keep" status, write justification
+      5. For "migrate" status, note which story handles it
+    agent: developer
+    depends_on: [research]
+  - id: review
+    description: Review inventory for completeness - did we miss any layer?
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit docs/bespoke-inventory.md to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/.minerva/runs/d0aee757-47fc-4df8-98dc-c61b726bf01f/workspace
+  tech_stack:
+    runtime: Bash, Python, Node.js (mixed)
+  key_files:
+    - path: docs/
+      purpose: Documentation directory (create bespoke-inventory.md here)
+
+files_to_modify:
+  - file: docs/bespoke-inventory.md
+    change: Create new inventory document
+
+design_decisions:
+  - decision: "keep" status requires written justification
+    rationale: REQ 4 says "note anything that stays" - must be explicit
+  - decision: Inventory is documentation, not implementation
+    rationale: This story discovers, doesn't migrate - migration is follow-on work
+  - decision: Search broadly (not just ~/.multica)
+    rationale: Bespoke scripts might be anywhere in user's home directory
+
+cross_cutting:
+  - concern: documentation
+    action: "Create docs/bespoke-inventory.md as permanent record of bespoke layers"
+
+risks:
+  - severity: low
+    description: Might miss scripts in unexpected locations
+    mitigation: Search multiple common locations + grep codebase
+  - severity: low
+    description: Scripts might be undocumented (no purpose comments)
+    mitigation: Best-effort purpose inference from filename/code
+
+references:
+  - path: .pHive/CONTEXT.md
+    relevant_excerpt: |
+      Key Paths:
+      - ~/.config/swarm-memory/qdrant.key — Remote Qdrant Cloud credential
+      - ~/Documents/work/dostal/code/swarm-memory — Existing vector engine repo
+
+metric:
+  applies: false
+  justification: "Read-only research story - no falsifiable behavior change to measure"

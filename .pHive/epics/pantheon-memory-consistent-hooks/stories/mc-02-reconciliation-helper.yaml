@@ -1,0 +1,124 @@
+id: mc-02-reconciliation-helper
+epic: pantheon-memory-consistent-hooks
+title: Add reconciliation helper to detect file/Qdrant drift
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [mc-01-write-through-consistency]
+
+description: |
+  Add bin/mnemosyne-reconcile helper that scans ~/.local/share/mnemosyne/notes/
+  and verifies each note file has a corresponding Qdrant point. Reports drift
+  count (files without Qdrant points) so operators can detect silent divergence.
+
+  This is the safety net for write-through failures - if upserts fail over time,
+  reconcile detects the accumulated drift.
+
+acceptance_criteria:
+  - "Given note files in ~/.local/share/mnemosyne/notes/, when reconcile runs, then it outputs drift_count (number of files missing from Qdrant)"
+  - "Given 0 drift, when reconcile runs, then it exits 0 and prints 'OK: all files synced'"
+  - "Given N drift, when reconcile runs, then it exits 1 and prints 'DRIFT: N files missing from Qdrant' with file paths"
+  - "Given --json flag, when reconcile runs, then it outputs structured JSON with drift_count and missing_files array"
+
+steps:
+  - id: test-spec
+    description: |
+      Write failing tests for reconcile helper:
+      - Test: 0 drift → exit 0, "OK" message
+      - Test: N drift → exit 1, "DRIFT" message with paths
+      - Test: --json flag → structured output
+      - Test: handles empty notes directory gracefully
+    agent: tester
+    depends_on: []
+  - id: implement
+    description: |
+      Create bin/mnemosyne-reconcile script:
+      1. Scan notes directory recursively for .md files
+      2. For each file, extract note ID from filename or frontmatter
+      3. Query swarm-memory to check if point exists (via metadata search)
+      4. Accumulate missing files list
+      5. Output drift count + paths (text or JSON)
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review reconcile script for correctness and edge cases
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/.minerva/runs/d0aee757-47fc-4df8-98dc-c61b726bf01f/workspace
+  tech_stack:
+    runtime: Node.js or Bash
+    cli: swarm-memory
+  key_files:
+    - path: bin/mnemosyne
+      purpose: Main service launch script (pattern to follow)
+    - path: src/engine.mjs
+      purpose: Contains swarm-memory CLI invocation patterns
+
+files_to_modify:
+  - file: bin/mnemosyne-reconcile
+    change: Create new reconciliation helper script
+
+code_examples:
+  - title: swarm-memory CLI invocation pattern
+    file: src/engine.mjs
+    snippet: |
+      const { stdout } = await execFileP(CLI, ['recall', '--query', query, '--json'], {
+        timeout: CLI_TIMEOUT_MS,
+        env: CHILD_ENV,
+      });
+      const result = JSON.parse(stdout);
+
+design_decisions:
+  - decision: Exit 1 on drift (not 0)
+    rationale: Drift is an error condition - automation can detect and alert
+  - decision: Query swarm-memory to check existence (not Qdrant directly)
+    rationale: Preserves abstraction - swarm-memory owns Qdrant access
+  - decision: Support both human-readable and --json output
+    rationale: Humans run it manually, automation consumes JSON
+
+cross_cutting:
+  - concern: existing-infrastructure
+    action: "Use swarm-memory CLI to query Qdrant - don't access Qdrant directly, preserving the abstraction layer"
+  - concern: loud-failure
+    action: "Exit 1 and print drift count prominently - don't hide divergence"
+
+risks:
+  - severity: low
+    description: Large notes directory could make reconcile slow
+    mitigation: Process files in batches, add --limit flag for testing
+  - severity: low
+    description: False positives if note filenames don't match Qdrant point IDs
+    mitigation: Extract ID from frontmatter as fallback to filename parsing
+
+references:
+  - path: src/engine.mjs
+    relevant_excerpt: |
+      const CLI = process.env.SWARM_MEMORY_BIN || 'swarm-memory';
+      const NOTES_DIR = process.env.MNEMOSYNE_NOTES_DIR ||
+        path.join(homedir(), '.local', 'share', 'mnemosyne', 'notes');
+  - path: test/e2e.mjs
+    relevant_excerpt: |
+      // Cleans up the local scratch note file this run wrote.
+      if (remember.body.file) {
+        await unlink(remember.body.file);
+      }
+
+metric:
+  applies: true
+  name: drift_count
+  direction: down
+  unit: files
+  baseline: unknown
+  target: 0
+  window: per-deployment
+  source:
+    kind: manual
+    ref: bin/mnemosyne-reconcile output
+  verify_at: mc-03-health-drift-reporting
+  owner: reviewer
