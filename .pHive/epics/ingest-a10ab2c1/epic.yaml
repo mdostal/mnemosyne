@@ -1,0 +1,139 @@
+name: ingest-a10ab2c1
+title: Ingest EVERYTHING into memory and org-tree
+description: |
+  Systematically ingest all scattered context (Qdrant collections, repos across FFE + mdostal,
+  client deliverables, house/compound decisions, artifacts, future Gemini history) into
+  Mnemosyne memory + org-tree through a staged pipeline.
+target_codebase: /Users/dostal/.minerva/runs/92f04492-2084-44e0-a2ad-efa1b5024b25/workspace
+methodology: tdd
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: main
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [data-pipeline, multi-system-integration, infrastructure]
+  roster: [researcher, technical-writer, tpm, architect]
+  per_tag_reasoning:
+    data-pipeline: "Multi-source ingestion (Qdrant, GitHub, filesystem) into unified memory system"
+    multi-system-integration: "Spans Qdrant Cloud API, GitHub API, file-system, Obsidian vault"
+    infrastructure: "Foundational memory layer setup for entire Pantheon"
+  confidence: high
+  gate_decisions:
+    scale: large
+    h_v_required: true
+    structured_outline_required: true
+
+stories:
+  - id: qdrant-inventory
+    title: Qdrant Collection Inventory
+    complexity: low
+    depends_on: []
+  
+  - id: qdrant-placement-rules
+    title: Qdrant Org-Tree Placement Rules
+    complexity: medium
+    depends_on: [qdrant-inventory]
+  
+  - id: qdrant-ingest
+    title: Qdrant → Mnemosyne Bulk Ingest
+    complexity: high
+    depends_on: [qdrant-placement-rules]
+  
+  - id: qdrant-continuous-index
+    title: Qdrant Continuous Indexing Setup
+    complexity: medium
+    depends_on: [qdrant-ingest]
+  
+  - id: qdrant-verification
+    title: Qdrant Recall Verification
+    complexity: low
+    depends_on: [qdrant-ingest]
+  
+  - id: repo-inventory
+    title: GitHub Repository Inventory
+    complexity: low
+    depends_on: [qdrant-verification]
+  
+  - id: repo-categorization
+    title: Repository Categorization & Placement
+    complexity: medium
+    depends_on: [repo-inventory]
+  
+  - id: repo-index
+    title: Repository High-Level Indexing
+    complexity: high
+    depends_on: [repo-categorization]
+  
+  - id: repo-continuous-index
+    title: Repository Continuous Indexing
+    complexity: medium
+    depends_on: [repo-index]
+  
+  - id: repo-verification
+    title: Repository Recall Verification + Regression
+    complexity: low
+    depends_on: [repo-index]
+  
+  - id: artifact-inventory
+    title: Artifact & Client Data Inventory
+    complexity: low
+    depends_on: [repo-verification]
+  
+  - id: artifact-placement
+    title: Artifact & Client Org-Tree Placement
+    complexity: low
+    depends_on: [artifact-inventory]
+  
+  - id: artifact-ingest
+    title: Artifact & Client Bulk Ingest
+    complexity: medium
+    depends_on: [artifact-placement]
+  
+  - id: artifact-continuous-index
+    title: Artifact Continuous Indexing
+    complexity: low
+    depends_on: [artifact-ingest]
+  
+  - id: artifact-verification
+    title: Artifact & Client Recall Verification + Regression
+    complexity: low
+    depends_on: [artifact-ingest]
+  
+  - id: house-inventory
+    title: House/Compound Artifact Inventory
+    complexity: low
+    depends_on: [artifact-verification]
+  
+  - id: house-placement
+    title: Life Context Org-Tree Placement
+    complexity: low
+    depends_on: [house-inventory]
+  
+  - id: house-ingest
+    title: House/Compound Decision Ingest
+    complexity: medium
+    depends_on: [house-placement]
+  
+  - id: house-reindex-cmd
+    title: Life Context Manual Re-Index Command
+    complexity: low
+    depends_on: [house-ingest]
+  
+  - id: house-verification
+    title: Life Context Recall Verification + Regression
+    complexity: low
+    depends_on: [house-ingest]
+  
+  - id: gemini-alert
+    title: Gemini Export Human-Queue Alert
+    complexity: low
+    depends_on: [house-verification]
+  
+  - id: gemini-ingest
+    title: Gemini Chat History Ingest (Deferred)
+    complexity: unknown
+    depends_on: [gemini-alert]
+    blocked_by: human-queue-gemini-export

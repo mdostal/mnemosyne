@@ -1,0 +1,119 @@
+id: m-08-bulk-reindex-command
+epic: mnemosyne-foundation
+title: Bulk re-index command - idempotent full rebuild
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [m-06-continuous-indexing]
+
+description: |
+  A command/job that re-indexes EVERYTHING from scratch: every repo, all docs,
+  memory/ files, code-graph, prior artifacts. Idempotent + resumable.
+
+  This is one of the TWO immediate priorities - Mathew wants to rebuild the
+  entire memory index across all projects, repos, and documentation.
+
+acceptance_criteria:
+  - "Given existing indexed content, when bulk reindex runs, then all layers are rebuilt from source"
+  - "Given partial index completion, when reindex resumes, then already-indexed content is skipped (idempotent)"
+  - "Given index state file, when reindex fails mid-run, then state captures progress for resume"
+  - "Given completion, when reindex finishes, then all layers (file, vector, code-graph, project, enterprise, meta) are fresh"
+
+steps:
+  - id: design
+    description: |
+      Design bulk reindex:
+      - Idempotent state tracking (indexed-content.yaml with checksums)
+      - Resume from checkpoint on failure
+      - Full scan of: repos, docs/, memory/, artifacts, Obsidian vault
+      - Layer-by-layer rebuild order
+    agent: architect
+  - id: implement
+    description: |
+      Implement CLI command:
+      - `mnemosyne reindex --scope=all [--resume]`
+      - Scan all configured sources (repos, docs, vault)
+      - Chunk → embed → index for each layer
+      - Write progress to state file per source
+      - Loud failure on any source error
+    agent: pair-programmer
+    depends_on: [design]
+  - id: test
+    description: |
+      Tests:
+      - Full reindex completes and updates all layers
+      - Resume flag skips already-indexed content
+      - State file written incrementally (survives crash)
+      - Loud failure when source missing (e.g., vault unreachable)
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review idempotent + resumable contract
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit bulk reindex command to feat/mnemosyne-foundation
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  tech_stack:
+    cli_framework: TBD (yargs, commander, or minimal argv parse)
+  key_files:
+    - path: ~/.config/swarm-memory/qdrant.key
+      purpose: Qdrant Cloud credentials
+    - path: ~/Documents/work/dostal/code/swarm-memory
+      purpose: Existing swarm-memory infrastructure
+
+files_to_modify:
+  - file: cli/mnemosyne-reindex.ts
+    change: Implement bulk reindex CLI command
+  - file: lib/mnemosyne/indexing/bulk.ts
+    change: Implement full-scan indexing logic
+  - file: lib/mnemosyne/indexing/state.ts
+    change: Track reindex progress (checksums, timestamps)
+  - file: lib/mnemosyne/indexing/bulk.test.ts
+    change: Add tests for idempotent + resumable behavior
+
+design_decisions:
+  - decision: State file with checksums per source
+    rationale: Idempotent on re-run; resume from checkpoint on failure
+  - decision: Layer-by-layer rebuild (file → vector → code-graph → project → enterprise → meta)
+    rationale: Respect layer dependencies; lower layers feed higher layers
+  - decision: Loud failure on missing source
+    rationale: Hard constraint from idea brief - no silent degradation
+
+cross_cutting:
+  - concern: existing-infrastructure
+    action: "Preserve existing Qdrant collections; re-index means UPDATE embeddings, not DROP collections"
+  - concern: loud-failure
+    action: "Fail immediately when vault unreachable, Qdrant unavailable, or repo missing; log full error context"
+  - concern: provenance-completeness
+    action: "Update index_timestamp for every source; mark stale content before rebuild"
+
+risks:
+  - severity: high
+    description: Accidental collection wipe during reindex
+    mitigation: Explicit assertion that zero Qdrant collections are dropped; update-only mode
+  - severity: medium
+    description: Reindex runs forever on large corpus
+    mitigation: Progress bar; incremental state writes; timeout per source
+
+references:
+  - path: ~/Documents/work/dostal/code/swarm-memory
+    relevant_excerpt: "Existing indexing patterns for code-graph and vector layers"
+
+metric:
+  applies: true
+  name: reindex.total_sources_indexed
+  direction: up
+  unit: count
+  baseline: null
+  target: 100
+  window: first-run
+  source:
+    kind: manual
+    ref: "Count of indexed repos + docs + memory files + artifacts"
+  verify_at: first-run
+  owner: tester

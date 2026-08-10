@@ -1,0 +1,56 @@
+generated_at: '2026-07-28T20:50:51.419100Z'
+source:
+  kind: qdrant
+  url: https://8b286beb-1295-452f-a038-38979c3d22e8.us-west-1-0.aws.cloud.qdrant.io:6333
+  read_only: true
+collection_count: 15
+metric:
+  name: qdrant_collections_discovered
+  value: 15
+  unit: count
+collections:
+- name: arizona_compound
+  entry_count: 4047
+  created_date: null
+- name: claude_knowledge
+  entry_count: 18647
+  created_date: null
+- name: clients_arizona_compound_memory
+  entry_count: 303
+  created_date: null
+- name: clients_att_memory
+  entry_count: 3356
+  created_date: null
+- name: clients_cadexlegacy_memory
+  entry_count: 486
+  created_date: null
+- name: clients_memory
+  entry_count: 34
+  created_date: null
+- name: dostal_content
+  entry_count: 378
+  created_date: null
+- name: ffe_knowledge
+  entry_count: 15912
+  created_date: null
+- name: ffe_learnings
+  entry_count: 1814
+  created_date: null
+- name: ffe_memory
+  entry_count: 1069
+  created_date: null
+- name: ffe_monitoring_memory
+  entry_count: 10
+  created_date: null
+- name: ffe_social_engine_memory
+  entry_count: 16
+  created_date: null
+- name: knowledge
+  entry_count: 4
+  created_date: null
+- name: personal_memory
+  entry_count: 275
+  created_date: null
+- name: work_root_memory
+  entry_count: 180
+  created_date: null

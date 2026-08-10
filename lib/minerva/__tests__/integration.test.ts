@@ -132,7 +132,7 @@ describe('Minerva First-God Integration', () => {
     expect(readResult.ok).toBe(true);
     if (readResult.ok) {
       expect(readResult.hits.length).toBeGreaterThan(0);
-      expect(readResult.hits[0].content).toContain('use Minerva');
+      expect(readResult.hits[0]?.content).toContain('use Minerva');
     }
   });
 

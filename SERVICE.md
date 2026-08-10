@@ -24,10 +24,28 @@ Every memory op runs over the live Qdrant corpus; nothing is stubbed or mocked.
 | `GET /scopes`   | —                                                           | scopes → collections + escalation ladders |
 | `POST /recall`  | `{query, scope?, hits?, escalate?, min_score?, radius?}`    | ranked hits **with full provenance** (layer/collection, file, chunk span, embedder, retrieved_at) |
 | `POST /remember`| `{text, scope?, tag?}`                                       | write-back: persists a note + indexes (upsert, `--no-prune`) it into the scope's collection so it is immediately recallable |
+| `POST /reindex` | `{scope, directory?}`                                        | bulk (re)index: scans `directory` (default: service's cwd) for `.ts`/`.md`/`.yaml` files and indexes each into `scope`'s collection. Returns `202 {status: "started", scope, directory}` **immediately** — the run itself continues in the background and its outcome (`files_indexed`/`files_scanned`/`errors`) is logged, not returned synchronously |
 
 `recall` returns the engine's native `--json` shape (`total_hits`, `scopes[].hits[]`
 with `provenance`). `scope` defaults to the engine default (`top`) for recall and
 to `personal` for remember.
+
+### Bulk reindex
+
+For initial index builds or recovering a stale index — e.g. after adding a new
+scope's directory, or after the Qdrant collection has drifted from disk.
+Indexing is append-only and idempotent (`swarm-memory index` upserts/dedupes
+by content), so a reindex is always safe to run more than once or retry after
+a partial failure — a bad file is skipped and reported in `errors`, it does
+not abort the run.
+
+```bash
+# via the CLI (POSTs to a running service and prints the {status,...} body):
+MNEMOSYNE_URL=http://127.0.0.1:8477 bin/mnemosyne reindex project --dir /path/to/project
+
+# via the HTTP API directly:
+curl -sX POST localhost:8477/reindex -d '{"scope":"project","directory":"/path/to/project"}'
+```
 
 ## Run
 
@@ -44,11 +62,12 @@ Smoke test (health + scopes + recall + remember round-trip):
 MNEMOSYNE_URL=http://127.0.0.1:8477 npm run smoke
 ```
 
-E2E round-trip probe (headless — health counts, healthz, tagged scratch write,
-recall-as-top-hit with provenance; cleans up its own scratch note file):
+Minerva-style client integration test (headless — imports `MnemosyneClient`,
+checks vector provenance and file fallback, starts the client HTTP API, and
+verifies `POST /recall` matches the library result):
 
 ```bash
-MNEMOSYNE_URL=http://127.0.0.1:8477 npm run test:e2e
+npm run test:e2e
 ```
 
 ## Port / route

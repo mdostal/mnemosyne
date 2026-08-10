@@ -12,7 +12,8 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
+    "types": ["node"],
     "noEmit": true
   },
-  "include": ["lib/**/*.ts"]
+  "include": ["lib/**/*.ts", "src/**/*.ts"]
 }
