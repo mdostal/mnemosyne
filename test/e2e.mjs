@@ -1,108 +1,321 @@
-// e2e.mjs — headless memory round-trip probe against a running Mnemosyne.
+// e2e.mjs - Minerva-style Mnemosyne consumption test.
 //
-// Verifies (PAN-7547):
-//   AC1  GET /health   -> ok:true, with non-zero Qdrant collection + point counts
-//   AC2  POST /remember -> writes a tagged marker into the scratch (personal) scope
-//   AC3  POST /recall   -> the marker comes back as the TOP hit, with provenance
-//                          (location + score)
-//   AC4  GET /healthz  -> 200 (alias so external checkers don't 404)
+// Exercises the slice-2 path a Pantheon god uses:
+//   import MnemosyneClient -> recall("authentication flow", "project")
+//   -> vector hits with provenance -> file fallback when vector is degraded
+//   -> POST /recall parity through the client HTTP API -> fresh reindex
+//   provenance.
 //
-// Cleans up the local scratch note file it writes. The Qdrant point itself is
-// left in place — swarm-memory's index is additive-only by design (SERVICE.md),
-// there is no delete path in the CLI to unwind it.
-//
-// Usage: MNEMOSYNE_URL=http://127.0.0.1:8477 node test/e2e.mjs
-import { unlink } from "node:fs/promises";
+// Usage: npm run test:e2e
 
-const BASE = process.env.MNEMOSYNE_URL || "http://127.0.0.1:8477";
+import { execFile } from "node:child_process";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
+import { MnemosyneClient } from "../lib/mnemosyne/client.js";
+import { VectorLayerAdapter } from "../lib/mnemosyne/layers/VectorLayerAdapter.js";
 
-async function j(method, path, body) {
-  const res = await fetch(BASE + path, {
+const execFileAsync = promisify(execFile);
+const QUERY = "authentication flow";
+const SCOPE = "project";
+const PORT = 32141 + Math.floor(Math.random() * 1000);
+const BASE = `http://127.0.0.1:${PORT}`;
+
+let fails = 0;
+const ok = (condition, message) => {
+  console.log(`${condition ? "  PASS" : "  FAIL"}  ${message}`);
+  if (!condition) fails++;
+};
+
+async function main() {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "mnemosyne-e2e-"));
+  const projectRoot = path.join(tempRoot, "minerva-project");
+  const fakeSwarm = path.join(tempRoot, "fake-swarm-memory.mjs");
+  const stateFile = path.join(tempRoot, "fake-swarm-memory-state.json");
+
+  await mkdir(projectRoot, { recursive: true });
+  await writeFile(
+    path.join(projectRoot, "notes.md"),
+    [
+      "# Minerva auth note",
+      "The authentication flow starts at login and validates redirect state before issuing session cookies.",
+      "Unrelated planning text.",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const initialIndexedAt = "2026-08-09T00:00:00.000Z";
+  await writeFile(
+    stateFile,
+    JSON.stringify({
+      indexed_at: initialIndexedAt,
+      retrieved_at: "2026-08-09T00:00:01.000Z",
+    }),
+    "utf8",
+  );
+  await writeFakeSwarmMemory(fakeSwarm);
+
+  const previousMode = process.env.FAKE_SWARM_MEMORY_MODE;
+  const previousState = process.env.FAKE_SWARM_MEMORY_STATE;
+  process.env.FAKE_SWARM_MEMORY_MODE = "hits";
+  process.env.FAKE_SWARM_MEMORY_STATE = stateFile;
+
+  const vectorLayer = new VectorLayerAdapter({ command: fakeSwarm, timeoutMs: 2_000 });
+  const client = new MnemosyneClient({ rootDirectory: projectRoot, vectorLayer });
+  let child;
+
+  try {
+    const vectorResult = await client.recall(QUERY, SCOPE);
+    ok(vectorResult.ok === true, "library recall returns RecallSuccess");
+    ok(vectorResult.ok && vectorResult.hits.length > 0, "library recall returns hits");
+    ok(
+      vectorResult.ok && vectorResult.hits.every((hit) => hit.provenance.layer === "vector"),
+      "library recall returns vector-layer hits",
+    );
+    ok(
+      vectorResult.ok && JSON.stringify(vectorResult.layers_queried) === JSON.stringify(["vector"]),
+      `library recall records queried layers -> ${vectorResult.ok ? vectorResult.layers_queried.join(",") : "failed"}`,
+    );
+    ok(
+      vectorResult.ok && !!vectorResult.hits[0]?.provenance.index_timestamp,
+      "vector hit includes provenance.index_timestamp",
+    );
+
+    process.env.FAKE_SWARM_MEMORY_MODE = "error";
+    const degradedResult = await client.recall(QUERY, SCOPE);
+    ok(degradedResult.ok === true, "library recall succeeds when vector layer is unavailable");
+    ok(
+      degradedResult.ok && degradedResult.degraded === true,
+      "vector failure is reported with degraded:true",
+    );
+    ok(
+      degradedResult.ok && degradedResult.layers_skipped.some((skip) => skip.layer === "vector"),
+      "vector failure is reported in layers_skipped",
+    );
+    ok(
+      degradedResult.ok && degradedResult.layers_queried.includes("file"),
+      "fallback queries file layer",
+    );
+    ok(
+      degradedResult.ok && degradedResult.hits.some((hit) => hit.provenance.layer === "file"),
+      "fallback returns file-layer hits",
+    );
+
+    process.env.FAKE_SWARM_MEMORY_MODE = "hits";
+    child = await startClientHttpApi({ rootDirectory: projectRoot, fakeSwarm, stateFile });
+    const httpLibraryResult = await client.recall(QUERY, SCOPE);
+    const httpResult = await j("POST", "/recall", { query: QUERY, scope: SCOPE });
+    ok(httpResult.status === 200, `POST /recall returns 200 (got ${httpResult.status})`);
+    ok(
+      JSON.stringify(normalizeRecall(httpResult.body)) === JSON.stringify(normalizeRecall(httpLibraryResult)),
+      "POST /recall returns the same recall result as library import",
+    );
+
+    const reindexStartedAt = Date.now();
+    await execFileAsync(fakeSwarm, ["index", projectRoot], {
+      env: {
+        ...process.env,
+        FAKE_SWARM_MEMORY_STATE: stateFile,
+      },
+    });
+
+    const freshResult = await client.recall(QUERY, SCOPE);
+    const freshTimestamp =
+      freshResult.ok ? freshResult.hits[0]?.provenance.index_timestamp : undefined;
+    ok(
+      !!freshTimestamp && Date.parse(freshTimestamp) >= reindexStartedAt,
+      `recall after reindex has fresh index_timestamp -> ${freshTimestamp ?? "missing"}`,
+    );
+  } finally {
+    if (child) await stopChild(child);
+    restoreEnv("FAKE_SWARM_MEMORY_MODE", previousMode);
+    restoreEnv("FAKE_SWARM_MEMORY_STATE", previousState);
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+
+  console.log(fails ? `\n${fails} check(s) failed` : "\nall e2e checks passed");
+  process.exit(fails ? 1 : 0);
+}
+
+async function writeFakeSwarmMemory(filePath) {
+  await writeFile(
+    filePath,
+    `#!/usr/bin/env node
+import { readFileSync, writeFileSync } from "node:fs";
+
+const [, , cmd, queryOrPath] = process.argv;
+const mode = process.env.FAKE_SWARM_MEMORY_MODE || "hits";
+const stateFile = process.env.FAKE_SWARM_MEMORY_STATE;
+
+function readState() {
+  return JSON.parse(readFileSync(stateFile, "utf8"));
+}
+
+function writeState(next) {
+  writeFileSync(stateFile, JSON.stringify(next), "utf8");
+}
+
+if (cmd === "index") {
+  const state = readState();
+  writeState({ ...state, indexed_at: new Date().toISOString() });
+  process.stdout.write("indexed 1 file(s), upserted 1 chunks into e2e_project\\n");
+  process.exit(0);
+}
+
+if (cmd !== "recall") {
+  process.stderr.write(\`fake swarm-memory: unknown command \${cmd}\\n\`);
+  process.exit(2);
+}
+
+if (mode === "error") {
+  process.stderr.write("fake swarm-memory: qdrant unavailable for e2e\\n");
+  process.exit(1);
+}
+
+const state = readState();
+const query = queryOrPath;
+process.stdout.write(JSON.stringify({
+  query,
+  total_hits: 1,
+  scopes: [
+    {
+      scope: "project",
+      collection: "e2e_project",
+      fallback_used: false,
+      below_floor: 0,
+      error: "",
+      hits: [
+        {
+          score: 0.94,
+          location: "/memory/project/authentication-flow.md",
+          full_path: "/memory/project/authentication-flow.md",
+          source: "authentication-flow.md",
+          chunk_index: 0,
+          chunk_span: [0, 128],
+          text: "authentication flow uses session cookies and redirect validation",
+          provenance: {
+            source: "authentication-flow.md",
+            full_path: "/memory/project/authentication-flow.md",
+            chunk_index: 0,
+            collection: "e2e_project",
+            indexed_at: state.indexed_at,
+            content_sha256: "e2e-auth-flow-sha",
+            embed_model: "fake-e2e-embedder",
+            query,
+            embed_model_query: "fake-e2e-embedder",
+            retrieved_at: state.retrieved_at,
+            chunk_span: [0, 128],
+            context_radius: 2
+          }
+        }
+      ]
+    }
+  ]
+}));
+`,
+    "utf8",
+  );
+  await chmod(filePath, 0o755);
+}
+
+async function startClientHttpApi({ rootDirectory, fakeSwarm, stateFile }) {
+  const { spawn } = await import("node:child_process");
+  const tsx = path.resolve("node_modules", ".bin", "tsx");
+  const server = path.resolve("lib", "mnemosyne", "server.ts");
+  const child = spawn(tsx, [server], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      MNEMOSYNE_PORT: String(PORT),
+      MNEMOSYNE_ROOT_DIR: rootDirectory,
+      SWARM_MEMORY_BIN: fakeSwarm,
+      FAKE_SWARM_MEMORY_MODE: "hits",
+      FAKE_SWARM_MEMORY_STATE: stateFile,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  let output = "";
+  child.stdout.on("data", (chunk) => {
+    output += chunk;
+  });
+  child.stderr.on("data", (chunk) => {
+    output += chunk;
+  });
+
+  const up = await waitForHttpApi(15_000);
+  ok(up, "client HTTP API started");
+  if (!up) {
+    child.kill();
+    throw new Error(`client HTTP API never became reachable:\n${output}`);
+  }
+
+  return child;
+}
+
+async function waitForHttpApi(timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`${BASE}/health`);
+      if (res.status === 200 || res.status === 503) return true;
+    } catch {
+      // not ready yet
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return false;
+}
+
+async function j(method, pathname, body) {
+  const res = await fetch(BASE + pathname, {
     method,
-    headers: body ? { "content-type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
+    headers: body === undefined ? undefined : { "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
   return { status: res.status, body: await res.json() };
 }
 
-let fails = 0;
-const ok = (c, m) => {
-  console.log(`${c ? "  PASS" : "  FAIL"}  ${m}`);
-  if (!c) fails++;
-};
+function normalizeRecall(result) {
+  return {
+    ok: result.ok,
+    query: result.query,
+    scope: result.scope,
+    intent: result.intent,
+    hits: result.hits?.map((hit) => ({
+      content: hit.content,
+      score: hit.score,
+      provenance: hit.provenance,
+    })),
+    layers_queried: result.layers_queried,
+    layers_skipped: result.layers_skipped,
+    escalated: result.escalated,
+    degraded: result.degraded,
+  };
+}
 
-// AC1 — health: ok:true + non-zero Qdrant collection/point counts.
-const health = await j("GET", "/health");
-const collections = /—\s*(\d+)\s+collections/i.exec(health.body.detail || "");
-const points = /\(\S+,\s*(\d+)\s*points\)/i.exec(health.body.detail || "");
-ok(health.status === 200 && health.body.ok === true, `health -> ok=${health.body.ok}`);
-ok(
-  !!collections && Number(collections[1]) > 0,
-  `health detail reports non-zero Qdrant collections -> ${collections?.[1] ?? "none found"}`
-);
-ok(
-  !!points && Number(points[1]) > 0,
-  `health detail reports non-zero point count -> ${points?.[1] ?? "none found"}`
-);
+async function stopChild(child) {
+  if (child.exitCode !== null) return;
+  child.kill();
+  await new Promise((resolve) => {
+    const timer = setTimeout(resolve, 2_000);
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
 
-// AC4 — /healthz alias, always 200.
-const healthz = await j("GET", "/healthz");
-ok(healthz.status === 200, `healthz -> ${healthz.status}`);
-
-// AC2 — remember a tagged marker into the scratch (personal) scope.
-//
-// The marker text needs real semantic separation from earlier probe runs, not
-// just a different numeric suffix: nomic-embed-text barely weights digit
-// tokens, so two notes sharing the same boilerplate ("e2e round-trip probe
-// marker <id>") land within ~0.001 cosine similarity of each other — close
-// enough that ranking against a growing pile of the probe's own history (this
-// is additive-only; nothing ever gets deleted from Qdrant) flips at random.
-// A few random words woven into varied phrasing pushes same-run similarity to
-// ~0.94 while prior runs stay ~0.73, which is what makes "top hit" reliable
-// run over run.
-const WORDS = ["nimbus", "falcon", "orchard", "quartz", "ember", "cobalt", "lichen", "tundra", "basalt", "harbor"];
-const pick = () => WORDS[Math.floor(Math.random() * WORDS.length)];
-const token = `MNEMO-E2E-${Date.now()}`;
-const markerText =
-  `Mnemosyne e2e probe checkpoint :: ${pick()}-${pick()}-${pick()} :: correlation id ${token} :: ` +
-  "verifying semantic round-trip provenance for the memory god liveness probe.";
-const remember = await j("POST", "/remember", {
-  text: markerText,
-  scope: "personal",
-  tag: "e2e-scratch",
-});
-ok(
-  remember.status === 200 && remember.body.remembered === true,
-  `remember -> ${remember.body.collection} (${remember.body.chunks_upserted} chunks)`
-);
-
-// Give the async embed/upsert a beat to land before recalling it back.
-await new Promise((r) => setTimeout(r, 1500));
-
-// AC3 — recall it back as the TOP hit, with provenance (location + score).
-// Query with the marker's own text (not the bare token) — semantic recall
-// ranks by embedding similarity, and a near-identical query is what reliably
-// surfaces a single fresh note above the rest of the personal collection.
-const recall = await j("POST", "/recall", { query: markerText, scope: "personal", hits: 3 });
-const topHit = recall.body.scopes?.[0]?.hits?.[0];
-ok(
-  recall.status === 200 && !!topHit && topHit.text.includes(token),
-  `recall -> top hit is the remembered marker (score=${topHit?.score})`
-);
-ok(
-  !!topHit?.provenance?.full_path && typeof topHit?.score === "number",
-  `recall top hit carries provenance -> location=${topHit?.provenance?.full_path} score=${topHit?.score}`
-);
-
-// Cleanup — remove the local scratch note file this run wrote.
-if (remember.body.file) {
-  try {
-    await unlink(remember.body.file);
-    ok(true, `cleaned up scratch note file -> ${remember.body.file}`);
-  } catch (e) {
-    ok(false, `failed to clean up scratch note file -> ${e.message}`);
+function restoreEnv(key, value) {
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
   }
 }
 
-console.log(fails ? `\n${fails} check(s) failed` : "\nall e2e checks passed");
-process.exit(fails ? 1 : 0);
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

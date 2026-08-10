@@ -10,11 +10,12 @@
 //   GET  /scopes           -> configured scopes + escalation ladders
 //   POST /recall  {query, scope?, hits?, escalate?, min_score?, radius?}
 //   POST /remember {text, scope?, tag?}
+//   POST /reindex {scope, directory?}
 //
 // PORT env (default 8477).
 
 import http from "node:http";
-import { health, scopes, recall, remember, grep } from "./engine.mjs";
+import { health, scopes, recall, remember, grep, reindex } from "./engine.mjs";
 
 const PORT = Number(process.env.PORT || 8477);
 const SERVICE = { god: "mnemosyne", role: "memory", version: "0.1.0" };
@@ -69,6 +70,7 @@ const server = http.createServer(async (req, res) => {
           "POST /recall": "{query, scope?, hits?, escalate?, min_score?, radius?} -> ranked hits w/ provenance",
           "POST /remember": "{text, scope?, tag?} -> write-back (index into scope collection)",
           "POST /grep": "{query, scope?, hits?, escalate?, radius?} -> KEYWORD hits (exact-string, no embedder)",
+          "POST /reindex": "{scope, directory?} -> bulk (re)index a directory; runs async, returns immediately",
         },
       });
     }
@@ -125,6 +127,30 @@ const server = http.createServer(async (req, res) => {
       }
       const result = await remember(b.text, b.scope, { tag: b.tag });
       return send(res, 200, { ...result, took_ms: Date.now() - t0 });
+    }
+
+    if (route === "POST /reindex") {
+      const b = await readJson(req);
+      if (!b.scope || !String(b.scope).trim()) {
+        const err = new Error("scope is required");
+        err.status = 400;
+        throw err;
+      }
+      const scope = String(b.scope);
+      const directory = b.directory ? String(b.directory) : undefined;
+      // Fire-and-forget: reindex can take minutes, so the request returns
+      // immediately and the run continues (and logs its outcome) in the
+      // background — no progress tracking in slice-2 (MVP).
+      reindex(scope, { directory })
+        .then((result) => {
+          console.log(
+            `[mnemosyne] reindex complete scope=${scope} files_indexed=${result.files_indexed}/${result.files_scanned} errors=${result.errors.length}`
+          );
+        })
+        .catch((e) => {
+          console.error(`[mnemosyne] ERROR reindex: scope=${scope} failed: ${e.message}`);
+        });
+      return send(res, 202, { status: "started", scope, directory: directory || process.cwd() });
     }
 
     return send(res, 404, { error: "not found", route });

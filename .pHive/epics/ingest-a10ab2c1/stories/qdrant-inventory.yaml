@@ -1,0 +1,103 @@
+id: qdrant-inventory
+epic: ingest-a10ab2c1
+title: Qdrant Collection Inventory
+status: pending
+complexity: low
+methodology: tdd
+depends_on: []
+
+description: |
+  Connect to Qdrant Cloud and inventory all existing collections. This is the
+  discovery phase that bounds the bulk ingestion work for Slice 1.
+
+acceptance_criteria:
+  - "Given Qdrant Cloud credentials at ~/.config/swarm-memory/qdrant.key, when inventory script runs, then all collections are listed via API"
+  - "Given collections list returned, when metadata extraction runs, then name, entry count, and created date are captured for each collection"
+  - "Given collection metadata extracted, when inventory manifest is written, then .pHive/epics/ingest-a10ab2c1/inventory/qdrant-collections.yaml exists and is valid YAML"
+
+steps:
+  - id: research
+    description: Explore swarm-memory CLI for Qdrant connection patterns and API usage
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests for Qdrant inventory:
+      - Connection establishment with valid/invalid keys
+      - Collection listing via API
+      - Metadata extraction
+      - Manifest writing
+      Do NOT read implementation code — tests define expected behavior independently.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      Write Qdrant inventory script to make tests pass:
+      - Read key from ~/.config/swarm-memory/qdrant.key
+      - Connect to Qdrant Cloud
+      - List collections via qdrant-client API
+      - Extract metadata per collection
+      - Write YAML manifest
+      Do not modify tests.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review implementation and tests for correctness and convention compliance
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/ingest-a10ab2c1
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/dostal/.minerva/runs/92f04492-2084-44e0-a2ad-efa1b5024b25/workspace
+  tech_stack:
+    languages: [python]
+    frameworks: [qdrant-client]
+  key_files:
+    - path: ~/.config/swarm-memory/qdrant.key
+      purpose: Qdrant Cloud API authentication key
+    - path: ~/Documents/work/dostal/code/swarm-memory/
+      purpose: Reference implementation for Qdrant connection patterns
+
+files_to_modify:
+  - file: .pHive/epics/ingest-a10ab2c1/inventory/qdrant-collections.yaml
+    change: Create inventory manifest with collection list
+  - file: mnemosyne/inventory/qdrant_inventory.py
+    change: Implement inventory script (new file)
+  - file: mnemosyne/tests/test_qdrant_inventory.py
+    change: Unit tests for inventory logic (new file)
+
+design_decisions:
+  - decision: Use read-only API calls only (no collection deletion/modification)
+    rationale: Seed specifies "do NOT wipe" existing collections — safety constraint
+
+risks:
+  - severity: medium
+    description: Qdrant auth key invalid or expired
+    mitigation: Loud failure with clear error message; prompt operator for new key
+
+cross_cutting:
+  - concern: metrics
+    action: Track collection count discovered
+
+metric:
+  applies: true
+  name: qdrant_collections_discovered
+  direction: up
+  unit: count
+  baseline: 0
+  target: 10
+  window: story-integrate
+  source:
+    kind: manual
+    ref: inventory manifest entry count
+  verify_at: integrate
+  owner: developer
+
+references:
+  - path: .pHive/epics/ingest-a10ab2c1/docs/research-brief.md
+    relevant_excerpt: |
+      Qdrant Cloud — remote vector DB (key at ~/.config/swarm-memory/qdrant.key)
+      Collections already exist (scope unknown — needs inventory)
+      CRITICAL: Do NOT wipe existing collections

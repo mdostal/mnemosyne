@@ -1,0 +1,129 @@
+id: m-09-external-chat-ingestion
+epic: mnemosyne-foundation
+title: External chat ingestion - Gemini + Claude exports
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [m-03-vector-layer-integration]
+
+description: |
+  Import external chat history (Gemini, Claude exports) into memory layers.
+  Chunk → embed → store with source metadata so context is recallable.
+
+  This is one of the TWO immediate priorities - Mathew wants Gemini chat
+  history + other external chats indexed so agents can recall that context.
+
+acceptance_criteria:
+  - "Given Gemini chat export, when ingestion runs, then conversations are chunked, embedded, and stored in vector layer"
+  - "Given Claude chat export, when ingestion runs, then conversations are parsed and indexed"
+  - "Given duplicate chat entries, when dedup runs, then only unique chunks are indexed (by content hash)"
+  - "Given indexed chat, when recall() queries, then results include source metadata (chat_source='gemini', timestamp, participants)"
+
+steps:
+  - id: research
+    description: |
+      Research export formats:
+      - Gemini chat export format (JSON, CSV, or API)
+      - Claude chat export format (Anthropic Workbench export)
+      - Other export formats (ChatGPT, etc.)
+      - Chunking strategy (by message, by conversation, by timestamp window)
+    agent: researcher
+  - id: implement-parsers
+    description: |
+      Implement chat parsers:
+      - GeminiChatParser (handle Gemini export format)
+      - ClaudeChatParser (handle Claude export format)
+      - Generic ChatMessage schema (timestamp, role, content, metadata)
+      - Dedup by content hash (SHA256)
+    agent: pair-programmer
+    depends_on: [research]
+  - id: implement-ingestion
+    description: |
+      Implement ingestion pipeline:
+      - Parse → chunk (by conversation or message) → embed → index
+      - Source metadata: {chat_source, export_date, participants, url}
+      - Write to vector layer via swarm-memory
+      - Provenance: layer='vector', source='external_chat', chat_source='gemini'
+    agent: developer
+    depends_on: [implement-parsers]
+  - id: test
+    description: |
+      Tests:
+      - Gemini export parsed correctly
+      - Claude export parsed correctly
+      - Duplicate messages deduped
+      - Indexed chat recallable with source metadata
+      - Source metadata includes chat_source field
+    agent: tester
+    depends_on: [implement-ingestion]
+  - id: review
+    description: Review dedup logic and source metadata completeness
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit external chat ingestion to feat/mnemosyne-foundation
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  tech_stack:
+    embedder: swarm-memory (reuse existing)
+    vector_db: Qdrant Cloud
+  key_files:
+    - path: ~/.config/swarm-memory/qdrant.key
+      purpose: Qdrant Cloud credentials
+
+files_to_modify:
+  - file: lib/mnemosyne/ingestion/chat-parsers.ts
+    change: Implement Gemini + Claude chat parsers
+  - file: lib/mnemosyne/ingestion/dedup.ts
+    change: Implement content hash deduplication
+  - file: lib/mnemosyne/ingestion/external-chat.ts
+    change: Implement chat ingestion pipeline
+  - file: lib/mnemosyne/ingestion/external-chat.test.ts
+    change: Add tests for chat parsing + ingestion
+  - file: cli/mnemosyne-ingest.ts
+    change: Add CLI command for chat ingestion
+
+design_decisions:
+  - decision: Chunk by conversation (not by message)
+    rationale: Preserve conversational context; better semantic recall
+  - decision: Dedup by content hash before embedding
+    rationale: Avoid duplicate embeddings for repeated messages
+  - decision: Source metadata includes chat_source field
+    rationale: Distinguish Gemini vs Claude vs other chat sources in results
+
+cross_cutting:
+  - concern: provenance-completeness
+    action: "Source metadata includes: chat_source, export_date, participants, original_url if available"
+  - concern: loud-failure
+    action: "Fail loudly when export format unrecognized or embedding fails; log full parse error"
+  - concern: existing-infrastructure
+    action: "Reuse swarm-memory embedder; write to existing Qdrant collections"
+
+risks:
+  - severity: medium
+    description: Export format changes or is undocumented
+    mitigation: Parser versioning; fallback to manual chunk extraction
+  - severity: low
+    description: Large chat history overwhelms Qdrant quota
+    mitigation: Batch ingestion; progress tracking; warn on quota approach
+
+references:
+  - path: ~/Documents/work/dostal/code/swarm-memory
+    relevant_excerpt: "Existing embedding + Qdrant write patterns"
+
+metric:
+  applies: true
+  name: chat_ingestion.total_conversations_indexed
+  direction: up
+  unit: count
+  baseline: null
+  target: 50
+  window: first-run
+  source:
+    kind: manual
+    ref: "Count of unique conversations indexed from all sources"
+  verify_at: first-run
+  owner: researcher
