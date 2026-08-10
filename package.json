@@ -14,18 +14,22 @@
   },
   "scripts": {
     "start": "node src/server.mjs",
-    "start:client-api": "tsx lib/mnemosyne/server.ts",
-    "build": "tsc --noEmit",
     "test": "node test/bundle.mjs && node test/write-through.mjs && node test/reindex.mjs && node test/vector.mjs && node test/review-auto-merge.mjs && node test/http-api.mjs && vitest run lib/mnemosyne src/planning src/config src/runners",
-    "test:contracts": "vitest run lib/mnemosyne src/planning src/config src/runners",
-    "typecheck": "tsc --noEmit",
     "smoke": "node test/smoke.mjs",
     "test:e2e": "tsx test/e2e.mjs",
     "test:hooks": "node test/hooks.mjs",
     "test:install-hooks": "node test/install-hooks.mjs",
     "test:write-through": "node test/write-through.mjs",
+    "start:client-api": "tsx lib/mnemosyne/server.ts",
+    "build": "tsc --noEmit",
+    "test:contracts": "vitest run lib/mnemosyne src/planning src/config src/runners",
+    "typecheck": "tsc --noEmit",
     "test:http-api": "node test/http-api.mjs",
     "test:reindex": "node test/reindex.mjs"
+  },
+  "dependencies": {
+    "tsx": "^4.23.11",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
@@ -33,9 +37,5 @@
     "ajv-formats": "^3.0.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
-  },
-  "dependencies": {
-    "tsx": "^4.23.11",
-    "yaml": "^2.9.0"
   }
 }
