@@ -1,0 +1,11 @@
+# Multica scheduled task for full reindex
+name: mnemosyne-reindex
+description: "Periodic full reindex of all memory layers (daily) and event-driven on file changes"
+mode: run_only
+agent: mnemosyne-dev
+triggers:
+  - kind: schedule
+    cron: "0 2 * * *"
+    timezone: UTC
+  - kind: webhook
+    label: file-change

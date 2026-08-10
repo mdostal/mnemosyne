@@ -29,9 +29,17 @@ const REPO_SCOPE = {
   hive: "ffe",
 };
 
-function repoScopeFromCwd(cwd) {
-  if (!cwd) return null;
-  const base = path.basename(String(cwd)).toLowerCase();
+function normalizeRepoName(value) {
+  if (!value) return "";
+  const raw = String(value).trim().replace(/\.git$/i, "");
+  const withoutUrl = raw
+    .replace(/^git@github\.com:/i, "")
+    .replace(/^https:\/\/github\.com\//i, "");
+  return path.basename(withoutUrl).toLowerCase();
+}
+
+function repoScopeFromValue(value) {
+  const base = normalizeRepoName(value);
   return REPO_SCOPE[base] || null;
 }
 
@@ -42,7 +50,13 @@ export function resolveScope(input = {}) {
     input.role || process.env.MNEMOSYNE_ROLE || ""
   ).toLowerCase();
   const cwd = input.cwd || process.env.MNEMOSYNE_CWD || process.cwd();
-  const repoScope = repoScopeFromCwd(cwd);
+  const repo =
+    input.target_repo ||
+    input.repo ||
+    input.repository ||
+    process.env.MNEMOSYNE_TARGET_REPO ||
+    cwd;
+  const repoScope = repoScopeFromValue(repo);
 
   // 1) explicit scope always wins
   if (input.scope) {
