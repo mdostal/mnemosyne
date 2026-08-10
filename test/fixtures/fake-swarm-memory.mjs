@@ -12,8 +12,31 @@
 // Independent of FAKE_SWARM_MODE, `index` fails for any path containing the
 // literal substring "REINDEX_FAIL" — lets reindex.mjs simulate a single bad
 // file mid-run without needing a whole extra mode.
+import { readFileSync, writeFileSync } from "node:fs";
+
 const [, , cmd, ...args] = process.argv;
 const mode = process.env.FAKE_SWARM_MODE || "success";
+
+function graphStorePath() {
+  return process.env.FAKE_SWARM_GRAPH_STORE;
+}
+
+function readGraphEdges() {
+  const store = graphStorePath();
+  if (!store) return [];
+  try {
+    return JSON.parse(readFileSync(store, "utf8"));
+  } catch {
+    return [];
+  }
+}
+
+function writeGraphEdges(edges) {
+  const store = graphStorePath();
+  if (store) {
+    writeFileSync(store, JSON.stringify(edges), "utf8");
+  }
+}
 
 if (cmd === "config") {
   process.stdout.write(
@@ -91,6 +114,48 @@ if (cmd === "grep") {
     ])
   );
   process.exit(0);
+}
+
+if (cmd === "graph") {
+  const [subcommand, ...graphArgs] = args;
+  const query = graphArgs[graphArgs.length - 1] || "";
+
+  if (subcommand === "edges") {
+    const fixtureEdges = [
+      {
+        src: "att:funnel:visitor",
+        predicate: "depends_on",
+        dst: "att:funnel:session",
+        origin: "fixture",
+      },
+    ];
+    const edges = [...fixtureEdges, ...readGraphEdges()].filter((edge) => edge.src === query);
+    process.stdout.write(JSON.stringify(edges));
+    process.exit(0);
+  }
+
+  if (subcommand === "deps") {
+    const impact =
+      query === "att:funnel:visitor"
+        ? [
+            {
+              node: "src/analytics/funnel.ts",
+              via: "att:funnel:session",
+            },
+          ]
+        : [];
+    process.stdout.write(JSON.stringify(impact));
+    process.exit(0);
+  }
+
+  if (subcommand === "add") {
+    const [src, predicate, dst] = graphArgs;
+    const edges = readGraphEdges();
+    edges.push({ src, predicate, dst, origin: "fixture-store" });
+    writeGraphEdges(edges);
+    process.stdout.write(JSON.stringify({ added: true }));
+    process.exit(0);
+  }
 }
 
 process.stderr.write(`fake swarm-memory: unknown command ${cmd}\n`);
