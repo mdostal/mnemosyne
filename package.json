@@ -1,0 +1,19 @@
+{
+  "name": "mnemosyne",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pantheon's Memory god — thin HTTP service wrapping the swarm-memory engine over the Qdrant SSOT (recall / remember / scopes / health).",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "mnemosyne": "bin/mnemosyne"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "smoke": "node test/smoke.mjs",
+    "test:hooks": "node test/hooks.mjs"
+  },
+  "dependencies": {}
+}
