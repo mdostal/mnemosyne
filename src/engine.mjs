@@ -10,8 +10,10 @@ import { promisify } from "node:util";
 import { writeFile, mkdir, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const execFileP = promisify(execFile);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // CLI binary — override with SWARM_MEMORY_BIN; otherwise resolve on PATH.
 export const CLI = process.env.SWARM_MEMORY_BIN || "swarm-memory";
@@ -23,6 +25,11 @@ const NOTES_DIR =
   path.join(homedir(), ".local", "share", "mnemosyne", "notes");
 
 const CLI_TIMEOUT_MS = Number(process.env.MNEMOSYNE_CLI_TIMEOUT_MS || 90_000);
+const HEALTH_TIMEOUT_MS = Number(process.env.MNEMOSYNE_HEALTH_TIMEOUT_MS || 30_000);
+const RECONCILE_TIMEOUT_MS = Number(process.env.MNEMOSYNE_RECONCILE_TIMEOUT_MS || 30_000);
+const RECONCILE_BIN =
+  process.env.MNEMOSYNE_RECONCILE_BIN ||
+  path.join(__dirname, "..", "bin", "mnemosyne-reconcile");
 
 // A generous env so the child CLI finds uv-installed tools + the qdrant key.
 const CHILD_ENV = {
@@ -37,6 +44,38 @@ export async function run(args, { timeout = CLI_TIMEOUT_MS } = {}) {
     env: CHILD_ENV,
   });
   return { stdout, stderr };
+}
+
+function parseReconcileOutput(stdout) {
+  const parsed = JSON.parse(stdout);
+  const driftCount = Number(parsed.drift_count);
+  if (!Number.isFinite(driftCount)) {
+    throw new Error("reconcile output missing numeric drift_count");
+  }
+  return { drift_count: driftCount };
+}
+
+async function reconcileDrift() {
+  try {
+    const { stdout } = await execFileP(RECONCILE_BIN, ["--json"], {
+      timeout: RECONCILE_TIMEOUT_MS,
+      maxBuffer: 32 * 1024 * 1024,
+      env: CHILD_ENV,
+    });
+    return parseReconcileOutput(stdout);
+  } catch (e) {
+    if (e.stdout) {
+      try {
+        return parseReconcileOutput(e.stdout);
+      } catch {
+        // Fall through to explicit null below.
+      }
+    }
+    return {
+      drift_count: null,
+      reconcile_error: String(e.message || e),
+    };
+  }
 }
 
 // Cache the scope -> collection map (from `swarm-memory config`) so `remember`
@@ -57,13 +96,15 @@ export async function scopeMap() {
 
 // health — run the engine self-test (Qdrant + embedder + graph reachability).
 export async function health() {
+  const last_check = new Date().toISOString();
+  const drift = await reconcileDrift();
   try {
-    const { stdout, stderr } = await run(["check"], { timeout: 30_000 });
+    const { stdout, stderr } = await run(["check"], { timeout: HEALTH_TIMEOUT_MS });
     const text = stdout + stderr;
     const ok = /result:\s*PASS/i.test(text);
-    return { ok, engine: "swarm-memory", detail: text.trim() };
+    return { ok, engine: "swarm-memory", detail: text.trim(), ...drift, last_check };
   } catch (e) {
-    return { ok: false, engine: "swarm-memory", error: String(e.message || e) };
+    return { ok: false, engine: "swarm-memory", error: String(e.message || e), ...drift, last_check };
   }
 }
 
