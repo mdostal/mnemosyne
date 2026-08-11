@@ -1,7 +1,6 @@
-import { validatePlanResponse, type PlanResponse } from '../types/PlanResponse.js';
+import type { PlanResponse } from '../types/PlanResponse.js';
 import {
   RunnerStrategy,
-  RunnerUnavailableError,
   type RunnerInvocationContext,
 } from './RunnerStrategy.js';
 
@@ -69,11 +68,11 @@ export class GeminiRunner extends RunnerStrategy {
 
   async invoke(prompt: string, _context?: RunnerInvocationContext): Promise<PlanResponse> {
     if (!this.apiKey) {
-      throw new RunnerUnavailableError('Gemini runner is unavailable: GOOGLE_API_KEY is not configured');
+      throw this.unavailable('Gemini runner is unavailable: GOOGLE_API_KEY is not configured');
     }
 
     if (!this.fetchImpl) {
-      throw new RunnerUnavailableError('Gemini runner is unavailable: fetch is not available');
+      throw this.unavailable('Gemini runner is unavailable: fetch is not available');
     }
 
     let response: FetchResponseLike;
@@ -94,12 +93,12 @@ export class GeminiRunner extends RunnerStrategy {
         }),
       });
     } catch (error) {
-      throw new RunnerUnavailableError('Gemini runner request failed', { cause: error });
+      throw this.unavailable('Gemini runner request failed', { cause: error });
     }
 
     if (!response.ok) {
       const detail = await readErrorDetail(response);
-      throw new RunnerUnavailableError(
+      throw this.unavailable(
         `Gemini runner request failed with ${response.status} ${response.statusText}${detail}`,
       );
     }
@@ -111,9 +110,9 @@ export class GeminiRunner extends RunnerStrategy {
         throw new Error('Gemini response did not include text content');
       }
 
-      return validatePlanResponse(JSON.parse(text));
+      return this.validatePlanResponse(JSON.parse(text));
     } catch (error) {
-      throw new RunnerUnavailableError('Gemini runner returned an invalid PlanResponse', { cause: error });
+      throw this.unavailable('Gemini runner returned an invalid PlanResponse', { cause: error });
     }
   }
 }
