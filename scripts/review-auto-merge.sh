@@ -16,6 +16,7 @@ if ! command -v gh >/dev/null 2>&1; then
   exit 127
 fi
 
+# Query PR draft status to prevent silent workflow failures on draft PRs (PAN-7783)
 is_draft="$(gh pr view "$pr_number" --json isDraft --jq '.isDraft')"
 
 has_label() {
