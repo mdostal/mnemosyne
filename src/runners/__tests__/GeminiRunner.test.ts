@@ -28,6 +28,12 @@ describe('GeminiRunner', () => {
     expect(runner.priority).toBe(3);
   });
 
+  it('returns unavailable when no Gemini credentials are configured', async () => {
+    const runner = new GeminiRunner({ env: {}, fetch: mockFetch(validPlan) });
+
+    await expect(runner.isAvailable()).resolves.toBe(false);
+  });
+
   it('calls Google Gemini generateContent with gemini-1.5-pro model', async () => {
     const fetchMock = mockFetch(validPlan);
     const runner = new GeminiRunner({ env: { GOOGLE_API_KEY: 'test-key' }, fetch: fetchMock });
