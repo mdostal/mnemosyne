@@ -1,8 +1,13 @@
 # Mnemosyne
 
+[![CI](https://github.com/mdostal/mnemosyne/actions/workflows/ci.yml/badge.svg)](https://github.com/mdostal/mnemosyne/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-e0a72e.svg)](./LICENSE)
+[![Pantheon](https://img.shields.io/badge/pantheon-memory%20god-1c1814.svg)](https://github.com/mdostal/pantheon-v2)
+[![Docs](https://img.shields.io/badge/docs-mdostal.github.io%2Fmnemosyne-e0a72e.svg)](https://mdostal.github.io/mnemosyne/)
+
 **The Pantheon's Memory god** — one unified layer that *writes and recalls* across every memory scope the swarm has, so **"memory over find"** becomes the default retrieval path for every agent instead of `grep`/`find`.
 
-Named for the Greek titaness of memory.
+Named for the Greek titaness of memory. Site + diagrams: **[mdostal.github.io/mnemosyne](https://mdostal.github.io/mnemosyne/)**.
 
 ## What & why
 
@@ -127,9 +132,19 @@ so it does not require live Qdrant access.
 
 ## Read next
 
+- **[`docs/architecture.md`](./docs/architecture.md)** — component + request-flow diagrams, the layer
+  stack, and the two running services.
+- **[`docs/vision.md`](./docs/vision.md)** — current state, near-term goals, and the long-term
+  pluggable-backend / A-B-tested / metrics-driven vision.
 - **[`idea-brief.md`](./idea-brief.md)** — the full brief: the layer stack, the unified recall/write
   API, memory-over-find, continuous indexing, viewable in Consus/Janus, pluggable backends, and how
   it builds on the existing Qdrant + Obsidian setup.
 - **[`hooks/README.md`](./hooks/README.md)** — the v1 hook contract, prompt-cache layout, runner-neutral
   bundle shape, env knobs, and proof commands.
 - `hive.config.yaml` — Hive workflow config for headless planning.
+
+## Support
+
+Mnemosyne is free and open source (MIT). If it saves your swarm tokens,
+consider [sponsoring the work](https://github.com/sponsors/mdostal) or
+contributing — see **[CONTRIBUTING.md](./CONTRIBUTING.md)**.

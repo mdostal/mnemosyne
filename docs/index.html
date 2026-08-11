@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mnemosyne — the Pantheon's Memory god</title>
+<meta name="description" content="Mnemosyne unifies every memory scope the Pantheon swarm has behind one recall/remember API, so memory-over-find becomes the default retrieval path.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%A0%3C/text%3E%3C/svg%3E">
+<style>
+  :root{
+    --bg:#0d0b08;
+    --bg-raised:#161310;
+    --bg-card:#1c1814;
+    --border:#332c22;
+    --amber:#e0a72e;
+    --amber-bright:#f5c451;
+    --text:#ede6d8;
+    --text-dim:#a89c87;
+    --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--text);
+    font-family:var(--sans);
+    line-height:1.6;
+  }
+  a{color:var(--amber-bright)}
+  a:hover{color:#fff}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+
+  nav{
+    position:sticky;top:0;z-index:10;
+    background:rgba(13,11,8,.92);
+    backdrop-filter:blur(6px);
+    border-bottom:1px solid var(--border);
+  }
+  nav .wrap{display:flex;align-items:center;justify-content:space-between;height:64px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:.02em;color:var(--text);text-decoration:none}
+  .brand .mark{color:var(--amber-bright);font-size:1.3em}
+  nav .links{display:flex;gap:24px;font-size:.92rem}
+  nav .links a{color:var(--text-dim);text-decoration:none}
+  nav .links a:hover{color:var(--amber-bright)}
+  .gh-cta{
+    border:1px solid var(--amber);
+    color:var(--amber-bright) !important;
+    padding:6px 14px;
+    border-radius:6px;
+  }
+
+  header.hero{
+    padding:96px 0 72px;
+    text-align:center;
+    background:
+      radial-gradient(ellipse 60% 50% at 50% -10%, rgba(224,167,46,.14), transparent 60%);
+  }
+  .eyebrow{
+    display:inline-block;
+    font-family:var(--mono);
+    font-size:.78rem;
+    letter-spacing:.12em;
+    text-transform:uppercase;
+    color:var(--amber);
+    border:1px solid var(--border);
+    background:var(--bg-raised);
+    padding:5px 12px;
+    border-radius:999px;
+    margin-bottom:22px;
+  }
+  h1{
+    font-size:clamp(2.2rem,5vw,3.4rem);
+    margin:0 0 18px;
+    letter-spacing:-.01em;
+  }
+  h1 .accent{color:var(--amber-bright)}
+  .tagline{
+    max-width:640px;margin:0 auto 32px;
+    font-size:1.15rem;color:var(--text-dim);
+  }
+  .hero-ctas{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-bottom:20px}
+  .btn{
+    display:inline-flex;align-items:center;gap:8px;
+    padding:11px 22px;border-radius:8px;
+    font-weight:600;font-size:.95rem;text-decoration:none;
+    border:1px solid transparent;
+  }
+  .btn-primary{background:var(--amber);color:#1a1305}
+  .btn-primary:hover{background:var(--amber-bright);color:#1a1305}
+  .btn-ghost{border-color:var(--border);color:var(--text) !important}
+  .btn-ghost:hover{border-color:var(--amber)}
+  .hero-note{font-family:var(--mono);font-size:.82rem;color:var(--text-dim)}
+
+  section{padding:64px 0;border-top:1px solid var(--border)}
+  .kicker{
+    font-family:var(--mono);color:var(--amber);
+    font-size:.8rem;letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px;
+  }
+  h2{font-size:1.9rem;margin:0 0 14px}
+  .lede{color:var(--text-dim);max-width:740px;margin-bottom:36px}
+
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  @media (max-width:760px){.grid3{grid-template-columns:1fr}.grid2{grid-template-columns:1fr}}
+
+  .card{
+    background:var(--bg-card);
+    border:1px solid var(--border);
+    border-radius:10px;
+    padding:22px;
+  }
+  .card .num{font-family:var(--mono);color:var(--amber);font-size:.85rem;margin-bottom:10px}
+  .card h3{margin:0 0 8px;font-size:1.05rem}
+  .card p{margin:0;color:var(--text-dim);font-size:.94rem}
+
+  .layer-stack{
+    font-family:var(--mono);
+    background:var(--bg-raised);
+    border:1px solid var(--border);
+    border-radius:10px;
+    padding:22px 26px;
+    font-size:.92rem;
+    color:var(--text-dim);
+    white-space:pre;
+    overflow-x:auto;
+  }
+  .layer-stack .step{color:var(--text)}
+  .layer-stack .step.meta{color:var(--amber-bright)}
+
+  .diagram{
+    background:var(--bg-raised);
+    border:1px solid var(--border);
+    border-radius:10px;
+    padding:24px;
+    overflow-x:auto;
+  }
+  .diagram .mermaid{display:flex;justify-content:center}
+
+  pre{
+    background:#0a0806;
+    border:1px solid var(--border);
+    border-radius:8px;
+    padding:16px 18px;
+    overflow-x:auto;
+    font-family:var(--mono);
+    font-size:.87rem;
+    color:#e8dcc4;
+  }
+  code{font-family:var(--mono)}
+  :not(pre) > code{
+    background:var(--bg-raised);
+    border:1px solid var(--border);
+    padding:1px 6px;border-radius:4px;font-size:.9em;
+  }
+
+  .role-list{list-style:none;margin:0;padding:0}
+  .role-list li{
+    display:flex;gap:14px;padding:14px 0;
+    border-bottom:1px solid var(--border);
+  }
+  .role-list li:last-child{border-bottom:none}
+  .role-list b{color:var(--amber-bright);min-width:140px;flex-shrink:0}
+  .role-list span{color:var(--text-dim)}
+
+  .support{
+    text-align:center;
+    background:radial-gradient(ellipse 70% 100% at 50% 100%, rgba(224,167,46,.12), transparent 70%);
+  }
+  .support .btn{margin:4px}
+
+  footer{
+    border-top:1px solid var(--border);
+    padding:36px 0;
+    text-align:center;
+    color:var(--text-dim);
+    font-size:.86rem;
+  }
+  footer a{color:var(--text-dim)}
+  footer a:hover{color:var(--amber-bright)}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="#top"><span class="mark">◈</span> Mnemosyne</a>
+    <div class="links">
+      <a href="#architecture">Architecture</a>
+      <a href="#quickstart">Quickstart</a>
+      <a href="#pantheon">Role in Pantheon</a>
+      <a href="#support">Support</a>
+      <a class="gh-cta" href="https://github.com/mdostal/mnemosyne">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap">
+    <span class="eyebrow">Pantheon · Memory god</span>
+    <h1>Memory <span class="accent">over</span> find.</h1>
+    <p class="tagline">
+      Mnemosyne is the Pantheon's memory god — one unified, provenance-tracked
+      layer that writes and recalls across every memory scope the swarm has,
+      so <code>recall()</code> becomes the default retrieval path instead of
+      <code>grep</code>/<code>find</code>.
+    </p>
+    <div class="hero-ctas">
+      <a class="btn btn-primary" href="https://github.com/mdostal/mnemosyne">View on GitHub</a>
+      <a class="btn btn-ghost" href="#quickstart">Quickstart →</a>
+    </div>
+    <div class="hero-note">gh repo clone mdostal/mnemosyne &amp;&amp; npm install &amp;&amp; npm test</div>
+  </div>
+</header>
+
+<section id="what">
+  <div class="wrap">
+    <div class="kicker">01 · What it does</div>
+    <h2>One contract for every memory scope</h2>
+    <p class="lede">
+      The swarm already runs real memory infrastructure — remote Qdrant Cloud
+      vector memory, a code/docs impact graph, and the hive's Obsidian
+      knowledge vault. Mnemosyne doesn't reinvent any of it — it unifies what
+      already runs behind a single, escalating, provenance-tracked API.
+    </p>
+    <div class="grid3">
+      <div class="card">
+        <div class="num">01</div>
+        <h3>recall(query, scope, intent)</h3>
+        <p>Walks the layer stack narrow↔broad, merges and ranks hits, and stamps full provenance on every result.</p>
+      </div>
+      <div class="card">
+        <div class="num">02</div>
+        <h3>remember(content, scope, layer?)</h3>
+        <p>Routes writes to the correct layer(s) and keeps vector + code-graph indexes coherent.</p>
+      </div>
+      <div class="card">
+        <div class="num">03</div>
+        <h3>Loud failure, always</h3>
+        <p>A degraded or unreachable layer is flagged explicitly in the response — never a silent fallback.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="layers">
+  <div class="wrap">
+    <div class="kicker">02 · The layer stack</div>
+    <h2>Meta, broad, to file, raw</h2>
+    <p class="lede">An ordered, escalating stack. Backends are pluggable per slot — Qdrant is the default vector backend, Obsidian the default meta store, but neither is a hard dependency.</p>
+    <div class="layer-stack"><span class="step meta">meta        (hive Obsidian vault — Consus knowledge home / canonical truth)</span>
+  → <span class="step">enterprise   (org-wide knowledge + standards, promoted from approved CBAs)</span>
+    → <span class="step">project    (per-project working memory, decisions, context)</span>
+      → <span class="step">code-graph   (typed impact graph: depends_on / cites / implements)</span>
+        → <span class="step">vector     (Qdrant Cloud — default backend, semantic recall)</span>
+          → <span class="step">file     (raw grep — loud-failure floor)</span></div>
+  </div>
+</section>
+
+<section id="architecture">
+  <div class="wrap">
+    <div class="kicker">03 · Architecture</div>
+    <h2>Component &amp; flow</h2>
+    <p class="lede">
+      Full diagrams (including the <code>recall()</code> sequence flow) live in
+      <a href="https://github.com/mdostal/mnemosyne/blob/main/docs/architecture.md">docs/architecture.md</a>.
+    </p>
+    <div class="diagram">
+      <pre class="mermaid">
+flowchart TB
+  subgraph pantheon["Pantheon gods (callers)"]
+    minerva["Minerva<br/>planner"]
+    argus["Argus<br/>metrics"]
+    swarm["swarm agents"]
+  end
+
+  subgraph mnemosyne["Mnemosyne — memory god"]
+    api["recall(query, scope, intent)<br/>remember(content, scope, layer?)"]
+    router["layer router + escalation<br/>(narrow to broad, merge + rank)"]
+    prov["provenance stamping<br/>(7 fields per hit)"]
+    idx["continuous indexing<br/>(Multica-native schedule)"]
+    api --> router --> prov
+  end
+
+  subgraph layers["Layer stack (pluggable slots)"]
+    meta["meta - Obsidian vault"]
+    ent["enterprise"]
+    proj["project"]
+    cg["code-graph"]
+    vec["vector - Qdrant Cloud"]
+    file["file - grep (loud floor)"]
+  end
+
+  minerva --> api
+  argus --> api
+  swarm --> api
+
+  router --> meta
+  router --> ent
+  router --> proj
+  router --> cg
+  router --> vec
+  router --> file
+
+  idx -.keeps fresh.-> vec
+  idx -.keeps fresh.-> cg
+  idx -.keeps fresh.-> meta
+
+  vec -->|wraps| sm[("swarm-memory<br/>+ Qdrant Cloud")]
+  cg -->|wraps| sm
+
+  api -.decision + metric record.-> argus
+
+  consus["Consus / Janus<br/>(read model)"] --> api
+      </pre>
+    </div>
+  </div>
+</section>
+
+<section id="quickstart">
+  <div class="wrap">
+    <div class="kicker">04 · Quickstart</div>
+    <h2>Clone, install, run the tests</h2>
+    <pre><code>gh repo clone mdostal/mnemosyne
+cd mnemosyne
+npm install
+
+npm test              # full suite
+npm run test:e2e      # Minerva-style end-to-end integration test
+npm start              # run the production recall/remember service (:8477)</code></pre>
+    <p class="lede" style="margin-top:20px">
+      See <a href="https://github.com/mdostal/mnemosyne#quickstart">README.md</a>
+      for the full command reference, <code>docs/http-api.md</code> for the
+      <code>MnemosyneClient</code> HTTP API, and <code>hooks/README.md</code> to
+      wire the pre-recall/post-remember hooks into an agent runner.
+    </p>
+  </div>
+</section>
+
+<section id="pantheon">
+  <div class="wrap">
+    <div class="kicker">05 · Role in Pantheon</div>
+    <h2>One god, one capability slot</h2>
+    <ul class="role-list">
+      <li><b>Host</b><span><a href="https://github.com/mdostal/pantheon-v2">pantheon-v2</a> — the core host that assembles gods behind shared contracts.</span></li>
+      <li><b>Substrate</b><span>Planned and executed on <a href="https://github.com/firefly-events/multica">Multica</a> with the <a href="https://firefly-events.github.io/plugin-hive/">plugin-hive</a> SDLC.</span></li>
+      <li><b>Callers</b><span><b>Minerva</b> (planner) and swarm agents are the primary <code>recall</code> callers.</span></li>
+      <li><b>Read model</b><span><b>Consus</b> / <b>Janus</b> provide the human view — browse layers, trace provenance, spot stale scopes.</span></li>
+      <li><b>Backend config</b><span><b>Vesta</b> owns which backend fills each layer slot.</span></li>
+      <li><b>Metrics</b><span><b>Argus</b> / <b>Metis</b> receive the decision + metric record from every recall/write.</span></li>
+      <li><b>Builds on</b><span><a href="https://github.com/mdostal/swarm-memory">swarm-memory</a> — Qdrant-backed semantic memory + code/docs impact graph, wrapped, not rewritten.</span></li>
+    </ul>
+  </div>
+</section>
+
+<section id="support" class="support">
+  <div class="wrap">
+    <div class="kicker">06 · Support the project</div>
+    <h2>Mnemosyne is free and open source</h2>
+    <p class="lede" style="margin-left:auto;margin-right:auto;text-align:center">
+      MIT licensed. If Mnemosyne saves your swarm tokens, consider sponsoring
+      the work or contributing a layer adapter, a doc, or a bug report.
+    </p>
+    <div>
+      <a class="btn btn-primary" href="https://github.com/sponsors/mdostal">♡ Sponsor on GitHub</a>
+      <a class="btn btn-ghost" href="https://github.com/mdostal/mnemosyne/blob/main/CONTRIBUTING.md">Contribute</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>
+      <a href="https://github.com/mdostal/mnemosyne">mdostal/mnemosyne</a> ·
+      MIT License ·
+      Part of the <a href="https://github.com/mdostal/pantheon-v2">Pantheon</a>
+    </p>
+  </div>
+</footer>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: "dark",
+    themeVariables: {
+      background: "#161310",
+      primaryColor: "#1c1814",
+      primaryTextColor: "#ede6d8",
+      primaryBorderColor: "#e0a72e",
+      lineColor: "#a89c87",
+      secondaryColor: "#161310",
+      tertiaryColor: "#0d0b08"
+    }
+  });
+</script>
+</body>
+</html>
