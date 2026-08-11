@@ -47,6 +47,16 @@ export function estimateTokens(text) {
   return Math.ceil(String(text || "").length / 4);
 }
 
+function hitSortKey(hit) {
+  return [
+    hit.source || "",
+    hit.location || "",
+    hit.full_path || "",
+    String(hit.chunk_index ?? ""),
+    Array.isArray(hit.chunk_span) ? hit.chunk_span.join("-") : "",
+  ].join("\u0000");
+}
+
 function trimExcerpt(text) {
   if (!text) return "";
   const oneLine = String(text).replace(/\s+/g, " ").trim();
@@ -111,7 +121,9 @@ export function flattenHits(recallResult) {
     const ak = a.match_type === "keyword" ? 1 : 0;
     const bk = b.match_type === "keyword" ? 1 : 0;
     if (ak !== bk) return bk - ak; // keyword-exact first
-    return (b.score || 0) - (a.score || 0);
+    const scoreDiff = (b.score || 0) - (a.score || 0);
+    if (scoreDiff !== 0) return scoreDiff;
+    return hitSortKey(a).localeCompare(hitSortKey(b));
   });
   return out;
 }
@@ -155,14 +167,14 @@ function fillSegment(segmentHits, segmentBudget, max, shown) {
 
 function formatPriorMemoryDelta(recallResult, meta = {}) {
   const hits = flattenHits(recallResult);
-  const max = Number(meta.max || DEFAULT_MAX_HITS);
-  const tokenBudget = Number(meta.tokenBudget || DEFAULT_MEMORY_TOKEN_BUDGET);
+  const max = Number(meta.max ?? DEFAULT_MAX_HITS);
+  const tokenBudget = Number(meta.tokenBudget ?? DEFAULT_MEMORY_TOKEN_BUDGET);
   // Reserve a high-level (meta+enterprise) sub-budget so a handful of noisy
   // low-level (project/vector/file) hits never crowd it out entirely — but
   // cap it at that reservation so a busy meta layer can't consume the whole
   // budget either, leaving nothing for lower layers.
   const highLevelBudget = Math.min(
-    Number(meta.highLevelTokenBudget || DEFAULT_HIGH_LEVEL_TOKEN_BUDGET),
+    Number(meta.highLevelTokenBudget ?? DEFAULT_HIGH_LEVEL_TOKEN_BUDGET),
     tokenBudget
   );
 
@@ -227,8 +239,8 @@ export function buildMemoryBundle(recallResult, meta = {}) {
       delta_tokens_estimate: estimateTokens(memoryDelta),
       total_tokens_estimate: estimateTokens(text),
       total_hits: recallResult.total_hits ?? 0,
-      shown_hits: flattenHits(recallResult).slice(0, Number(meta.max || DEFAULT_MAX_HITS)).length,
-      token_budget: Number(meta.tokenBudget || DEFAULT_MEMORY_TOKEN_BUDGET),
+      shown_hits: flattenHits(recallResult).slice(0, Number(meta.max ?? DEFAULT_MAX_HITS)).length,
+      token_budget: Number(meta.tokenBudget ?? DEFAULT_MEMORY_TOKEN_BUDGET),
       high_level_tokens_estimate: highLevelTokens,
     },
   };
