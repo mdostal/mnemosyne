@@ -21,6 +21,7 @@ Every memory op runs over the live Qdrant corpus; nothing is stubbed or mocked.
 | `GET /`         | —                                                           | service info + endpoints (JSON) for any caller **except** one sending `Accept: text/html` (a browser), which gets a `302` to `GET /ui` instead — see below |
 | `GET /ui`, `GET /ui/*` | —                                                      | standalone UI shell (static HTML/CSS/vanilla JS, zero-dep, no build step) — liveliness, read-only settings, lanes (scopes), and search panels with a manual refresh button |
 | `GET /health`   | —                                                           | engine self-test (`swarm-memory check`): Qdrant + embedder + graph |
+| `GET /healthz`  | —                                                           | liveness alias — always 200 if the process is up, so external checkers (Salus/Argus) don't 404 |
 | `GET /scopes`   | —                                                           | scopes → collections + escalation ladders |
 | `GET /config`   | —                                                           | read-only effective config: `qdrant_url`, `embedder` (provider/model), `default_scope`, `fallback_collection`, `scopes`, `ladder` — thin wrapper over `engine.mjs`'s cached `scopeMap()` |
 | `POST /recall`  | `{query, scope?, hits?, escalate?, min_score?, radius?}`    | ranked hits **with full provenance** (layer/collection, file, chunk span, embedder, retrieved_at) |
@@ -31,20 +32,48 @@ Every memory op runs over the live Qdrant corpus; nothing is stubbed or mocked.
 | `GET /graph/edges` | query params: `node?`                                    | list edges, or only those touching `node` when given (`swarm-memory graph edges [node]`) |
 | `GET /graph/impact/:node` | query params: `depth?`                             | reverse closure: what is affected if `:node` changes (`swarm-memory graph impact NODE`) — unknown node returns `[]`, not an error |
 | `GET /graph/deps/:node` | query params: `depth?`                               | forward closure: what `:node` depends on (`swarm-memory graph deps NODE`) — unknown node returns `[]`, not an error |
-| `POST /index`   | `{collection, paths: [...]}`                                 | Reindex: `swarm-memory index <collection> <paths...>` (default pruning, live Qdrant write) — see "Operations" below |
+| `POST /index`   | `{collection, paths: [...]}`                                 | **Targeted** reindex, operator-selected: `swarm-memory index <collection> <paths...>` (default pruning, live Qdrant write, synchronous) — see "Operations" below. Distinct from `POST /reindex` below — see "Two reindex paths" |
 | `POST /cache/refresh` | —                                                       | Refresh config cache: clears only `engine.mjs`'s in-memory `_scopeMap` — see "Operations" below |
+| `POST /reindex` | `{scope, directory?}`                                        | **Bulk** (re)index, scope-wide: scans `directory` (default: service's cwd) for `.ts`/`.md`/`.yaml` files and indexes each into `scope`'s collection. Returns `202 {status: "started", scope, directory}` **immediately** — the run itself continues in the background and its outcome (`files_indexed`/`files_scanned`/`errors`) is logged, not returned synchronously. Distinct from `POST /index` above — see "Two reindex paths" |
 
-**`GET /` routing:** no existing consumer (`hooks/lib/mnemo-client.mjs`, `test/smoke.mjs`)
-calls the bare `GET /` path, and Node's `fetch()` sends `Accept: */*` when the
-caller doesn't set one — so the JSON info blob remains the default response for
-every programmatic caller. Only a request whose `Accept` header contains
-`text/html` (i.e. an actual browser navigation) gets redirected to `/ui`. This
-is a non-breaking addition, verified against the two real current consumers,
-not assumed.
+**`GET /` routing:** no existing consumer (`hooks/lib/mnemo-client.mjs`, `test/smoke.mjs`,
+`lib/mnemosyne/client.ts`) calls the bare `GET /` path, and Node's `fetch()`
+sends `Accept: */*` when the caller doesn't set one — so the JSON info blob
+remains the default response for every programmatic caller. Only a request
+whose `Accept` header contains `text/html` (i.e. an actual browser
+navigation) gets redirected to `/ui`. This is a non-breaking addition,
+verified against real current consumers, not assumed.
+
+**Two reindex paths, deliberately kept distinct:** `POST /index` is the
+`/ui` Operations panel's targeted action — operator picks one collection and
+specific path(s), runs synchronously, returns the CLI's real chunk-count
+output. `POST /reindex` is the bulk/scope-wide action — used for initial
+index builds or recovering a stale index across a whole directory, runs
+async (returns `202` immediately, logs its own outcome). Both wrap
+`swarm-memory index` with default pruning; neither wipes a collection. Do
+not collapse these into one endpoint — they serve different operator intents
+(surgical vs bulk) and different callers (`/ui` vs `bin/mnemosyne reindex`).
 
 `recall` returns the engine's native `--json` shape (`total_hits`, `scopes[].hits[]`
 with `provenance`). `scope` defaults to the engine default (`top`) for recall and
 to `personal` for remember.
+
+### Bulk reindex
+
+For initial index builds or recovering a stale index — e.g. after adding a new
+scope's directory, or after the Qdrant collection has drifted from disk.
+Indexing is append-only and idempotent (`swarm-memory index` upserts/dedupes
+by content), so a reindex is always safe to run more than once or retry after
+a partial failure — a bad file is skipped and reported in `errors`, it does
+not abort the run.
+
+```bash
+# via the CLI (POSTs to a running service and prints the {status,...} body):
+MNEMOSYNE_URL=http://127.0.0.1:8477 bin/mnemosyne reindex project --dir /path/to/project
+
+# via the HTTP API directly:
+curl -sX POST localhost:8477/reindex -d '{"scope":"project","directory":"/path/to/project"}'
+```
 
 ## Run
 
@@ -219,13 +248,18 @@ drive this standalone instance directly** — no Pantheon host, no L2 plugin
 lifecycle required. It's built on `bin/mnemosyne-skill-helper.mjs`, a small
 helper that:
 
-1. **Checks `GET /health`** on the configured `PORT` (default `8477`) with a
-   short timeout. If already healthy, it does **not** spawn anything — no
-   second instance, no second port-bind attempt.
+1. **Checks `GET /healthz`** (liveness alias — no CLI shell-out) on the
+   configured `PORT` (default `8477`) with a short timeout. If already alive,
+   it does **not** spawn anything — no second instance, no second port-bind
+   attempt. Deliberately checks `/healthz`, not the deeper `/health`: the
+   latter now runs a live `swarm-memory check` plus drift reconciliation and
+   can legitimately take 30s+ against real Qdrant/embedder infra, which
+   would make a liveness probe unreliable.
 2. **If not running**, spawns `bin/mnemosyne` detached (matching the
    supervised-run invocation documented above: `nohup env PORT=... node
-   src/server.mjs > <logfile> 2>&1 &`) and polls `GET /health` until it goes
-   green, failing loudly (not silently) if it never comes up.
+   src/server.mjs > <logfile> 2>&1 &`) and polls the deeper `GET /health`
+   until it goes green (per-attempt and overall timeouts sized for that
+   endpoint's real cost), failing loudly (not silently) if it never comes up.
 3. **Exposes `recall`/`remember`/`grep`/`reindex`/`graph-*` as thin
    pass-throughs** to the corresponding HTTP routes above — same request
    shape, same response shape, no new business logic. The helper never
@@ -248,6 +282,25 @@ which are `UserPromptSubmit`/`Stop` hooks meant to be wired into *other*
 directly, inside this repo, by an operator talking to Mnemosyne by hand.
 See `test/skill-harness.mjs` for full coverage (not-running-then-start,
 already-running-skip-start, and pass-through correctness for every action).
+
+## Minerva / library integration
+
+`lib/mnemosyne/` is a separate, typed client surface (`MnemosyneClient`,
+layer adapters, interfaces/schema) consumed in-process by other Pantheon
+gods — Minerva's decision/memory integration (`lib/minerva/`) is the real,
+working example. This is a different consumption path than the HTTP API
+above: gods that can share a Node/TS process import `MnemosyneClient`
+directly; gods that can't (or that are calling from outside this process,
+like the standalone `/ui` and the Claude Code skill harness) use the HTTP
+API. Both paths ultimately call through the same `src/engine.mjs`.
+
+Minerva-style client integration test (headless — imports `MnemosyneClient`,
+checks vector provenance and file fallback, starts the client HTTP API, and
+verifies `POST /recall` matches the library result):
+
+```bash
+npm run test:e2e
+```
 
 ## Port / route
 

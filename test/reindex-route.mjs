@@ -55,24 +55,27 @@ async function waitForServer(url, timeoutMs = 8000) {
   return false;
 }
 
-// --- source-level: reindex()'s own CLI-argv construction ---------------------
-// Proves, from the actual code (not prose), that reindex() builds exactly
+// --- source-level: reindexPaths()'s own CLI-argv construction ---------------
+// Proves, from the actual code (not prose), that reindexPaths() (the
+// targeted POST /index action — renamed from reindex() when the
+// mnemosyne-foundation merge introduced a separate bulk reindex(scope, opts)
+// for POST /reindex; see SERVICE.md's "Two reindex paths") builds exactly
 // `["index", collection, ...paths]` — no --no-prune (that's remember()'s
-// flag, for its own pure-additive note write, never reindex()'s general
+// flag, for its own pure-additive note write, never reindexPaths()'s general
 // path) and no destructive verb of any kind.
 {
   const engineSrc = await readFile(ENGINE_PATH, "utf8");
-  const fnStart = engineSrc.indexOf("export async function reindex(");
-  ok(fnStart !== -1, "engine.mjs exports a reindex() function");
+  const fnStart = engineSrc.indexOf("export async function reindexPaths(");
+  ok(fnStart !== -1, "engine.mjs exports a reindexPaths() function");
   const fnEnd = engineSrc.indexOf("\nexport ", fnStart + 10);
   const reindexSrc = engineSrc.slice(fnStart, fnEnd === -1 ? undefined : fnEnd);
 
   ok(/\[\s*["'`]index["'`]\s*,\s*String\(collection\)\s*,\s*\.\.\.pathList\s*\]/.test(reindexSrc),
-    "reindex() constructs args as exactly [\"index\", collection, ...paths] (verified against actual source text)");
+    "reindexPaths() constructs args as exactly [\"index\", collection, ...paths] (verified against actual source text)");
   ok(!/--no-prune/.test(reindexSrc),
-    "reindex() never passes --no-prune (default CLI pruning behavior only)");
+    "reindexPaths() never passes --no-prune (default CLI pruning behavior only)");
   ok(!/["'`](delete|remove|drop|wipe)["'`]/i.test(reindexSrc),
-    "reindex() never references a delete/remove/drop/wipe verb");
+    "reindexPaths() never references a delete/remove/drop/wipe verb");
 
   // remember()'s own --no-prune usage is the one legitimate place that flag
   // appears anywhere in engine.mjs — confirm it's isolated to remember(),
@@ -353,9 +356,14 @@ async function waitForServer(url, timeoutMs = 8000) {
   // 3) engine.mjs's ONLY two argv-array constructions that start with the
   //    "index" verb are remember()'s and reindex()'s — no third site, no
   //    variant that could smuggle in a wipe under the same verb.
+  // 3 legitimate call sites as of the mnemosyne-foundation merge: remember()
+  // (additive, --no-prune), reindexPaths() (targeted, POST /index, default
+  // pruning), and reindex() (bulk, POST /reindex, default pruning, scans a
+  // whole directory). All three upsert/refresh via the same CLI verb — none
+  // deletes/wipes a collection. See SERVICE.md's "Two reindex paths".
   const indexArgvSites = [...engineSrc.matchAll(/\[\s*["'`]index["'`]/g)];
-  ok(indexArgvSites.length === 2,
-    `exactly 2 argv-array constructions start with "index" (remember() + reindex()) — found ${indexArgvSites.length}`);
+  ok(indexArgvSites.length === 3,
+    `exactly 3 argv-array constructions start with "index" (remember() + reindexPaths() + reindex()) — found ${indexArgvSites.length}`);
 
   // 4) resetScopeMapCache() (the "refresh"/"clear" action) touches only the
   //    in-process _scopeMap variable — no call to run()/execFile inside its

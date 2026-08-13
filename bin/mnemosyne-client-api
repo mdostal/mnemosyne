@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# mnemosyne-client-api — start the MnemosyneClient HTTP wrapper (:3141).
+# Usage: bin/mnemosyne-client-api                     # foreground
+#        MNEMOSYNE_PORT=3141 MNEMOSYNE_ROOT_DIR=. bin/mnemosyne-client-api
+set -euo pipefail
+export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
+exec node "$HERE/node_modules/.bin/tsx" "$HERE/lib/mnemosyne/server.ts"

@@ -93,7 +93,10 @@ function stripVolatile(obj) {
   let result;
   let threw = null;
   try {
-    result = await ensureRunning({ port: NOT_RUNNING_PORT, startTimeoutMs: 45_000 });
+    // 90s budget: real GET /health now runs a live swarm-memory check() +
+    // drift reconciliation against real Qdrant/embedder infra (~30s observed
+    // per attempt) — see bin/mnemosyne-skill-helper.mjs's deepHealthTimeoutMs.
+    result = await ensureRunning({ port: NOT_RUNNING_PORT, startTimeoutMs: 90_000 });
   } catch (e) {
     threw = e;
   }

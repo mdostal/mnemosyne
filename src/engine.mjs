@@ -7,12 +7,14 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { writeFile, mkdir, readFile, rename, unlink } from "node:fs/promises";
+import { writeFile, mkdir, readFile, rename, unlink, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 const execFileP = promisify(execFile);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // CLI binary — override with SWARM_MEMORY_BIN; otherwise resolve on PATH.
 export const CLI = process.env.SWARM_MEMORY_BIN || "swarm-memory";
@@ -36,6 +38,11 @@ const NOTES_DIR =
   path.join(homedir(), ".local", "share", "mnemosyne", "notes");
 
 const CLI_TIMEOUT_MS = Number(process.env.MNEMOSYNE_CLI_TIMEOUT_MS || 90_000);
+const HEALTH_TIMEOUT_MS = Number(process.env.MNEMOSYNE_HEALTH_TIMEOUT_MS || 30_000);
+const RECONCILE_TIMEOUT_MS = Number(process.env.MNEMOSYNE_RECONCILE_TIMEOUT_MS || 30_000);
+const RECONCILE_BIN =
+  process.env.MNEMOSYNE_RECONCILE_BIN ||
+  path.join(__dirname, "..", "bin", "mnemosyne-reconcile");
 
 // A generous env so the child CLI finds uv-installed tools + the qdrant key.
 // Built fresh on every call (not cached at module load) — same rationale as
@@ -49,13 +56,45 @@ function childEnv() {
   };
 }
 
-async function run(args, { timeout = CLI_TIMEOUT_MS } = {}) {
+export async function run(args, { timeout = CLI_TIMEOUT_MS } = {}) {
   const { stdout, stderr } = await execFileP(CLI, args, {
     timeout,
     maxBuffer: 32 * 1024 * 1024,
     env: childEnv(),
   });
   return { stdout, stderr };
+}
+
+function parseReconcileOutput(stdout) {
+  const parsed = JSON.parse(stdout);
+  const driftCount = Number(parsed.drift_count);
+  if (!Number.isFinite(driftCount)) {
+    throw new Error("reconcile output missing numeric drift_count");
+  }
+  return { drift_count: driftCount };
+}
+
+async function reconcileDrift() {
+  try {
+    const { stdout } = await execFileP(RECONCILE_BIN, ["--json"], {
+      timeout: RECONCILE_TIMEOUT_MS,
+      maxBuffer: 32 * 1024 * 1024,
+      env: childEnv(),
+    });
+    return parseReconcileOutput(stdout);
+  } catch (e) {
+    if (e.stdout) {
+      try {
+        return parseReconcileOutput(e.stdout);
+      } catch {
+        // Fall through to explicit null below.
+      }
+    }
+    return {
+      drift_count: null,
+      reconcile_error: String(e.message || e),
+    };
+  }
 }
 
 // Cache the effective config (from `swarm-memory config`) so `remember` can
@@ -94,13 +133,15 @@ export function resetScopeMapCache() {
 
 // health — run the engine self-test (Qdrant + embedder + graph reachability).
 export async function health() {
+  const last_check = new Date().toISOString();
+  const drift = await reconcileDrift();
   try {
-    const { stdout, stderr } = await run(["check"], { timeout: 30_000 });
+    const { stdout, stderr } = await run(["check"], { timeout: HEALTH_TIMEOUT_MS });
     const text = stdout + stderr;
     const ok = /result:\s*PASS/i.test(text);
-    return { ok, engine: "swarm-memory", detail: text.trim() };
+    return { ok, engine: "swarm-memory", detail: text.trim(), ...drift, last_check };
   } catch (e) {
-    return { ok: false, engine: "swarm-memory", error: String(e.message || e) };
+    return { ok: false, engine: "swarm-memory", error: String(e.message || e), ...drift, last_check };
   }
 }
 
@@ -123,8 +164,75 @@ export async function recall(query, scope, opts = {}) {
   if (opts.escalate) args.push("--escalate");
   if (opts.minScore != null) args.push("--min-score", String(opts.minScore));
   if (opts.radius != null) args.push("--radius", String(opts.radius));
-  const { stdout } = await run(args);
-  return JSON.parse(stdout);
+
+  let vectorResult;
+  let vectorError = null;
+  try {
+    const { stdout } = await run(args);
+    vectorResult = JSON.parse(stdout);
+    
+    // Decorate provenance
+    if (vectorResult.scopes) {
+      for (const s of vectorResult.scopes) {
+        if (s.hits) {
+          for (const h of s.hits) {
+            h.provenance = h.provenance || {};
+            h.provenance.layer = "vector";
+          }
+        }
+      }
+    }
+  } catch (e) {
+    vectorError = e;
+    console.error(`[mnemosyne] ERROR recall: vector layer unavailable: ${e.message}`);
+    vectorResult = { total_hits: 0, scopes: [] };
+  }
+
+  let recallResult = vectorResult;
+
+  // Escalation: vector -> file fallback on zero hits or error
+  if (vectorResult.total_hits === 0 || vectorError) {
+    if (!vectorError) {
+      console.log(`[mnemosyne] vector layer returned 0 hits for "${query}", falling back to file layer (grep)...`);
+    } else {
+      console.log(`[mnemosyne] escalating to file layer due to vector layer failure...`);
+    }
+    
+    try {
+      const fileResult = await grep(query, scope, opts);
+      fileResult.layers_attempted = ["vector", "file"];
+      
+      // Degraded marker if vector failed completely
+      if (vectorError) {
+        if (fileResult.scopes) {
+          for (const s of fileResult.scopes) {
+            if (s.hits) {
+              for (const h of s.hits) {
+                h.provenance = h.provenance || {};
+                h.provenance.degraded = true;
+              }
+            }
+          }
+        }
+      }
+      recallResult = fileResult;
+    } catch (fallbackErr) {
+      console.error(`[mnemosyne] ERROR recall: file layer fallback also failed: ${fallbackErr.message}`);
+      if (vectorError) throw vectorError; // throw original if both failed
+    }
+  }
+
+  recallResult.layers_attempted = recallResult.layers_attempted || ["vector"];
+
+  // Merge the code-graph layer after the vector/file recall path has selected
+  // its best available result.
+  const { CodeGraphLayer } = await import("./layers/code-graph.mjs");
+  const { mergeLayerResults } = await import("./merge.mjs");
+  const graphLayer = new CodeGraphLayer();
+  const graphHits = await graphLayer.recall(String(query));
+  const merged = mergeLayerResults(recallResult, graphHits);
+  merged.layers_attempted = [...recallResult.layers_attempted, "code-graph"];
+  return merged;
 }
 
 // remember(text, scope, {tag}) — write-back. Persists the note to a file, then
@@ -153,39 +261,74 @@ export async function remember(text, scope, opts = {}) {
   const header = `<!-- remembered via Mnemosyne @ ${new Date().toISOString()} scope=${useScope} -->\n`;
   await writeFile(file, header + String(text) + "\n", "utf8");
 
-  // Direct-mapped scope -> collection; index appends this one new file.
+  // Direct-mapped scope -> collection; index appends this one new file. The
+  // file above is already on disk and is kept regardless of what happens
+  // next — it is the recovery artifact for manual reconciliation if the
+  // Qdrant upsert below diverges from it.
   const args = ["index", collection, "--no-prune", file];
-  const { stdout, stderr } = await run(args);
-  const out = (stdout + stderr).trim();
+  let out;
+  try {
+    const { stdout, stderr } = await run(args);
+    out = (stdout + stderr).trim();
+  } catch (e) {
+    const detail = `${e.stdout || ""}${e.stderr || ""}`.trim() || e.message;
+    console.error(
+      `[mnemosyne] ERROR remember: swarm-memory index failed for scope=${useScope} file=${file}: ${detail}`
+    );
+    const err = new Error(
+      `write-through failed: index command errored, file kept at ${file} for recovery: ${detail}`
+    );
+    err.status = 500;
+    err.file = file;
+    throw err;
+  }
+
   const upserted = /upserted\s+(\d+)\s+chunks/i.exec(out);
+  const chunksUpserted = upserted ? Number(upserted[1]) : 0;
+  if (!(chunksUpserted > 0)) {
+    console.error(
+      `[mnemosyne] ERROR remember: swarm-memory index reported no upserted chunks for scope=${useScope} file=${file}: ${out || "(empty output)"}`
+    );
+    const err = new Error(
+      `write-through failed: Qdrant upsert did not confirm chunks_upserted, file kept at ${file} for recovery: ${out || "(empty output)"}`
+    );
+    err.status = 500;
+    err.file = file;
+    throw err;
+  }
+
   return {
     remembered: true,
     scope: useScope,
     collection,
     file,
-    chunks_upserted: upserted ? Number(upserted[1]) : null,
+    chunks_upserted: chunksUpserted,
     engine_output: out,
   };
 }
 
-// reindex(collection, paths) — s-05's general-purpose Reindex action, wrapping
-// `swarm-memory index <collection> <paths...>`. This is DELIBERATELY the CLI's
-// DEFAULT pruning behavior — --no-prune is NEVER passed here. That flag is
-// reserved for remember()'s pure-additive single-note-file writes above (a
-// freshly generated file has nothing to prune anyway). Default pruning, per
-// swarm_memory/indexer.py's index_paths(): for each indexed path, after
-// upserting its chunks, the CLI deletes points matching
-// `full_path == <that exact file>` AND `chunk_index >= <its new chunk
-// count>` — i.e. only the stale tail chunks of a file that shrank since its
-// last index, scoped strictly to that one file's own full_path. It is never
-// a collection-wide delete and never touches any file that wasn't passed in
-// `paths`. This is refresh/cleanup, not a wipe.
+// reindexPaths(collection, paths) — s-05's general-purpose targeted Reindex
+// action (POST /index), wrapping `swarm-memory index <collection>
+// <paths...>`. Named distinctly from reindex(scope, opts) below (POST
+// /reindex, the bulk scope-wide action) — same underlying CLI verb, two
+// different operator intents, see SERVICE.md's "Two reindex paths". This is
+// DELIBERATELY the CLI's DEFAULT pruning behavior — --no-prune is NEVER
+// passed here. That flag is reserved for remember()'s pure-additive
+// single-note-file writes above (a freshly generated file has nothing to
+// prune anyway). Default pruning, per swarm_memory/indexer.py's
+// index_paths(): for each indexed path, after upserting its chunks, the CLI
+// deletes points matching `full_path == <that exact file>` AND
+// `chunk_index >= <its new chunk count>` — i.e. only the stale tail chunks
+// of a file that shrank since its last index, scoped strictly to that one
+// file's own full_path. It is never a collection-wide delete and never
+// touches any file that wasn't passed in `paths`. This is refresh/cleanup,
+// not a wipe.
 //
 // Requires an explicit, operator-selected collection (from the s-02 lanes
 // list in the UI) and at least one path — no "reindex everything" / no
 // wildcard / no-target mode is supported. Both are validated (400) before
 // any subprocess is spawned.
-export async function reindex(collection, paths) {
+export async function reindexPaths(collection, paths) {
   if (!collection || !String(collection).trim()) {
     const err = new Error("collection is required");
     err.status = 400;
@@ -242,6 +385,17 @@ export async function grep(query, scope, opts = {}) {
   // grep --json returns a top-level array of {scope,collection,hits[]}.
   // Normalize to the recall shape ({total_hits, scopes[]}) so consumers merge cleanly.
   const scopesArr = JSON.parse(stdout);
+  
+  // Decorate provenance
+  for (const s of scopesArr) {
+    if (s.hits) {
+      for (const h of s.hits) {
+        h.provenance = h.provenance || {};
+        h.provenance.layer = "file";
+      }
+    }
+  }
+  
   const total = scopesArr.reduce((n, s) => n + (s.hits ? s.hits.length : 0), 0);
   return { query: String(query), total_hits: total, scopes: scopesArr, match_mode: "keyword" };
 }
@@ -455,4 +609,80 @@ export async function addLane(name, collection, ladder) {
   _scopeMap = null;
 
   return { added: true, name: String(name), collection: String(collection), ladder: ladderArr || null };
+}
+
+// --- reindex: bulk, scope-wide directory scan -------------------------------
+//
+// Distinct from reindexPaths(collection, paths) above (POST /index, the
+// operator-targeted action) — see SERVICE.md's "Two reindex paths". This is
+// the bulk action: for initial index builds or recovering a stale index
+// across a whole directory. Extensions + ignored directories to scan.
+const REINDEX_EXTENSIONS = new Set([".ts", ".md", ".yaml", ".yml"]);
+const REINDEX_IGNORED_DIRECTORIES = new Set([".git", "node_modules", "dist", "build", "coverage"]);
+
+async function* walkReindexable(directory) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  for (const entry of entries) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      if (!REINDEX_IGNORED_DIRECTORIES.has(entry.name)) {
+        yield* walkReindexable(entryPath);
+      }
+      continue;
+    }
+    if (entry.isFile() && REINDEX_EXTENSIONS.has(path.extname(entry.name))) {
+      yield entryPath;
+    }
+  }
+}
+
+// reindex(scope, {directory}) — scans `directory` (default cwd) for
+// .ts/.md/.yaml(.yml) files and indexes each one into the scope's Qdrant
+// collection, one file at a time (mirrors `remember`'s file-by-file
+// contract) so a single bad file does not abort the whole run. Indexing is
+// append-only and idempotent (swarm-memory upserts/dedupes by content), so a
+// reindex is always safe to retry in full after a partial failure — no
+// resume bookkeeping needed. Per-file failures are collected and returned,
+// never silently dropped.
+export async function reindex(scope, opts = {}) {
+  const m = await scopeMap();
+  const useScope = scope || m.default_scope;
+  const collection = m.scopes[useScope];
+  if (!collection) {
+    const err = new Error(
+      `unknown scope '${useScope}'. known: ${Object.keys(m.scopes).join(", ")}`
+    );
+    err.status = 400;
+    throw err;
+  }
+
+  const directory = opts.directory || process.cwd();
+  const files = [];
+  for await (const file of walkReindexable(directory)) {
+    files.push(file);
+  }
+
+  const errors = [];
+  let filesIndexed = 0;
+  for (const file of files) {
+    try {
+      await run(["index", collection, file]);
+      filesIndexed += 1;
+    } catch (e) {
+      const detail = `${e.stdout || ""}${e.stderr || ""}`.trim() || e.message;
+      console.error(
+        `[mnemosyne] ERROR reindex: swarm-memory index failed for scope=${useScope} file=${file}: ${detail}`
+      );
+      errors.push({ file, error: detail });
+    }
+  }
+
+  return {
+    scope: useScope,
+    collection,
+    directory,
+    files_scanned: files.length,
+    files_indexed: filesIndexed,
+    errors,
+  };
 }

@@ -60,10 +60,32 @@ export function uiUrl(port = DEFAULT_PORT) {
   return `${baseUrl(port)}/ui`;
 }
 
-// checkHealth — GET /health with a short timeout. Never throws; resolves
-// {ok:false, ...} on any network error/timeout/non-2xx/non-ok-body so
-// callers can cleanly decide "already running" vs "needs starting".
-export async function checkHealth(port = DEFAULT_PORT, { timeoutMs = 4000 } = {}) {
+// checkAlive — GET /healthz, the process-liveness alias: always 200 if the
+// process is up, no CLI shell-out (see SERVICE.md). Used for the fast
+// "is it already running" pre-spawn decision below — deliberately NOT
+// checkHealth(), because /health now runs a live swarm-memory check() PLUS
+// drift reconciliation and can legitimately take 30s+ against real
+// Qdrant/embedder infra. A liveness probe waiting on that would frequently
+// (and wrongly) conclude "not running" and spawn a duplicate instance.
+export async function checkAlive(port = DEFAULT_PORT, { timeoutMs = 2000 } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${baseUrl(port)}/healthz`, { signal: controller.signal });
+    const body = await res.json().catch(() => ({}));
+    return { ok: res.status === 200 && body.alive === true, status: res.status, body };
+  } catch (e) {
+    return { ok: false, error: String(e.message || e) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// checkHealth — GET /health (deep engine check: Qdrant + embedder + graph +
+// drift reconciliation). Can legitimately take 30s+ against real infra —
+// default timeout sized accordingly. Never throws; resolves {ok:false, ...}
+// on any network error/timeout/non-2xx/non-ok-body.
+export async function checkHealth(port = DEFAULT_PORT, { timeoutMs = 40_000 } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -91,11 +113,12 @@ export async function ensureRunning({
   port = DEFAULT_PORT,
   spawnFn = spawn,
   logFile = DEFAULT_LOG_FILE,
-  healthCheckTimeoutMs = 4000,
-  startTimeoutMs = 45_000,
+  healthCheckTimeoutMs = 2000, // pre-spawn liveness probe (checkAlive / /healthz) — fast, no CLI shell-out
+  deepHealthTimeoutMs = 40_000, // per-attempt deep health probe (checkHealth / /health) during the post-spawn poll
+  startTimeoutMs = 90_000, // overall budget for the post-spawn poll loop — must exceed deepHealthTimeoutMs with margin for at least one full attempt plus retry room
   pollIntervalMs = 300,
 } = {}) {
-  const initial = await checkHealth(port, { timeoutMs: healthCheckTimeoutMs });
+  const initial = await checkAlive(port, { timeoutMs: healthCheckTimeoutMs });
   if (initial.ok) {
     return { started: false, alreadyRunning: true, port, ui: uiUrl(port), health: initial };
   }
@@ -118,7 +141,7 @@ export async function ensureRunning({
   let last = initial;
   while (Date.now() - start < startTimeoutMs) {
     await new Promise((r) => setTimeout(r, pollIntervalMs));
-    last = await checkHealth(port, { timeoutMs: healthCheckTimeoutMs });
+    last = await checkHealth(port, { timeoutMs: deepHealthTimeoutMs });
     if (last.ok) {
       return { started: true, alreadyRunning: false, port, ui: uiUrl(port), health: last, pid: child.pid };
     }

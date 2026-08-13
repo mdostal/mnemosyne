@@ -8,6 +8,7 @@
 //                              302 to /ui (browser navigations — see below)
 //   GET  /ui, /ui/*        -> static standalone UI shell (zero-dep, no build step)
 //   GET  /health           -> engine self-test (Qdrant/embedder/graph)
+//   GET  /healthz          -> liveness alias (always 200 if the process is up)
 //   GET  /scopes           -> configured scopes + escalation ladders
 //   GET  /config           -> read-only effective config (qdrant_url, embedder, scopes)
 //   POST /recall  {query, scope?, hits?, escalate?, min_score?, radius?}
@@ -21,21 +22,27 @@
 //   GET  /graph/deps/:node   ?depth= -> forward closure: what :node depends on
 //                    -> READ-ONLY graph exploration. `graph add`/`graph remove` (the
 //                       graph's mutation verbs) are never wrapped or reachable here.
-//   POST /index   {collection, paths[]} -> `swarm-memory index <collection> <paths...>`,
-//                     CLI's DEFAULT pruning (never --no-prune). Requires an explicit
-//                     operator-selected collection + >=1 path; no reindex-everything mode.
+//   POST /index   {collection, paths[]} -> TARGETED reindex: `swarm-memory index
+//                     <collection> <paths...>`, CLI's DEFAULT pruning (never
+//                     --no-prune). Requires an explicit operator-selected collection
+//                     + >=1 path; no reindex-everything mode. Synchronous.
 //   POST /cache/refresh -> LOCAL-ONLY: clears engine.mjs's in-memory scopeMap cache.
 //                     Touches zero external state (not Qdrant, not config.toml, not
 //                     graph.sqlite) and spawns zero subprocesses. See "Refresh config
 //                     cache" in SERVICE.md — never confuse this with data deletion.
+//   POST /reindex {scope, directory?} -> BULK reindex: scans `directory` for
+//                     .ts/.md/.yaml files and indexes each into `scope`'s
+//                     collection. Async — returns 202 immediately. Distinct from
+//                     POST /index above — see SERVICE.md's "Two reindex paths".
 //
 // GET / content negotiation: no consumer in this repo (hooks/lib/mnemo-client.mjs,
-// test/smoke.mjs) depends on GET /'s bare path today, and Node's fetch() sends
-// `Accept: */*` when the caller doesn't set one — so the existing JSON info blob
-// stays the default response for any caller that doesn't explicitly say it wants
-// HTML. Only an Accept header containing "text/html" (real browsers always send
-// this) redirects to /ui. This preserves the JSON contract for every existing
-// and future programmatic caller with no route change required on their end.
+// test/smoke.mjs, lib/mnemosyne/client.ts) depends on GET /'s bare path today, and
+// Node's fetch() sends `Accept: */*` when the caller doesn't set one — so the
+// existing JSON info blob stays the default response for any caller that doesn't
+// explicitly say it wants HTML. Only an Accept header containing "text/html" (real
+// browsers always send this) redirects to /ui. This preserves the JSON contract for
+// every existing and future programmatic caller with no route change required on
+// their end.
 //
 // PORT env (default 8477).
 
@@ -55,6 +62,7 @@ import {
   graphEdges,
   graphImpact,
   graphDeps,
+  reindexPaths,
   reindex,
   resetScopeMapCache,
 } from "./engine.mjs";
@@ -150,6 +158,7 @@ const server = http.createServer(async (req, res) => {
         endpoints: {
           "GET /ui": "standalone UI shell (browser)",
           "GET /health": "engine self-test (Qdrant + embedder + graph)",
+          "GET /healthz": "liveness alias (always 200) for external checkers",
           "GET /scopes": "configured scopes + escalation ladders",
           "GET /config": "read-only effective config (qdrant_url, embedder, default_scope, fallback_collection)",
           "POST /recall": "{query, scope?, hits?, escalate?, min_score?, radius?} -> ranked hits w/ provenance",
@@ -161,8 +170,9 @@ const server = http.createServer(async (req, res) => {
           "GET /graph/edges": "?node= -> list edges, optionally touching `node` (READ-ONLY)",
           "GET /graph/impact/:node": "?depth= -> reverse closure: what's affected if :node changes",
           "GET /graph/deps/:node": "?depth= -> forward closure: what :node depends on",
-          "POST /index": "{collection, paths[]} -> swarm-memory index <collection> <paths...> (default pruning, never --no-prune)",
+          "POST /index": "{collection, paths[]} -> TARGETED: swarm-memory index <collection> <paths...> (default pruning, never --no-prune), synchronous",
           "POST /cache/refresh": "clears ONLY the in-memory config cache (local, zero subprocesses, zero external state)",
+          "POST /reindex": "{scope, directory?} -> BULK (re)index a directory; runs async, returns immediately",
         },
       });
     }
@@ -174,6 +184,14 @@ const server = http.createServer(async (req, res) => {
     if (route === "GET /health") {
       const h = await health();
       return send(res, h.ok ? 200 : 503, { ...SERVICE, ...h });
+    }
+
+    // Liveness alias: process-up check only, no CLI shell-out. Deliberately
+    // always 200 (never mirrors /health's 503) so external checkers (Salus,
+    // Argus) never 404 or page on a transient engine hiccup — deep engine
+    // health stays on /health.
+    if (route === "GET /healthz") {
+      return send(res, 200, { ...SERVICE, alive: true });
     }
 
     if (route === "GET /scopes") {
@@ -250,6 +268,12 @@ const server = http.createServer(async (req, res) => {
 
     if (route === "POST /remember") {
       const b = await readJson(req);
+      if (b.layer === "code-graph") {
+        const { CodeGraphLayer } = await import("./layers/code-graph.mjs");
+        const graph = new CodeGraphLayer();
+        const result = await graph.remember(b.src, b.predicate, b.dst);
+        return send(res, 200, { ...result, took_ms: Date.now() - t0 });
+      }
       const result = await remember(b.text, b.scope, { tag: b.tag });
       return send(res, 200, { ...result, took_ms: Date.now() - t0 });
     }
@@ -261,22 +285,50 @@ const server = http.createServer(async (req, res) => {
     }
 
     // --- Operations (s-05): Reindex + Refresh config cache ------------------
-    // TWO DISTINCT actions that must never be conflated:
-    //   POST /index         -> shells out to `swarm-memory index` (default
-    //                           pruning; live Qdrant Cloud write). Requires an
-    //                           explicit collection + >=1 path from the operator.
+    // THREE DISTINCT actions that must never be conflated:
+    //   POST /index         -> TARGETED: shells out to `swarm-memory index`
+    //                           for an operator-selected collection + >=1
+    //                           path (default pruning; live Qdrant Cloud
+    //                           write, synchronous).
+    //   POST /reindex        -> BULK: scans a whole directory into a scope's
+    //                           collection, async (202 + background run).
     //   POST /cache/refresh -> purely local: clears engine.mjs's in-memory
     //                           scopeMap cache only. No subprocess, no Qdrant,
     //                           no config.toml, no graph.sqlite. NOT a data
     //                           deletion of any kind.
-    // Neither route, nor any function either calls, ever wraps a Qdrant
-    // collection delete/wipe/drop — no such verb exists in the swarm-memory
-    // CLI and none is invented here. See SERVICE.md's hard guardrail.
+    // None of these routes, nor any function either calls, ever wraps a
+    // Qdrant collection delete/wipe/drop — no such verb exists in the
+    // swarm-memory CLI and none is invented here. See SERVICE.md's hard
+    // guardrail and "Two reindex paths".
 
     if (route === "POST /index") {
       const b = await readJson(req);
-      const result = await reindex(b.collection, b.paths);
+      const result = await reindexPaths(b.collection, b.paths);
       return send(res, 200, { ...result, took_ms: Date.now() - t0 });
+    }
+
+    if (route === "POST /reindex") {
+      const b = await readJson(req);
+      if (!b.scope || !String(b.scope).trim()) {
+        const err = new Error("scope is required");
+        err.status = 400;
+        throw err;
+      }
+      const scope = String(b.scope);
+      const directory = b.directory ? String(b.directory) : undefined;
+      // Fire-and-forget: reindex can take minutes, so the request returns
+      // immediately and the run continues (and logs its outcome) in the
+      // background — no progress tracking in slice-2 (MVP).
+      reindex(scope, { directory })
+        .then((result) => {
+          console.log(
+            `[mnemosyne] reindex complete scope=${scope} files_indexed=${result.files_indexed}/${result.files_scanned} errors=${result.errors.length}`
+          );
+        })
+        .catch((e) => {
+          console.error(`[mnemosyne] ERROR reindex: scope=${scope} failed: ${e.message}`);
+        });
+      return send(res, 202, { status: "started", scope, directory: directory || process.cwd() });
     }
 
     if (route === "POST /cache/refresh") {

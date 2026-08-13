@@ -2,8 +2,22 @@ node_modules/
 .DS_Store
 *.log
 
+config/*.local.yaml
+config/minerva.local.yaml
+
 # Hive ephemeral session/telemetry bookkeeping (not project state)
 .pHive/agent-complete/
 .pHive/interrupts/
 .pHive/metrics/
 .pHive/session-effort.txt
+
+# Hive epic allowlisting
+.pHive/epics/*
+!.pHive/epics/pantheon-memory-consistent-hooks/
+!.pHive/epics/pantheon-memory-consistent-hooks/**
+!.pHive/epics/ingest-a10ab2c1/
+!.pHive/epics/ingest-a10ab2c1/**
+!.pHive/epics/mnemosyne-foundation/
+!.pHive/epics/mnemosyne-foundation/**
+!.pHive/epics/mnemosyne-standalone-app/
+!.pHive/epics/mnemosyne-standalone-app/**

@@ -54,3 +54,13 @@ stories:
     title: Integrate Mnemosyne with first Pantheon god (validation)
     complexity: medium
     depends_on: [m-06-continuous-indexing]
+
+  - id: m-08-bulk-reindex-command
+    title: Bulk re-index command - idempotent full rebuild
+    complexity: high
+    depends_on: [m-06-continuous-indexing]
+
+  - id: m-09-external-chat-ingestion
+    title: External chat ingestion - Gemini + Claude exports
+    complexity: high
+    depends_on: [m-03-vector-layer-integration]
