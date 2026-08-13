@@ -112,6 +112,14 @@ async function main() {
       "GET /layers -> every entry has a boolean writable flag",
     );
 
+    // Runs its own separate server subprocess, so it's independent of this
+    // block's child/root cleanup — positioned here (before POST /recall
+    // below) for the same reason the GET /layers checks above are: POST
+    // /recall crashes this process on this machine (known, unrelated
+    // better-sqlite3/CodeGraphLayerAdapter native-binding issue), and
+    // anything after that crash never runs.
+    await testHiveMemoryLayerConfigurable();
+
     // POST /recall -> 200 with RecallResult JSON
     const recall = await j("POST", "/recall", { query: "target", scope: "project" });
     ok(recall.status === 200, `POST /recall -> 200 (got ${recall.status})`);
@@ -163,6 +171,70 @@ async function main() {
 
   console.log(fails ? `\n${fails} check(s) failed` : "\nall http-api checks passed");
   process.exit(fails ? 1 : 0);
+}
+
+// testHiveMemoryLayerConfigurable — regression test for a real bug found
+// during independent verification (2026-08-13): HiveMemoryLayerAdapter
+// self-registers into defaultRegistry() as a side effect of its own module
+// being imported (see HiveMemoryLayerAdapter.ts's bottom), but nothing in
+// the real consumer path (client.ts, and therefore this server.ts) imported
+// it — only test files and benchmarks/layer-ab-test.ts did, by importing
+// the adapter directly. That masked the gap completely: every unit test
+// passed, the benchmark worked, and yet a real running server process
+// couldn't actually resolve "hive-memory" via MNEMOSYNE_LAYERS — it would
+// throw "unknown layer 'hive-memory'" at construction time. Fixed by adding
+// a side-effect import in client.ts. This test spawns a REAL separate server
+// subprocess (not a direct in-process import) specifically so it can't be
+// silently satisfied the same way again.
+async function testHiveMemoryLayerConfigurable() {
+  const port = PORT + 1;
+  const base = `http://127.0.0.1:${port}`;
+  const child = spawn(TSX, [SERVER], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      MNEMOSYNE_PORT: String(port),
+      MNEMOSYNE_LAYERS: JSON.stringify({ layers: [{ name: "file" }, { name: "hive-memory" }] }),
+      SWARM_MEMORY_BIN: "/definitely/missing/swarm-memory",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  let serverOutput = "";
+  child.stdout.on("data", (c) => (serverOutput += c));
+  child.stderr.on("data", (c) => (serverOutput += c));
+
+  try {
+    const deadline = Date.now() + 15000;
+    let up = false;
+    while (Date.now() < deadline) {
+      try {
+        const res = await fetch(`${base}/health`);
+        if (res.status === 200 || res.status === 503) {
+          up = true;
+          break;
+        }
+      } catch {
+        // not up yet
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    ok(up, "MNEMOSYNE_LAYERS=[file,hive-memory] server started and is reachable");
+    if (!up) {
+      console.error(serverOutput);
+      throw new Error(`server never became reachable:\n${serverOutput}`);
+    }
+
+    const res = await fetch(`${base}/layers`);
+    const body = await res.json();
+    ok(res.status === 200, `GET /layers (configured) -> 200 (got ${res.status})`);
+    ok(
+      Array.isArray(body.layers) && body.layers.map((l) => l.layer).join(",") === "file,hive-memory",
+      `GET /layers (configured) -> [file,hive-memory] actually resolved in a real running process (got ${JSON.stringify(body.layers)})`,
+    );
+  } finally {
+    child.kill();
+  }
 }
 
 main().catch((error) => {

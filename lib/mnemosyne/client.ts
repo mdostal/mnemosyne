@@ -26,6 +26,14 @@ import { metrics as defaultMetrics, type Metrics } from '../../src/observability
 import type { LayerAdapter, RecallOptions } from './layers/LayerAdapter.js';
 import { defaultRegistry, LayerRegistry } from './layers/registry.js';
 import { resolveLayerStackConfig, type LayerStackConfig } from './layers/config.js';
+// Side-effect import: registers "hive-memory" into defaultRegistry() (see
+// HiveMemoryLayerAdapter.ts's bottom). Not part of the default layer stack
+// (config.ts's DEFAULT_LAYER_STACK is still [code-graph, vector, file]) --
+// this only makes the name resolvable so MNEMOSYNE_LAYERS / a config file
+// can actually opt into it. Without this import, defaultRegistry() never
+// learns about "hive-memory" in a real running process (only test files and
+// benchmarks/layer-ab-test.ts imported it directly, which masked this gap).
+import './layers/HiveMemoryLayerAdapter.js';
 import type {
   Content,
   Hit,
