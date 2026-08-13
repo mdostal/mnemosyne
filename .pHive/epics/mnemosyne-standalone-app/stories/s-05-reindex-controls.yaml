@@ -1,0 +1,118 @@
+id: s-05-reindex-controls
+epic: mnemosyne-standalone-app
+title: Reindex + local-cache-refresh controls
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [s-04-graph-view]
+
+description: |
+  Add an "Operations" panel to the /ui shell with two DISTINCT actions that
+  must never be conflated:
+
+  1. **Reindex** — POST /index, wrapping `swarm-memory index <collection>
+     <paths...>`. Requires the operator to explicitly pick a lane
+     (collection, from the s-02 lanes list) and one or more paths. No
+     "reindex everything" button with no target. Runs with default pruning
+     behavior (matches the CLI default — stale tail chunks of shrunk files
+     are cleaned up), NOT --no-prune (that flag is for engine.remember()'s
+     pure-additive note writes, not general reindexing). Show a
+     confirmation dialog before running (this shells out and can take real
+     time against the live Qdrant Cloud SSOT) and stream/poll progress
+     since `swarm-memory index` on a large path set may run long.
+
+  2. **Refresh local cache** — a NEW, purely-local action that does nothing
+     more than clear engine.mjs's in-memory `_scopeMap` cache (so the next
+     GET /scopes or GET /config call re-reads swarm-memory config fresh
+     instead of serving the cached copy). This is the entire, safe meaning
+     of "clear" in this UI. It touches zero external state: not Qdrant, not
+     config.toml, not the graph.sqlite. Label it clearly as "Refresh config
+     cache" in the UI, not "Clear," to avoid any operator confusion with
+     data deletion.
+
+  This story does NOT add, and must never add, any endpoint or UI action
+  that deletes/wipes/drops a Qdrant collection or any data therein — there
+  is no such verb in the swarm-memory CLI and none should be invented here.
+
+acceptance_criteria:
+  - "Given a lane and at least one path are selected, when Reindex is confirmed and run, then POST /index calls `swarm-memory index <collection> <paths>` with the selected values and reports the CLI's own success/chunk-count output back to the UI"
+  - "Given no lane or no path is selected, when the operator tries to run Reindex, then the action is disabled/rejected client-side and server-side (POST /index validates and 400s on missing collection or empty paths)"
+  - "Given the Refresh config cache action is triggered, when it completes, then a subsequent GET /config reflects any out-of-band config.toml change (proving the cache was actually cleared) — and Qdrant, config.toml, and graph.sqlite are all provably untouched by this action (test asserts no swarm-memory subprocess is spawned for this action)"
+  - "Given this story ships, when the full route table is reviewed, then no route or engine function exists that maps to collection deletion/wipe"
+
+steps:
+  - id: research
+    description: Confirm `swarm-memory index`'s exact stdout/stderr success and progress output shape (engine.remember() already parses an 'upserted N chunks' pattern — confirm this generalizes to multi-path index runs) so POST /index's response is accurate, not guessed.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests for: POST /index with valid collection+paths (asserts
+      the correct CLI args are passed, via a mocked/stubbed execFile boundary
+      consistent with how test/smoke.mjs or test/hooks.mjs stub external
+      calls); POST /index with missing collection or empty paths (400); the
+      refresh-cache action (asserts zero subprocess calls); and a
+      route-table scan test asserting no destructive CLI verb (graph
+      remove aside — that's out of scope per s-04) is reachable from any
+      route.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      Implement POST /index (engine.mjs reindex(collection, paths) wrapping
+      `swarm-memory index`), the cache-refresh action (a simple
+      resetScopeMapCache() export in engine.mjs), the corresponding
+      POST /cache/refresh route, and the Operations panel UI with the
+      confirmation dialog and clearly distinct labels for the two actions.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: |
+      This is the highest-risk story in the epic (existing-infrastructure
+      guardrail — "never wipe Qdrant collections"). Review specifically for:
+      no destructive verb reachable from any route; Reindex requires explicit
+      operator-selected targets (no wildcard/all-collections mode); the two
+      actions are unambiguously distinguishable in the UI copy.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-standalone-app.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: src/engine.mjs
+      purpose: "remember()'s `[\"index\", collection, \"--no-prune\", file]` call is the existing precedent for invoking `swarm-memory index` — reindex() follows the same run()-wrapper pattern but WITHOUT --no-prune and with operator-selected collection+paths instead of a single generated note file"
+
+files_to_modify:
+  - file: src/engine.mjs
+    change: "Add reindex(collection, paths) and resetScopeMapCache()"
+  - file: src/server.mjs
+    change: "Add POST /index and POST /cache/refresh"
+
+design_decisions:
+  - decision: "Two clearly separate, clearly labeled actions (Reindex vs Refresh config cache) rather than one 'Clear' button"
+    rationale: "Directly resolves the design discussion's flagged risk — the user's ask for 'clear/refresh/reindex' controls must not become a Qdrant-wipe surface; SERVICE.md's existing hard guardrail decides this, it isn't a new tradeoff to weigh"
+  - decision: "No 'reindex everything' / wildcard mode"
+    rationale: "Keeps every reindex action auditable and intentional against the live Qdrant Cloud SSOT"
+
+cross_cutting:
+  - concern: existing-infrastructure
+    action: "Reindex is additive/refresh-only (matches CLI's own default prune-of-stale-chunks behavior, never a drop); cache-refresh touches zero external state; reviewed explicitly for this at the review step"
+  - concern: documentation
+    action: "Document both actions in SERVICE.md, explicit about what each does and does NOT do (especially: does not wipe Qdrant)"
+  - concern: versioning
+    action: "This epic adds consumer-visible API surface (GET /config, GET /search, GET /graph/*, POST /lanes, POST /index, POST /cache/refresh) — bump package.json to 0.2.0 (minor) and add a CHANGELOG.md entry as the LAST commit on the epic branch, listing every new endpoint"
+
+risks:
+  - severity: high
+    description: "Any ambiguity between 'reindex' and 'wipe' in either the API design or UI copy directly violates SERVICE.md's hard guardrail"
+    mitigation: "Two distinct actions, distinct endpoints, distinct copy, explicit review-step focus, and a route-table scan test verifying no destructive verb is reachable"
+
+references:
+  - path: SERVICE.md
+    relevant_excerpt: |
+      - Wraps the existing engine — **no new store, no re-embed**. `remember` is
+        **additive** (`--no-prune`, upsert of a brand-new note file only); the Qdrant
+        collections (SSOT) are never wiped.

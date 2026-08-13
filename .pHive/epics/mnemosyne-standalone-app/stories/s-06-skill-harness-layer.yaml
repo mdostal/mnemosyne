@@ -1,0 +1,87 @@
+id: s-06-skill-harness-layer
+epic: mnemosyne-standalone-app
+title: Claude Code skill harness for standalone operation
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [s-05-reindex-controls]
+
+description: |
+  Ship a Claude Code skill (new top-level skill directory in this repo, e.g.
+  skills/mnemosyne-standalone/SKILL.md, distinct from hooks/ which are
+  UserPromptSubmit/Stop hooks for CONSUMER repos) that lets a bare Claude
+  Code session — no Pantheon host required — drive the standalone Mnemosyne
+  instance built in s-01..s-05:
+    - Check whether the service is already running on the configured PORT
+      (GET /health with a short timeout); if not, start it (spawn
+      `bin/mnemosyne` detached, matching SERVICE.md's documented supervised-run
+      pattern) and wait for health to go green before proceeding.
+    - Expose recall, remember, grep, reindex (POST /index), and graph query
+      (GET /graph/*) as skill actions — thin wrappers over the existing HTTP
+      API, no new business logic.
+    - Print the /ui URL so the operator can open the browser UI from the
+      skill's own output.
+
+  This is the "harness plugin interaction" piece from the original ask: it's
+  what makes the standalone instance usable by a Claude Code session directly,
+  independent of whether Pantheon's L2 plugin lifecycle is involved at all.
+
+acceptance_criteria:
+  - "Given the service is not running, when the skill is invoked, then it starts bin/mnemosyne and waits for GET /health to report ok before reporting ready"
+  - "Given the service is already running, when the skill is invoked, then it does NOT spawn a second instance (checks health first, skips start if already healthy)"
+  - "Given a recall/remember/grep/reindex/graph-query action is invoked through the skill, when it runs, then it calls the corresponding HTTP endpoint and returns the same data shape the API returns directly (no reformatting that loses information)"
+  - "Given the skill starts the service, when it reports readiness, then it includes the /ui URL in its output"
+
+steps:
+  - id: research
+    description: Confirm the exact skill file format/frontmatter this repo's Hive tooling expects (compare against how plugin-hive's own skills are structured, and check whether this repo should use skills/<name>/SKILL.md or a .claude/skills/ convention) before writing the skill.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests (test/skill-harness.mjs) covering the not-running-then-start path, the already-running-skip-start path, and pass-through correctness for each exposed action against a running test instance.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement the skill file plus a small supporting script (e.g. bin/mnemosyne-skill-helper.mjs) that the skill invokes for the start-check/start/health-wait logic and the action pass-throughs.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the skill never bypasses the HTTP API to shell to swarm-memory directly (it must go through Mnemosyne's own service, preserving the transport/engine split and the loud-failure/provenance contracts already enforced there).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-standalone-app.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: bin/mnemosyne
+      purpose: "Existing entrypoint the skill spawns when the service isn't already running"
+    - path: SERVICE.md
+      purpose: "Documents the exact supervised-run invocation (`nohup env PORT=8477 node src/server.mjs > ... &`) the skill's start logic should match"
+
+files_to_modify:
+  - file: skills/mnemosyne-standalone/SKILL.md
+    change: "New skill definition"
+  - file: bin/mnemosyne-skill-helper.mjs
+    change: "New helper script: health-check, start-if-needed, action pass-throughs"
+
+design_decisions:
+  - decision: "Skill calls Mnemosyne's own HTTP API, never shells to swarm-memory directly"
+    rationale: "Preserves the existing transport/engine split and every guardrail already enforced in engine.mjs (loud failure, provenance, no-wipe) — a skill that bypasses the API would silently reopen every risk this epic just closed off in s-02/s-05"
+
+cross_cutting:
+  - concern: documentation
+    action: "Add a section to SERVICE.md (or a new HARNESS.md) documenting the skill, its actions, and how to invoke it from a bare Claude Code session"
+
+risks:
+  - severity: medium
+    description: "If the skill's start-check races with a manually-started instance, two processes could try to bind the same PORT"
+    mitigation: "Health-check-before-start is required by acceptance criteria; PORT bind failure surfaces as a clear error (Node's own EADDRINUSE) rather than being swallowed"
+
+references:
+  - path: SERVICE.md
+    relevant_excerpt: |
+      # supervised (survives the session):
+      nohup env PORT=8477 node src/server.mjs > ~/.local/share/mnemosyne/mnemosyne.log 2>&1 &

@@ -1,0 +1,83 @@
+id: s-03-collections-search
+epic: mnemosyne-standalone-app
+title: Collections search — recall/grep query box with provenance
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [s-02-lanes-browser]
+
+description: |
+  Add a "Search" panel to the /ui shell: a query box + scope selector +
+  mode toggle (semantic recall vs keyword grep) that calls the existing
+  POST /recall and POST /grep endpoints and renders results as a table with
+  full provenance (layer/collection, file, chunk span, embedder,
+  retrieved_at) — provenance is already returned by the engine, this story
+  is display-only, no new engine logic for search itself. Add a thin
+  GET /search convenience endpoint that the UI calls, which internally
+  dispatches to recall or grep based on a mode param — this avoids
+  duplicating query-building logic in client-side JS and keeps the UI's
+  fetch surface uniform (GET with query params) rather than mixing GET/POST
+  conventions across panels.
+
+acceptance_criteria:
+  - "Given a query is submitted in semantic mode, when results return, then each result row shows layer/collection, file, chunk span, embedder, and retrieved_at"
+  - "Given a query is submitted in keyword mode, when results return, then results come from grep (exact-string), not semantic recall — verify via a query that matches literally but not semantically"
+  - "Given a scope is selected, when the query runs, then results are scoped accordingly (same behavior as the existing POST /recall scope param)"
+  - "Given zero hits are returned, when this happens, then the UI shows an explicit empty-state, not a blank panel"
+  - "Given GET /search receives an invalid mode value, when this happens, then it returns 400 with a clear error, not a silent fallback to one mode"
+
+steps:
+  - id: research
+    description: Re-confirm the exact provenance field names returned by recall/grep (read engine.mjs's recall/grep return shapes and a sample response) so the UI table columns match exactly.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for GET /search covering semantic mode, keyword mode, scope param passthrough, empty-hits shape, and invalid-mode 400.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement GET /search in server.mjs (dispatch to existing recall()/grep() engine functions — no new engine.mjs logic) and the search panel UI (query box, scope dropdown sourced from GET /scopes, mode toggle, results table).
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm provenance-completeness — every field the engine returns is actually rendered, none silently dropped by the UI layer.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-standalone-app.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: src/engine.mjs
+      purpose: "recall() and grep() are the two functions GET /search dispatches to — both already return full provenance, reused as-is"
+    - path: src/server.mjs
+      purpose: "New GET /search route added alongside existing POST /recall, POST /grep"
+
+files_to_modify:
+  - file: src/server.mjs
+    change: "Add GET /search?q=&scope=&mode=recall|grep dispatching to existing engine.recall()/engine.grep()"
+
+design_decisions:
+  - decision: "GET /search is a thin dispatcher, not a new query engine — reuses recall()/grep() verbatim"
+    rationale: "Avoids duplicating the swarm-memory CLI invocation logic that already exists in engine.mjs; the UI's only new need is a uniform GET-based convenience wrapper"
+
+cross_cutting:
+  - concern: provenance-completeness
+    action: "Confirm all provenance fields (layer, source, chunk_span, index_timestamp, content_hash, embedder, retrieval_time) render in the results table; nulls shown explicitly, not omitted"
+  - concern: documentation
+    action: "Add GET /search to SERVICE.md's endpoint table"
+
+risks:
+  - severity: low
+    description: "Mode-dispatch bug could silently run the wrong search type"
+    mitigation: "test-spec explicitly asserts keyword-mode does NOT return semantic-only matches"
+
+references:
+  - path: src/engine.mjs
+    relevant_excerpt: |
+      export async function grep(query, scope, opts = {}) {
+        ...
+        return { query: String(query), total_hits: total, scopes: scopesArr, match_mode: "keyword" };
+      }
