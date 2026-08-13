@@ -58,6 +58,49 @@
         <p class="panel-status" id="add-lane-status"></p>
       </form>
     </section>
+
+    <section id="search" class="panel panel-wide">
+      <h2>Search</h2>
+      <form id="search-form">
+        <div class="form-row form-row-inline">
+          <label for="search-query" class="sr-only">Query</label>
+          <input id="search-query" name="q" type="text" required placeholder="query…" autocomplete="off" />
+
+          <label for="search-scope" class="sr-only">Scope</label>
+          <select id="search-scope" name="scope">
+            <option value="">(default scope)</option>
+          </select>
+
+          <span class="mode-toggle" role="radiogroup" aria-label="search mode">
+            <label><input type="radio" name="mode" value="recall" checked /> Semantic (recall)</label>
+            <label><input type="radio" name="mode" value="grep" /> Keyword (grep)</label>
+          </span>
+
+          <button type="submit">Search</button>
+        </div>
+        <p class="panel-status" id="search-status"></p>
+      </form>
+
+      <div id="search-results">
+        <table id="search-table" hidden>
+          <thead>
+            <tr>
+              <th>Layer / Collection</th>
+              <th>Match</th>
+              <th>Score</th>
+              <th>File</th>
+              <th>Chunk span</th>
+              <th>Embedder</th>
+              <th>Retrieved at</th>
+              <th>Snippet</th>
+              <th>Provenance</th>
+            </tr>
+          </thead>
+          <tbody id="search-tbody"></tbody>
+        </table>
+        <p id="search-empty-state" class="panel-status" hidden>No hits.</p>
+      </div>
+    </section>
   </main>
 
   <footer>

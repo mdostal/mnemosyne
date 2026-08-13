@@ -13,6 +13,8 @@
 //   POST /recall  {query, scope?, hits?, escalate?, min_score?, radius?}
 //   POST /remember {text, scope?, tag?}
 //   POST /lanes   {name, collection, ladder?} -> add-only config.toml write
+//   GET  /search  ?q=&scope=&mode=recall|grep&hits=&escalate=&min_score=&radius=
+//                    -> thin dispatcher to recall()/grep() for the UI's Search panel
 //
 // GET / content negotiation: no consumer in this repo (hooks/lib/mnemo-client.mjs,
 // test/smoke.mjs) depends on GET /'s bare path today, and Node's fetch() sends
@@ -127,6 +129,7 @@ const server = http.createServer(async (req, res) => {
           "POST /remember": "{text, scope?, tag?} -> write-back (index into scope collection)",
           "POST /grep": "{query, scope?, hits?, escalate?, radius?} -> KEYWORD hits (exact-string, no embedder)",
           "POST /lanes": "{name, collection, ladder?} -> add-only atomic write of a new scope to config.toml",
+          "GET /search": "?q=&scope=&mode=recall|grep&hits=&escalate=&min_score=&radius= -> dispatches to recall()/grep()",
         },
       });
     }
@@ -155,6 +158,36 @@ const server = http.createServer(async (req, res) => {
         scopes: m.scopes,
         ladder: m.ladder,
       });
+    }
+
+    if (route === "GET /search") {
+      // Thin GET-based dispatcher for the UI's Search panel: reuses
+      // recall()/grep() verbatim (no new query-building logic here) so the
+      // UI has one uniform GET fetch surface across a semantic/keyword
+      // toggle rather than mixing GET/POST conventions across panels.
+      const q = url.searchParams.get("q");
+      const scope = url.searchParams.get("scope") || undefined;
+      const modeParam = url.searchParams.get("mode");
+      const mode = modeParam == null || modeParam === "" ? "recall" : modeParam;
+      if (mode !== "recall" && mode !== "grep") {
+        const err = new Error(`invalid mode '${mode}' — mode must be 'recall' (semantic) or 'grep' (keyword)`);
+        err.status = 400;
+        throw err;
+      }
+      const hitsParam = url.searchParams.get("hits");
+      const radiusParam = url.searchParams.get("radius");
+      const escalateParam = url.searchParams.get("escalate");
+      const minScoreParam = url.searchParams.get("min_score");
+      const opts = {
+        hits: hitsParam != null ? Number(hitsParam) : undefined,
+        escalate: escalateParam === "true" || escalateParam === "1",
+        radius: radiusParam != null ? Number(radiusParam) : undefined,
+      };
+      const result =
+        mode === "recall"
+          ? await recall(q, scope, { ...opts, minScore: minScoreParam != null ? Number(minScoreParam) : undefined })
+          : await grep(q, scope, opts);
+      return send(res, 200, { ...result, mode, took_ms: Date.now() - t0 });
     }
 
     if (route === "POST /grep") {

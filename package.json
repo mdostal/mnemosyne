@@ -16,7 +16,8 @@
     "test:hooks": "node test/hooks.mjs",
     "test:ui": "node test/ui-shell.mjs",
     "test:add-lane": "node test/add-lane.mjs",
-    "test:lanes-route": "node test/lanes-route.mjs"
+    "test:lanes-route": "node test/lanes-route.mjs",
+    "test:search-route": "node test/search-route.mjs"
   },
   "dependencies": {}
 }

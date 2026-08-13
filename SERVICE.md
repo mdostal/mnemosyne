@@ -19,13 +19,14 @@ Every memory op runs over the live Qdrant corpus; nothing is stubbed or mocked.
 | Method / path   | Body                                                        | Returns |
 |-----------------|-------------------------------------------------------------|---------|
 | `GET /`         | —                                                           | service info + endpoints (JSON) for any caller **except** one sending `Accept: text/html` (a browser), which gets a `302` to `GET /ui` instead — see below |
-| `GET /ui`, `GET /ui/*` | —                                                      | standalone UI shell (static HTML/CSS/vanilla JS, zero-dep, no build step) — liveliness, read-only settings, and lanes (scopes) panels with a manual refresh button |
+| `GET /ui`, `GET /ui/*` | —                                                      | standalone UI shell (static HTML/CSS/vanilla JS, zero-dep, no build step) — liveliness, read-only settings, lanes (scopes), and search panels with a manual refresh button |
 | `GET /health`   | —                                                           | engine self-test (`swarm-memory check`): Qdrant + embedder + graph |
 | `GET /scopes`   | —                                                           | scopes → collections + escalation ladders |
 | `GET /config`   | —                                                           | read-only effective config: `qdrant_url`, `embedder` (provider/model), `default_scope`, `fallback_collection`, `scopes`, `ladder` — thin wrapper over `engine.mjs`'s cached `scopeMap()` |
 | `POST /recall`  | `{query, scope?, hits?, escalate?, min_score?, radius?}`    | ranked hits **with full provenance** (layer/collection, file, chunk span, embedder, retrieved_at) |
 | `POST /remember`| `{text, scope?, tag?}`                                       | write-back: persists a note + indexes (upsert, `--no-prune`) it into the scope's collection so it is immediately recallable |
 | `POST /lanes`   | `{name, collection, ladder?}`                                | **add-only** atomic write of a new `[scopes]`/`[ladder]` entry to `~/.config/swarm-memory/config.toml` — see "Lanes / add-lane" below |
+| `GET /search`   | query params: `q`, `scope?`, `mode?` (`recall`\|`grep`, default `recall`), `hits?`, `escalate?`, `min_score?`, `radius?` | thin dispatcher for the `/ui` Search panel — routes straight to `recall()`/`grep()` (no new query logic); invalid `mode` → `400` |
 
 **`GET /` routing:** no existing consumer (`hooks/lib/mnemo-client.mjs`, `test/smoke.mjs`)
 calls the bare `GET /` path, and Node's `fetch()` sends `Accept: */*` when the
@@ -85,6 +86,41 @@ file is touched. See `src/engine.mjs`'s `addLane()` and
 `test/add-lane.mjs` / `test/lanes-route.mjs` for the atomic-write logic and
 its test coverage (both run entirely against throwaway fixtures — never the
 real config file).
+
+## Search (GET /search)
+
+The `/ui` Search panel is a query box + scope selector + mode toggle
+(semantic **recall** vs keyword **grep**) over `GET /search`, a thin
+dispatcher that reuses `engine.mjs`'s existing `recall()`/`grep()` verbatim —
+no new query-building or CLI-invocation logic was added for this endpoint.
+
+`GET /search?q=<query>&scope=<scope>&mode=recall|grep&hits=&escalate=&min_score=&radius=`
+
+- `q` is required (`400` if missing/blank — delegated straight to
+  `recall()`/`grep()`'s own validation).
+- `mode` defaults to `recall` when omitted; an explicit value other than
+  `recall`/`grep` is rejected with `400` (never a silent fallback to one
+  mode).
+- `scope`, `hits`, `escalate`, `radius` pass straight through to whichever
+  engine function is dispatched to; `min_score` only applies to `mode=recall`
+  (grep has no relevance floor — it's a pure exact-string scroll, no
+  embedder call).
+- The response is the underlying engine function's native shape
+  (`{total_hits, scopes[]}`, each hit carrying full provenance) plus `mode`
+  and `took_ms`. `grep()`'s response additionally carries a top-level
+  `match_mode: "keyword"` field (its own normalization marker) that
+  `recall()`'s response never has — a code-level tell that `GET /search`
+  genuinely reached two different engine functions, not a single path
+  wearing two labels.
+
+Results render as a table with every field the engine returns (layer/
+collection, match type, score, file, chunk span, embedder, retrieved_at,
+plus a catch-all provenance column so no field is ever silently dropped —
+recall's and grep's provenance shapes differ slightly and both are rendered
+as-is). Zero hits render an explicit "No hits" empty state, not a blank
+panel. See `test/search-route.mjs` for full coverage, including a live-corpus
+example proving keyword mode is genuinely dispatching to grep and not just
+recall in disguise.
 
 ## Port / route
 

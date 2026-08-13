@@ -171,10 +171,155 @@ addLaneForm.addEventListener("submit", async (evt) => {
   }
 });
 
+// --- Search panel (s-03): query box + scope selector + mode toggle -> GET
+// /search (a thin dispatcher over the existing recall()/grep() engine
+// functions — see server.mjs). Renders full provenance, every field the
+// engine returns, none dropped.
+const searchForm = document.getElementById("search-form");
+const searchScopeSelect = document.getElementById("search-scope");
+const searchStatusEl = document.getElementById("search-status");
+const searchTableEl = document.getElementById("search-table");
+const searchTbodyEl = document.getElementById("search-tbody");
+const searchEmptyStateEl = document.getElementById("search-empty-state");
+
+// Populates the scope <select> from GET /scopes so it always reflects the
+// live lanes (including any just-added via the Lanes panel).
+async function loadSearchScopes() {
+  try {
+    const res = await fetch("/scopes");
+    if (!res.ok) return;
+    const body = await res.json();
+    const names = Object.keys(body.scopes || {}).sort();
+    const current = searchScopeSelect.value;
+    searchScopeSelect.textContent = "";
+    const defaultOpt = document.createElement("option");
+    defaultOpt.value = "";
+    defaultOpt.textContent = "(default scope)";
+    searchScopeSelect.appendChild(defaultOpt);
+    for (const name of names) {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name === body.default_scope ? `${name} (default)` : name;
+      searchScopeSelect.appendChild(opt);
+    }
+    if (names.includes(current)) searchScopeSelect.value = current;
+  } catch {
+    // Non-fatal — the search form still works with the engine's own default
+    // scope if this fails to populate.
+  }
+}
+
+function searchCell(text) {
+  const td = document.createElement("td");
+  td.textContent = text == null || text === "" ? "—" : String(text);
+  return td;
+}
+
+// Renders the hit's top-level `text` (the actual matched chunk content) —
+// truncated for the row, full text available via the title tooltip, so the
+// most important field for a search result is never silently dropped.
+function snippetCell(text) {
+  const td = document.createElement("td");
+  td.className = "snippet-cell";
+  if (text == null || text === "") {
+    td.textContent = "—";
+    return td;
+  }
+  const full = String(text);
+  td.textContent = full.length > 200 ? full.slice(0, 200) + "…" : full;
+  td.title = full;
+  return td;
+}
+
+// Renders EVERY key/value in a hit's provenance object, so no field the
+// engine returns is ever silently dropped (schema differs between
+// recall's and grep's provenance shape — this renders whichever is present).
+function provenanceCell(provenance) {
+  const td = document.createElement("td");
+  td.className = "provenance-cell";
+  if (!provenance || typeof provenance !== "object") {
+    td.textContent = "—";
+    return td;
+  }
+  const dl = document.createElement("dl");
+  for (const [key, value] of Object.entries(provenance)) {
+    const dt = document.createElement("dt");
+    dt.textContent = key;
+    const dd = document.createElement("dd");
+    dd.textContent = value == null || value === "" ? "(null)" : typeof value === "object" ? JSON.stringify(value) : String(value);
+    dl.appendChild(dt);
+    dl.appendChild(dd);
+  }
+  td.appendChild(dl);
+  return td;
+}
+
+function renderSearchResults(body) {
+  searchTbodyEl.textContent = "";
+  const scopesArr = Array.isArray(body.scopes) ? body.scopes : [];
+  const hits = scopesArr.flatMap((s) => (Array.isArray(s.hits) ? s.hits : []));
+
+  if (hits.length === 0) {
+    searchTableEl.hidden = true;
+    searchEmptyStateEl.hidden = false;
+    searchEmptyStateEl.textContent = `No hits for this query${body.mode ? ` (${body.mode} mode)` : ""}.`;
+    return;
+  }
+
+  searchEmptyStateEl.hidden = true;
+  searchTableEl.hidden = false;
+  for (const h of hits) {
+    const tr = document.createElement("tr");
+    const layer = h.collection || (h.provenance && h.provenance.collection);
+    tr.appendChild(searchCell(layer));
+    tr.appendChild(searchCell(h.match_type));
+    tr.appendChild(searchCell(h.score == null ? null : h.score.toFixed ? h.score.toFixed(4) : h.score));
+    tr.appendChild(searchCell(h.full_path || h.location || h.source));
+    tr.appendChild(searchCell(Array.isArray(h.chunk_span) ? h.chunk_span.join(" – ") : h.chunk_span));
+    tr.appendChild(searchCell(h.provenance && h.provenance.embed_model));
+    tr.appendChild(searchCell(h.provenance && h.provenance.retrieved_at));
+    tr.appendChild(snippetCell(h.text));
+    tr.appendChild(provenanceCell(h.provenance));
+    searchTbodyEl.appendChild(tr);
+  }
+}
+
+searchForm.addEventListener("submit", async (evt) => {
+  evt.preventDefault();
+  const submitBtn = searchForm.querySelector("button[type=submit]");
+  const formData = new FormData(searchForm);
+  const q = String(formData.get("q") || "").trim();
+  const scope = String(formData.get("scope") || "").trim();
+  const mode = String(formData.get("mode") || "recall");
+
+  setStatus(searchStatusEl, "loading", "searching…");
+  searchTableEl.hidden = true;
+  searchEmptyStateEl.hidden = true;
+  submitBtn.disabled = true;
+  try {
+    const params = new URLSearchParams({ q, mode });
+    if (scope) params.set("scope", scope);
+    const res = await fetch("/search?" + params.toString());
+    const body = await res.json();
+    if (!res.ok) {
+      setStatus(searchStatusEl, "fail", `FAIL — ${body.error || `HTTP ${res.status}`}`);
+      searchTableEl.hidden = true;
+      searchEmptyStateEl.hidden = true;
+      return;
+    }
+    renderSearchResults(body);
+    setStatus(searchStatusEl, "pass", `${body.total_hits} hit(s) — ${body.mode} mode`);
+  } catch (err) {
+    setStatus(searchStatusEl, "fail", `FAIL — ${err && err.message ? err.message : err}`);
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+
 async function refreshAll() {
   refreshBtn.disabled = true;
   try {
-    await Promise.all([loadLiveliness(), loadSettings(), loadLanes()]);
+    await Promise.all([loadLiveliness(), loadSettings(), loadLanes(), loadSearchScopes()]);
     lastRefreshedEl.textContent = `last refreshed ${new Date().toLocaleTimeString()}`;
   } finally {
     refreshBtn.disabled = false;

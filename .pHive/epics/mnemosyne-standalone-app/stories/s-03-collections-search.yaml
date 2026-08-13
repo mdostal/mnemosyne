@@ -1,7 +1,7 @@
 id: s-03-collections-search
 epic: mnemosyne-standalone-app
 title: Collections search — recall/grep query box with provenance
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
 depends_on: [s-02-lanes-browser]
