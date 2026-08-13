@@ -227,19 +227,35 @@ async function testLiveStopToUserPromptRoundTrip() {
   ok(storedJson.ok === true, `post-remember persisted via=${storedJson.via} scope=${storedJson.scope} status=${storedJson.status}`);
   if (storedJson.file) cleanupFiles.add(storedJson.file);
 
-  await new Promise((r) => setTimeout(r, 3000));
+  // A fixed sleep here is the wrong tool: remember() already waits
+  // synchronously for chunks_upserted > 0 before returning, so this isn't
+  // upsert-acknowledgment lag -- it's downstream index catch-up (e.g.
+  // Qdrant payload/exact-match indexing) whose latency is variable and
+  // grows with how much has already been written to the live corpus this
+  // session (confirmed directly on 2026-08-13: a token findable at 5s
+  // earlier in a session was still NOT findable at 6s later in the same
+  // session, but was findable well after). Poll until the keyword-exact
+  // match actually lands instead of guessing a fixed delay.
+  let recalled;
+  let recalledJson;
+  let injected = "";
+  const pollDeadline = Date.now() + 60_000;
+  do {
+    recalled = await runInstalled(preCommand, {
+      hook_event_name: "UserPromptSubmit",
+      prompt: `Find the hook integration checkpoint ${token}`,
+      ticket: token,
+      scope: "personal",
+      role: "developer",
+      hits: 5,
+    });
+    recalledJson = parseJson(recalled.out);
+    injected = recalledJson.hookSpecificOutput?.additionalContext || "";
+    if (injected.includes(token)) break;
+    await new Promise((r) => setTimeout(r, 1000));
+  } while (Date.now() < pollDeadline);
 
-  const recalled = await runInstalled(preCommand, {
-    hook_event_name: "UserPromptSubmit",
-    prompt: `Find the hook integration checkpoint ${token}`,
-    ticket: token,
-    scope: "personal",
-    role: "developer",
-    hits: 5,
-  });
   ok(recalled.code === 0, "pre-recall exits 0 for UserPromptSubmit live recall");
-  const recalledJson = parseJson(recalled.out);
-  const injected = recalledJson.hookSpecificOutput?.additionalContext || "";
   ok(injected.includes(token), "pre-recall recalls the Stop learning into additionalContext");
   ok(recalledJson.mnemosyne?.canonical_bundle === injected, "live recall canonical bundle matches additionalContext");
   ok(injected.includes("mnemosyne-cache-breakpoint"), "injected context includes the cache breakpoint marker");

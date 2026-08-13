@@ -39,7 +39,14 @@ const NOTES_DIR =
 
 const CLI_TIMEOUT_MS = Number(process.env.MNEMOSYNE_CLI_TIMEOUT_MS || 90_000);
 const HEALTH_TIMEOUT_MS = Number(process.env.MNEMOSYNE_HEALTH_TIMEOUT_MS || 30_000);
-const RECONCILE_TIMEOUT_MS = Number(process.env.MNEMOSYNE_RECONCILE_TIMEOUT_MS || 30_000);
+// mnemosyne-reconcile is O(N) in tracked note count (one `swarm-memory grep`
+// per file) -- ~40s observed at 35 notes on a real machine, well over the
+// old 30s default, which made health() silently report drift_count:null on
+// every real-world call. Now that reconcileDrift() (below) runs this in the
+// background and never blocks health() on it, a generous timeout here just
+// avoids a spurious timeout error while the count is still small; the O(N)
+// scaling itself is a known, separate, not-yet-fixed concern.
+const RECONCILE_TIMEOUT_MS = Number(process.env.MNEMOSYNE_RECONCILE_TIMEOUT_MS || 120_000);
 const RECONCILE_BIN =
   process.env.MNEMOSYNE_RECONCILE_BIN ||
   path.join(__dirname, "..", "bin", "mnemosyne-reconcile");
@@ -74,7 +81,7 @@ function parseReconcileOutput(stdout) {
   return { drift_count: driftCount };
 }
 
-async function reconcileDrift() {
+async function runReconcile() {
   try {
     const { stdout } = await execFileP(RECONCILE_BIN, ["--json"], {
       timeout: RECONCILE_TIMEOUT_MS,
@@ -95,6 +102,41 @@ async function reconcileDrift() {
       reconcile_error: String(e.message || e),
     };
   }
+}
+
+// reconcileDrift — bin/mnemosyne-reconcile shells one `swarm-memory grep`
+// per tracked note file (O(N) in the size of ~/.local/share/mnemosyne/notes),
+// so its real cost grows with how much has ever been remembered — it
+// already takes ~40s at 35 notes on this machine. health() must stay a fast
+// liveness-adjacent check, so this never blocks a health() call on a live
+// reconcile run: it returns the last cached result immediately and kicks off
+// a background refresh (deduped — a refresh already in flight is reused,
+// never doubled) whenever the cache is missing or older than
+// DRIFT_CACHE_MAX_AGE_MS. First-ever call before any refresh has completed
+// returns drift_count: null with reconciling: true, not a hang.
+const DRIFT_CACHE_MAX_AGE_MS = Number(process.env.MNEMOSYNE_DRIFT_CACHE_MAX_AGE_MS || 5 * 60_000);
+let _driftCache = null; // { result, at }
+let _driftRefreshInFlight = null; // Promise, deduped across concurrent health() calls
+async function reconcileDrift() {
+  const isStale = !_driftCache || Date.now() - _driftCache.at > DRIFT_CACHE_MAX_AGE_MS;
+  if (isStale && !_driftRefreshInFlight) {
+    _driftRefreshInFlight = runReconcile()
+      .then((result) => {
+        _driftCache = { result, at: Date.now() };
+        return result;
+      })
+      .finally(() => {
+        _driftRefreshInFlight = null;
+      });
+  }
+  if (_driftCache) {
+    return { ...(_driftCache.result), reconciling: isStale };
+  }
+  // No cached result yet (cold start, right after boot) — never block
+  // health() waiting for it, even the first time. A refresh is already
+  // in flight; the next health() call within DRIFT_CACHE_MAX_AGE_MS after
+  // it finishes will get the real number.
+  return { drift_count: null, reconciling: true };
 }
 
 // Cache the effective config (from `swarm-memory config`) so `remember` can
