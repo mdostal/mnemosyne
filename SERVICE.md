@@ -212,6 +212,43 @@ confirms `engine.mjs` has exactly two `"index"`-argv call sites
 confirms `resetScopeMapCache()`'s body contains no subprocess or
 filesystem-mutation call at all.
 
+## Skill harness (Claude Code)
+
+`skills/mnemosyne-standalone/SKILL.md` lets a **bare Claude Code session
+drive this standalone instance directly** — no Pantheon host, no L2 plugin
+lifecycle required. It's built on `bin/mnemosyne-skill-helper.mjs`, a small
+helper that:
+
+1. **Checks `GET /health`** on the configured `PORT` (default `8477`) with a
+   short timeout. If already healthy, it does **not** spawn anything — no
+   second instance, no second port-bind attempt.
+2. **If not running**, spawns `bin/mnemosyne` detached (matching the
+   supervised-run invocation documented above: `nohup env PORT=... node
+   src/server.mjs > <logfile> 2>&1 &`) and polls `GET /health` until it goes
+   green, failing loudly (not silently) if it never comes up.
+3. **Exposes `recall`/`remember`/`grep`/`reindex`/`graph-*` as thin
+   pass-throughs** to the corresponding HTTP routes above — same request
+   shape, same response shape, no new business logic. The helper never
+   imports `src/engine.mjs` and never shells out to `swarm-memory` directly;
+   every action goes *through* this service's own API, preserving the
+   transport/engine split and every guardrail already enforced in
+   `engine.mjs` (loud failure, full provenance, no collection wipe).
+4. **Prints the `/ui` URL** on every successful run so the operator knows to
+   open the browser UI.
+
+```bash
+node bin/mnemosyne-skill-helper.mjs ensure
+node bin/mnemosyne-skill-helper.mjs recall '{"query":"...","scope":"..."}'
+node bin/mnemosyne-skill-helper.mjs reindex '{"collection":"...","paths":["..."]}'
+```
+
+This is distinct from `hooks/` (`pre-recall.mjs`/`post-remember.mjs`),
+which are `UserPromptSubmit`/`Stop` hooks meant to be wired into *other*
+(consumer) repos' agent loops — see `hooks/README.md`. The skill is invoked
+directly, inside this repo, by an operator talking to Mnemosyne by hand.
+See `test/skill-harness.mjs` for full coverage (not-running-then-start,
+already-running-skip-start, and pass-through correctness for every action).
+
 ## Port / route
 
 - Local: `http://127.0.0.1:8477`

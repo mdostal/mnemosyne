@@ -1,7 +1,7 @@
 id: s-06-skill-harness-layer
 epic: mnemosyne-standalone-app
 title: Claude Code skill harness for standalone operation
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
 depends_on: [s-05-reindex-controls]

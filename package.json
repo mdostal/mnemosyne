@@ -20,7 +20,8 @@
     "test:search-route": "node test/search-route.mjs",
     "test:graph-engine": "node test/graph-engine.mjs",
     "test:graph-route": "node test/graph-route.mjs",
-    "test:reindex-route": "node test/reindex-route.mjs"
+    "test:reindex-route": "node test/reindex-route.mjs",
+    "test:skill-harness": "node test/skill-harness.mjs"
   },
   "dependencies": {}
 }
