@@ -1,0 +1,25 @@
+name: mnemosyne-mcp-server
+title: Mnemosyne MCP Server — third standalone harness surface
+target_codebase: .
+methodology: tdd
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: dev
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [integration, architecture]
+  roster: [researcher, technical-writer]
+  per_tag_reasoning:
+    integration: "Wraps the existing, already-tested HTTP API / skill-helper action pass-throughs — no new business logic"
+    architecture: "New transport surface (MCP stdio server) alongside the existing HTTP API and Claude Code skill"
+  confidence: high
+  gate_decisions: {}
+
+stories:
+  - id: mcp-01-server
+    title: MCP server exposing recall/remember/search/graph/reindex as tools
+    complexity: medium
+    depends_on: []

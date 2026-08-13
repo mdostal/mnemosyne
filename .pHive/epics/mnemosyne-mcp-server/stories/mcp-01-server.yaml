@@ -1,0 +1,124 @@
+id: mcp-01-server
+epic: mnemosyne-mcp-server
+title: MCP server exposing recall/remember/search/graph/reindex as tools
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: []
+
+description: |
+  Reframed north star (2026-08-13, see .pHive/project-profile.yaml north_star
+  and this session's Claude memory project_north_star_reframed): Mnemosyne
+  must be standalone-first, attachable to ANY harness — hooks, MCP, and
+  skillsets. Hooks (hooks/pre-recall.mjs, post-remember.mjs) and the Claude
+  Code skill (skills/mnemosyne-standalone/, bin/mnemosyne-skill-helper.mjs)
+  both already exist and are tested. MCP does not exist at all — no
+  @modelcontextprotocol dependency, no server, nothing. This story closes
+  that gap.
+
+  Add a stdio-based MCP server (using the official `@modelcontextprotocol/sdk`
+  TypeScript package) exposing Mnemosyne's core actions as MCP tools:
+  recall, remember, grep, reindex (targeted + bulk), graph-stats, graph-edges,
+  graph-impact, graph-deps. Do NOT reimplement any business logic — this is a
+  THIRD thin transport wrapper (alongside src/server.mjs's HTTP API and
+  bin/mnemosyne-skill-helper.mjs's CLI pass-throughs) over the same
+  already-working, already-tested actions. Prefer reusing
+  bin/mnemosyne-skill-helper.mjs's existing action functions
+  (recallAction/rememberAction/grepAction/reindexAction/graphStatsAction/
+  graphEdgesAction/graphImpactAction/graphDepsAction) directly — they already
+  do exactly the right thing (fetch against the running HTTP API, ensure the
+  service is running first) — rather than writing new HTTP-calling code.
+
+  Entry point: a new `bin/mnemosyne-mcp` (or `bin/mnemosyne-mcp-server.mjs`)
+  script, registered in package.json's `bin` field, that starts the MCP
+  server over stdio (matching how Claude Desktop / Claude Code MCP configs
+  expect to launch a local MCP server: a single executable, stdio transport,
+  no network port). On startup, it should call `ensureRunning()` (from
+  mnemosyne-skill-helper.mjs) so the underlying Mnemosyne HTTP service comes
+  up automatically if it isn't already running — same as the skill harness.
+
+acceptance_criteria:
+  - "Given the MCP server is started, when an MCP client (e.g. the official SDK's test client, or a scripted stdio JSON-RPC exchange) calls tools/list, then it returns recall, remember, grep, reindex, graph_stats, graph_edges, graph_impact, graph_deps as available tools with schemas matching their actual parameters"
+  - "Given a recall tool call with a real query, when invoked, then it returns the same data shape POST /recall returns directly (no reformatting, no field-dropping) — mirrors the existing 'action pass-through correctness' pattern already proven in test/skill-harness.mjs"
+  - "Given the underlying Mnemosyne service is not yet running, when the MCP server starts, then it starts the service automatically (via ensureRunning()) rather than failing"
+  - "Given a tool call references a destructive-sounding action, when the tool list is inspected, then no tool exists that maps to collection deletion/wipe — same hard guardrail as every other transport surface in this repo"
+  - "Given the MCP server is registered as a bin entry, when `npx mnemosyne-mcp` (or the chosen bin name) is run, then it starts the stdio server without requiring any manual setup beyond what SERVICE.md documents for the HTTP service"
+
+steps:
+  - id: research
+    description: Read @modelcontextprotocol/sdk's TypeScript server API (McpServer, tool registration, stdio transport) — check if it's already a devDependency/dependency anywhere in this monorepo-adjacent ecosystem, or needs adding fresh. Read bin/mnemosyne-skill-helper.mjs's existing action functions in full — they are the direct source of truth for what each MCP tool should call.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests for the MCP server (follow this repo's existing
+      test conventions — a real stdio client talking to a real spawned server
+      process, same pattern as test/skill-harness.mjs's real-subprocess
+      approach, not a mocked transport). Cover: tools/list shape, a real
+      recall tool call round-tripping against a live already-running test
+      server (matching skill-harness.mjs's port-isolation convention —
+      distinct PORT range), auto-start-if-not-running, and the
+      no-destructive-tool hard-constraint check (grep the actual tool
+      registration source for delete/wipe/drop verbs, same style as
+      test/reindex-route.mjs's and test/graph-route.mjs's hard-constraint
+      blocks).
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      Add @modelcontextprotocol/sdk as a real dependency. Implement
+      bin/mnemosyne-mcp(.mjs) per the description above, registering it in
+      package.json's bin field. Reuse mnemosyne-skill-helper.mjs's action
+      functions and ensureRunning() directly — import them, do not
+      duplicate their logic.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm zero business-logic duplication (every MCP tool handler is a thin call into an existing skill-helper action function), confirm the no-destructive-tool hard constraint, confirm auto-start works.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-mcp-server (based on dev).
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  tech_stack:
+    runtime: "Node >=20, TypeScript (this repo already has real deps: better-sqlite3, tsx, typescript, vitest — zero-dep guardrail applies only to src/server.mjs's HTTP surface, not this TS surface)"
+  key_files:
+    - path: bin/mnemosyne-skill-helper.mjs
+      purpose: "Source of truth for every action this MCP server exposes — ensureRunning() + recallAction/rememberAction/grepAction/reindexAction/graphStatsAction/graphEdgesAction/graphImpactAction/graphDepsAction, all already thin HTTP pass-throughs, all already tested"
+    - path: skills/mnemosyne-standalone/SKILL.md
+      purpose: "The second harness surface (Claude Code skill) — read for tone/framing consistency, this MCP server is the sibling surface for MCP-native clients"
+    - path: test/skill-harness.mjs
+      purpose: "Existing test conventions to follow: real subprocess server, distinct port range, pass-through correctness assertions"
+
+files_to_modify:
+  - file: package.json
+    change: "Add @modelcontextprotocol/sdk dependency; add bin/mnemosyne-mcp to the bin field"
+  - file: bin/mnemosyne-mcp.mjs
+    change: "New MCP stdio server, thin wrapper over mnemosyne-skill-helper.mjs's actions"
+
+design_decisions:
+  - decision: "Reuse bin/mnemosyne-skill-helper.mjs's action functions verbatim rather than writing new HTTP-calling code for the MCP layer"
+    rationale: "Third transport surface over the same actions — same principle already applied between src/server.mjs (HTTP) and the skill helper (CLI pass-through): never duplicate business logic across transports"
+  - decision: "Stdio transport, not HTTP/SSE"
+    rationale: "Matches how Claude Desktop and Claude Code actually launch local MCP servers — a single process over stdio, no port to manage/collide with the main 8477 HTTP service"
+
+cross_cutting:
+  - concern: documentation
+    action: "Add an MCP section to SERVICE.md (or HARNESS.md if that's where the skill harness ended up being documented) describing the three harness surfaces side by side: HTTP API, Claude Code skill, MCP server"
+
+risks:
+  - severity: low
+    description: "MCP SDK API surface may differ from assumptions made here (this story predates reading the actual SDK docs)"
+    mitigation: "Research step reads the real SDK API first; implement step adapts to what's actually there rather than forcing an assumed shape"
+
+references:
+  - path: bin/mnemosyne-skill-helper.mjs
+    relevant_excerpt: |
+      async function apiFetch(port, method, urlPath, body) {
+        const res = await fetch(`${baseUrl(port)}${urlPath}`, {
+          method,
+          headers: body !== undefined ? { "content-type": "application/json" } : undefined,
+          body: body !== undefined ? JSON.stringify(body) : undefined,
