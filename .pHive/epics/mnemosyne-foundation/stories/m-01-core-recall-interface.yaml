@@ -1,7 +1,8 @@
 id: m-01-core-recall-interface
 epic: mnemosyne-foundation
 title: Define core recall/remember interface contracts
-status: pending
+status: complete
+note: "Built via Pantheon's real PAN-ticket workflow on origin/dev, not through this story. lib/mnemosyne/interfaces.ts + schema.ts define recall()/remember()/Provenance (7 fields)/Scope('project'|'enterprise'|'meta') exactly per acceptance criteria; covered by interfaces.types.test.ts + schema.validation.test.ts (both passing)."
 complexity: medium
 methodology: classic
 depends_on: []

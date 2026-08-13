@@ -1,7 +1,8 @@
 id: mc-04-hook-installer
 epic: pantheon-memory-consistent-hooks
 title: Create hook installer script for auto-wiring pre/post hooks
-status: pending
+status: complete
+note: "Built via PAN-ticket workflow on origin/dev. bin/mnemosyne-install-hooks (228 lines) exists, covered by test/install-hooks.mjs. Did not independently re-verify every edge case (idempotent re-run, unreachable-service prompt) in this audit -- flagging moderate rather than full confidence."
 complexity: medium
 methodology: tdd
 depends_on: [mc-03-health-drift-reporting]

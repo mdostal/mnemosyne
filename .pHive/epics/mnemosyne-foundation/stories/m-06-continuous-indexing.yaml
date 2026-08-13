@@ -1,7 +1,8 @@
 id: m-06-continuous-indexing
 epic: mnemosyne-foundation
 title: Implement Multica-native continuous indexing
-status: pending
+status: in_progress
+note: "Partially built on origin/dev. lib/mnemosyne/indexing/continuous.ts + staleness.ts exist (covered by indexing.test.ts, passing) and .multica/tasks/mnemosyne-reindex.yaml defines a Multica scheduled task. Gap: continuous.ts is ONLY imported by its own test file — no code path in this repo invokes it at runtime, so whether the Multica task actually fires it is unverified from this repo alone (would need to check the Multica daemon/task registry, out of scope for this audit)."
 complexity: high
 methodology: classic
 depends_on: [m-05-project-enterprise-meta-layers]

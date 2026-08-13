@@ -1,7 +1,8 @@
 id: m-02-file-layer-implementation
 epic: mnemosyne-foundation
 title: Implement file layer with loud failure
-status: pending
+status: complete
+note: "Built via PAN-ticket workflow on origin/dev. lib/mnemosyne/layers/FileLayerAdapter.ts implements recall() (real fs scan) with layer='file', degradation markers; covered by FileLayerAdapter.test.ts (passing)."
 complexity: medium
 methodology: classic
 depends_on: [m-01-core-recall-interface]

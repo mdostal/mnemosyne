@@ -1,7 +1,8 @@
 id: mc-02-reconciliation-helper
 epic: pantheon-memory-consistent-hooks
 title: Add reconciliation helper to detect file/Qdrant drift
-status: pending
+status: complete
+note: "Built via PAN-ticket workflow on origin/dev. bin/mnemosyne-reconcile exists and is invoked by engine.mjs's reconcileDrift() with --json, parsing a drift_count field -- verified indirectly through test/health-drift.mjs's drift_count:0 / drift_count:3 / reconcile_error scenarios, all passing. Did not independently re-verify the standalone script's exit codes / text-mode output in this audit."
 complexity: medium
 methodology: tdd
 depends_on: [mc-01-write-through-consistency]

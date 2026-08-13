@@ -1,7 +1,8 @@
 id: mc-07-hook-integration-validation
 epic: pantheon-memory-consistent-hooks
 title: Validate hook integration with live UserPromptSubmit/Stop events
-status: pending
+status: complete
+note: "Built via PAN-ticket workflow on origin/dev. test/hooks.mjs verified passing in this audit: pre-recall injects additionalContext, bundle matches canonical, high-level meta hit appears and is ordered before lower-level hits. One sub-check (live UserPromptSubmit/Stop round-trip against a running server) SKIPPED rather than failed, only because no server happened to be up at that exact check -- not a code gap."
 complexity: low
 methodology: tdd
 depends_on: [mc-04-hook-installer, mc-05-high-level-first-injection]

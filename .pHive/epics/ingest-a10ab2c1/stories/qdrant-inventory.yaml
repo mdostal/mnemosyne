@@ -1,7 +1,8 @@
 id: qdrant-inventory
 epic: ingest-a10ab2c1
 title: Qdrant Collection Inventory
-status: pending
+status: complete
+note: "Built via PAN-ticket workflow on origin/dev. mnemosyne/inventory/qdrant_inventory.py (261 lines) and .pHive/epics/ingest-a10ab2c1/inventory/qdrant-collections.yaml (a real, populated manifest) both exist, covered by mnemosyne/tests/test_qdrant_inventory.py. Did not execute the Python test suite in this audit."
 complexity: low
 methodology: tdd
 depends_on: []

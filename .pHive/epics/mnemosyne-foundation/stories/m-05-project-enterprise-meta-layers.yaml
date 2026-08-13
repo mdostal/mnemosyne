@@ -1,7 +1,8 @@
 id: m-05-project-enterprise-meta-layers
 epic: mnemosyne-foundation
 title: Implement project/enterprise/meta memory layers
-status: pending
+status: in_progress
+note: "Partially built on origin/dev. src/layers/{meta,enterprise,project}.mjs implement the three layers (MetaLayer/EnterpriseLayer/ProjectLayer) and src/routing.mjs's layeredRecall() genuinely cascades meta->enterprise->project->engine(vector/file/code-graph) with graceful degradation, per AC. Gap: layeredRecall()/bootstrapLayers() are ONLY imported by test/layers.mjs — neither the live HTTP API (src/server.mjs) nor the TS client (lib/mnemosyne/client.ts, used by Minerva's wrapper) ever calls them, so a real recall() today never actually reaches the meta/enterprise layers. \"Given meta layer unavailable, graceful degradation\" AC is tested in isolation but not exercised by any production code path."
 complexity: high
 methodology: classic
 depends_on: [m-04-code-graph-layer]

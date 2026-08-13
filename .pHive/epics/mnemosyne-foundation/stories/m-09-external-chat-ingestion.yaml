@@ -2,6 +2,7 @@ id: m-09-external-chat-ingestion
 epic: mnemosyne-foundation
 title: External chat ingestion - Gemini + Claude exports
 status: pending
+note: "Not started. No chat-parsers, dedup, or external-chat ingestion code found anywhere in the repo (grepped for Gemini/Claude chat-export handling, chat_source metadata, and every files_to_modify path listed below -- zero matches)."
 complexity: high
 methodology: tdd
 depends_on: [m-03-vector-layer-integration]

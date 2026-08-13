@@ -1,7 +1,8 @@
 id: mc-08-bespoke-layer-inventory
 epic: pantheon-memory-consistent-hooks
 title: Audit and inventory bespoke memory scripts
-status: pending
+status: complete
+note: "Built via PAN-ticket workflow on origin/dev. docs/bespoke-inventory.md exists (81 lines) as the required deliverable. Did not independently re-verify every listed script has a migrate/keep/archive justification in this audit."
 complexity: low
 methodology: classic
 depends_on: []

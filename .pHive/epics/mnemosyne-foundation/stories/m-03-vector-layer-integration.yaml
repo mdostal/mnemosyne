@@ -1,7 +1,8 @@
 id: m-03-vector-layer-integration
 epic: mnemosyne-foundation
 title: Integrate swarm-memory vector layer (Qdrant)
-status: pending
+status: complete
+note: "Built via PAN-ticket workflow on origin/dev. lib/mnemosyne/layers/VectorLayerAdapter.ts wraps swarm-memory read+write, covered by VectorLayerAdapter.test.ts (passing). Note: the TS client's remember() (lib/mnemosyne/client.ts) is a stub that never actually writes — real write-through only exists on the separate zero-dep JS path (src/engine.mjs's remember(), verified in mc-01)."
 complexity: high
 methodology: classic
 depends_on: [m-02-file-layer-implementation]

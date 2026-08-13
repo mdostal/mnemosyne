@@ -1,7 +1,8 @@
 id: mc-03-health-drift-reporting
 epic: pantheon-memory-consistent-hooks
 title: Extend GET /health to report drift_count
-status: pending
+status: complete
+note: "Built via PAN-ticket workflow on origin/dev. src/engine.mjs's health() calls reconcileDrift() and includes drift_count + last_check (ISO timestamp) in every response, with graceful drift_count:null + reconcile_error on failure. All 4 ACs directly verified by test/health-drift.mjs (passing) and confirmed live: real GET /health on this machine returned drift_count in ~31s against live Qdrant infra."
 complexity: low
 methodology: tdd
 depends_on: [mc-02-reconciliation-helper]

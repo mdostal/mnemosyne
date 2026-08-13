@@ -1,7 +1,8 @@
 id: m-08-bulk-reindex-command
 epic: mnemosyne-foundation
 title: Bulk re-index command - idempotent full rebuild
-status: pending
+status: in_progress
+note: "A much smaller feature shipped than described. bin/mnemosyne-reindex.mjs (64 lines) is a thin CLI wrapper around POST /reindex for one scope+directory at a time -- real and tested (test/reindex.mjs passing). Missing: idempotent state tracking with checksums, resume-from-checkpoint on failure, full multi-source scan across repos/docs/vault, and layer-by-layer rebuild order across all 6 layers -- none of that exists. `mnemosyne reindex --scope=all --resume` as described is not implemented."
 complexity: high
 methodology: tdd
 depends_on: [m-06-continuous-indexing]

@@ -1,7 +1,8 @@
 id: mc-05-high-level-first-injection
 epic: pantheon-memory-consistent-hooks
 title: Implement high-level-first memory injection in pre-recall hook
-status: pending
+status: complete
+note: "Built via PAN-ticket workflow on origin/dev. hooks/lib/format.mjs's buildMemoryBundle() implements the exact layer-priority map + 300/900-token high-level reservation described. All 4 ACs directly verified by test/bundle.mjs's passing assertions (layer priority ordering, within-layer score ordering, high-level token reservation cap, cache-safe stable-prefix layout)."
 complexity: medium
 methodology: tdd
 depends_on: [mc-04-hook-installer]

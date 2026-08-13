@@ -2,6 +2,7 @@ id: qdrant-placement-rules
 epic: ingest-a10ab2c1
 title: Qdrant Org-Tree Placement Rules
 status: pending
+note: "Not started. None of this story's files_to_modify exist: no mnemosyne/placement_engine.py, no mnemosyne/tests/test_placement.py, no docs/placement-rules.md anywhere in the repo."
 complexity: medium
 methodology: tdd
 depends_on: [qdrant-inventory]

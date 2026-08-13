@@ -1,7 +1,8 @@
 id: m-04-code-graph-layer
 epic: mnemosyne-foundation
 title: Integrate swarm-memory code-graph layer
-status: pending
+status: complete
+note: "Built via PAN-ticket workflow on origin/dev, in two independent implementations: lib/mnemosyne/layers/CodeGraphLayerAdapter.ts (TS, better-sqlite3-backed — its test couldn't run on this audit machine due to a pre-existing native-binding segfault unrelated to the code) and src/layers/code-graph.mjs (zero-dep JS, verified passing via test/code-graph.mjs)."
 complexity: medium
 methodology: classic
 depends_on: [m-03-vector-layer-integration]

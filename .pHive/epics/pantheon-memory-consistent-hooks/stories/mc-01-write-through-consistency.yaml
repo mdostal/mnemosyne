@@ -1,7 +1,8 @@
 id: mc-01-write-through-consistency
 epic: pantheon-memory-consistent-hooks
 title: Implement write-through consistency for POST /remember
-status: pending
+status: complete
+note: "Built via PAN-ticket workflow on origin/dev. src/engine.mjs's remember() verifies exit code + chunks_upserted, keeps the note file as recovery artifact on failure, logs ERROR-prefixed lines, returns 500. All 4 ACs directly verified by test/write-through.mjs (hard-fail, silent-fail, and success scenarios all passing)."
 complexity: medium
 methodology: tdd
 

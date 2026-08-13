@@ -1,7 +1,8 @@
 id: m-07-first-god-integration
 epic: mnemosyne-foundation
 title: Integrate Mnemosyne with first Pantheon god (validation)
-status: pending
+status: in_progress
+note: "Scaffolded but NOT genuinely met. Concretely unmet acceptance criteria: (1) lib/minerva/decisions.ts + memory.ts exist and are covered by lib/minerva/__tests__/integration.test.ts, but `new MinervaDecisions(...)`/`new MinervaMemory(...)` are never instantiated anywhere outside test files in this repo — no production wiring found (Minerva itself lives in a separate repo, mdostal/auriga or mdostal/pantheon-orchestrator per the Aug-12 hive audit; this repo alone cannot prove real cross-repo usage). (2) client.ts's remember() is a hardcoded stub (`provenance.source: 'stub:remember:...'`) that never persists anywhere real, so 'remember() called by a god -> retrievable via recall()' cannot actually work today. (3) benchmarks/recall-vs-find.ts calls client.recall() without awaiting the Promise, so `result.ok` is always undefined and recallTokens is always computed as 0 -- the benchmark is non-functional, and its grep baseline (`baselineGrepTokens = 2000`) is a hardcoded constant, never measured. None of the three 'god integration' acceptance criteria are demonstrably true today."
 complexity: medium
 methodology: classic
 depends_on: [m-06-continuous-indexing]
