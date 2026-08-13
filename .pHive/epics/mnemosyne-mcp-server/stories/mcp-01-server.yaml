@@ -1,7 +1,8 @@
 id: mcp-01-server
 epic: mnemosyne-mcp-server
 title: MCP server exposing recall/remember/search/graph/reindex as tools
-status: pending
+status: complete
+note: "bin/mnemosyne-mcp.mjs built as a pure stdio transport wrapper over bin/mnemosyne-skill-helper.mjs's existing action functions (zero new business logic). 8 tools registered: recall, remember, grep, reindex, graph_stats, graph_edges, graph_impact, graph_deps. Real end-to-end test (test/mcp-server.mjs) uses a real @modelcontextprotocol/sdk Client over a real StdioClientTransport spawning the real server — all acceptance criteria verified live: tools/list shape, recall/graph_stats pass-through correctness against real HTTP API shapes, validation errors surface as isError:true not a crash, auto-start-if-not-running works, and the same source-grep hard-constraint pattern as reindex-route.mjs/graph-route.mjs proves no destructive verb is reachable. SERVICE.md documents all three harness surfaces (HTTP/skill/MCP) side by side. tsc --noEmit clean (bin/*.mjs and test/*.mjs are outside tsconfig's include, as expected)."
 complexity: medium
 methodology: tdd
 depends_on: []

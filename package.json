@@ -10,7 +10,8 @@
   "bin": {
     "mnemosyne": "bin/mnemosyne",
     "mnemosyne-install-hooks": "bin/mnemosyne-install-hooks",
-    "mnemosyne-client-api": "bin/mnemosyne-client-api"
+    "mnemosyne-client-api": "bin/mnemosyne-client-api",
+    "mnemosyne-mcp": "bin/mnemosyne-mcp.mjs"
   },
   "scripts": {
     "start": "node src/server.mjs",
@@ -35,7 +36,8 @@
     "test:graph-engine": "node test/graph-engine.mjs",
     "test:graph-route": "node test/graph-route.mjs",
     "test:reindex-route": "node test/reindex-route.mjs",
-    "test:skill-harness": "node test/skill-harness.mjs"
+    "test:skill-harness": "node test/skill-harness.mjs",
+    "test:mcp-server": "node test/mcp-server.mjs"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
@@ -46,8 +48,10 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "better-sqlite3": "^13.0.3",
     "tsx": "^4.23.11",
-    "yaml": "^2.9.0"
+    "yaml": "^2.9.0",
+    "zod": "^3.25.76"
   }
 }

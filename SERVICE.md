@@ -283,6 +283,40 @@ directly, inside this repo, by an operator talking to Mnemosyne by hand.
 See `test/skill-harness.mjs` for full coverage (not-running-then-start,
 already-running-skip-start, and pass-through correctness for every action).
 
+## MCP server
+
+`bin/mnemosyne-mcp.mjs` is the third standalone harness surface — a stdio
+[MCP](https://modelcontextprotocol.io) server for any MCP-compatible client
+(Claude Desktop, Claude Code's MCP config, etc.), alongside the HTTP API
+above and the Claude Code skill. Like the skill harness, it contains **no
+business logic of its own**: every tool handler is a direct call into
+`bin/mnemosyne-skill-helper.mjs`'s existing action functions
+(`recallAction`/`rememberAction`/`grepAction`/`reindexAction`/
+`graphStatsAction`/`graphEdgesAction`/`graphImpactAction`/`graphDepsAction`)
+and `ensureRunning()` — same auto-start-if-not-running contract, same
+"never spawn a second instance" guarantee.
+
+Exposed tools: `recall`, `remember`, `grep`, `reindex`, `graph_stats`,
+`graph_edges`, `graph_impact`, `graph_deps` — one per skill-helper action.
+No tool maps to Qdrant collection deletion/wipe; there is no such verb
+anywhere in this repo's dependency chain (swarm-memory CLI ->
+`engine.mjs` -> skill-helper actions -> MCP tools) and none is added here.
+
+```bash
+node bin/mnemosyne-mcp.mjs   # launched by an MCP client over stdio, not run standalone
+```
+
+Register it in an MCP client config by pointing `command` at
+`node`/`args: ["bin/mnemosyne-mcp.mjs"]` (absolute path) from this repo.
+See `test/mcp-server.mjs` for full coverage: a real `@modelcontextprotocol/sdk`
+`Client` over a real `StdioClientTransport`, spawning the real server —
+tools/list shape, recall/graph_stats pass-through correctness against the
+real HTTP API's real response shapes, a validation-error tool call
+surfacing as `isError:true` rather than crashing, and the same
+grep-the-actual-source hard-constraint pattern used by
+`test/reindex-route.mjs`/`test/graph-route.mjs` to prove no destructive
+verb is reachable.
+
 ## Minerva / library integration
 
 `lib/mnemosyne/` is a separate, typed client surface (`MnemosyneClient`,
