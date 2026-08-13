@@ -93,6 +93,25 @@ async function main() {
       "GET /health -> file layer reported available",
     );
 
+    // GET /layers (pl-03-layer-ab-testing) -> the resolved layer stack,
+    // introspection only — must never call recall() itself, so it stays
+    // safe from the known unrelated better-sqlite3/CodeGraphLayerAdapter
+    // crash the POST /recall calls below hit on this machine.
+    const layers = await j("GET", "/layers");
+    ok(layers.status === 200, `GET /layers -> 200 (got ${layers.status})`);
+    ok(
+      Array.isArray(layers.body.layers) && layers.body.layers.length === 3,
+      `GET /layers -> 3 layers by default (got ${JSON.stringify(layers.body.layers)})`,
+    );
+    ok(
+      layers.body.layers.map((l) => l.layer).join(",") === "code-graph,vector,file",
+      `GET /layers -> default cascade order code-graph,vector,file (got ${layers.body.layers.map((l) => l.layer).join(",")})`,
+    );
+    ok(
+      layers.body.layers.every((l) => typeof l.writable === "boolean"),
+      "GET /layers -> every entry has a boolean writable flag",
+    );
+
     // POST /recall -> 200 with RecallResult JSON
     const recall = await j("POST", "/recall", { query: "target", scope: "project" });
     ok(recall.status === 200, `POST /recall -> 200 (got ${recall.status})`);

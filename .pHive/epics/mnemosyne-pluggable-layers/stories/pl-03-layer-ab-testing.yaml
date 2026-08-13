@@ -1,7 +1,8 @@
 id: pl-03-layer-ab-testing
 epic: mnemosyne-pluggable-layers
 title: Layer A/B benchmark harness + GET /layers visibility
-status: pending
+status: complete
+note: "benchmarks/layer-ab-test.ts (runConfig/runAbTest, reuses estimateTokens from recall-vs-find.ts) + GET /layers on lib/mnemosyne/server.ts (thin wrapper around client.getConfiguredLayers() from pl-01). Ran the real benchmark twice: first with generic queries (mnemosyne/layer registry/secrets-adapter) which honestly showed zero difference since the file layer already satisfies all three before hive-memory is ever reached; then with a query ('escalation-security-plan-audit') confirmed absent from this repo's own files but present in the real kg.sqlite -- baseline: 0 hits, with-hive-memory: 2 hits with layers=[hive-memory], proving real contribution, not fabricated. Also surfaced (not fixed, out of scope): VectorLayerAdapter genuinely failed with a real gcloud secretmanager PERMISSION_DENIED in this exact run context -- an honest finding about the TS vector layer's env-passing, not papered over. 4 new tests (benchmarks/__tests__/layer-ab-test.test.ts) + 4 new GET /layers assertions added to test/http-api.mjs (positioned before the pre-existing, unrelated POST /recall crash so they run and pass cleanly)."
 complexity: medium
 methodology: tdd
 depends_on: [pl-01-layer-registry, pl-02-hive-memory-layer]

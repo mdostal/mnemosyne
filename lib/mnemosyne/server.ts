@@ -14,6 +14,8 @@
  * process with it.
  *
  *   GET  /health            -> layer availability status
+ *   GET  /layers            -> the resolved layer stack (pl-03-layer-ab-testing):
+ *                               names in cascade order + write-capability per layer
  *   POST /recall  {query, scope, intent?}            -> RecallResult
  *   POST /remember {content: {text, metadata?}, scope, layer?} -> RememberResult
  *
@@ -117,6 +119,13 @@ const server = http.createServer(async (req, res) => {
       const layers = [await fileLayerHealth()];
       const ok = layers.every((l) => l.available);
       return sendJson(res, ok ? 200 : 503, { ok, layers });
+    }
+
+    if (route === 'GET /layers') {
+      // Read-only introspection of what MnemosyneClient actually resolved
+      // (registry + config), never a hardcoded/stale echo — see
+      // client.ts's getConfiguredLayers() and layers/config.ts.
+      return sendJson(res, 200, { layers: client.getConfiguredLayers() });
     }
 
     if (route === 'POST /recall') {
