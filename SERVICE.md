@@ -27,6 +27,10 @@ Every memory op runs over the live Qdrant corpus; nothing is stubbed or mocked.
 | `POST /remember`| `{text, scope?, tag?}`                                       | write-back: persists a note + indexes (upsert, `--no-prune`) it into the scope's collection so it is immediately recallable |
 | `POST /lanes`   | `{name, collection, ladder?}`                                | **add-only** atomic write of a new `[scopes]`/`[ladder]` entry to `~/.config/swarm-memory/config.toml` — see "Lanes / add-lane" below |
 | `GET /search`   | query params: `q`, `scope?`, `mode?` (`recall`\|`grep`, default `recall`), `hits?`, `escalate?`, `min_score?`, `radius?` | thin dispatcher for the `/ui` Search panel — routes straight to `recall()`/`grep()` (no new query logic); invalid `mode` → `400` |
+| `GET /graph/stats` | —                                                        | graph size + origin breakdown (`swarm-memory graph stats`): `{nodes, edges, edges_by_origin, db}` |
+| `GET /graph/edges` | query params: `node?`                                    | list edges, or only those touching `node` when given (`swarm-memory graph edges [node]`) |
+| `GET /graph/impact/:node` | query params: `depth?`                             | reverse closure: what is affected if `:node` changes (`swarm-memory graph impact NODE`) — unknown node returns `[]`, not an error |
+| `GET /graph/deps/:node` | query params: `depth?`                               | forward closure: what `:node` depends on (`swarm-memory graph deps NODE`) — unknown node returns `[]`, not an error |
 
 **`GET /` routing:** no existing consumer (`hooks/lib/mnemo-client.mjs`, `test/smoke.mjs`)
 calls the bare `GET /` path, and Node's `fetch()` sends `Accept: */*` when the
@@ -121,6 +125,35 @@ as-is). Zero hits render an explicit "No hits" empty state, not a blank
 panel. See `test/search-route.mjs` for full coverage, including a live-corpus
 example proving keyword mode is genuinely dispatching to grep and not just
 recall in disguise.
+
+## Graph (GET /graph/*)
+
+The `/ui` Graph panel renders swarm-memory's real impact graph — backed by
+`~/.local/share/swarm-memory/graph.sqlite` (populated by `swarm-memory graph
+scan` from markdown-link + python-import scans) — as a vanilla SVG node-link
+diagram. No charting/graph-viz library is used (zero-dep guardrail); layout
+is a small in-browser force-directed simulation (`ui/app.js`'s
+`forceLayout()`), fine at the tens-of-nodes scale this graph runs at today.
+
+- `GET /graph/stats` wraps `swarm-memory graph stats` directly — the panel's
+  header node/edge counts always match what that CLI command reports.
+- `GET /graph/edges` (optionally `?node=`) wraps `swarm-memory graph edges
+  [node]`; the diagram's node set is the union of every edge's `src`/`dst`.
+- Clicking a node fires `GET /graph/impact/:node` and `GET /graph/deps/:node`
+  (URL-encoded; node ids containing `/` round-trip correctly) in parallel and
+  renders both lists in a side inspector panel — each matches
+  `swarm-memory graph impact NODE` / `graph deps NODE` run directly. An
+  unknown node returns `[]` (not an error) from both, matching the CLI's own
+  behavior.
+- Zero edges (fresh install, empty `graph.sqlite`) renders an explicit empty
+  state ("Graph is empty…"), never a broken/blank render.
+
+**Read-only, hard constraint:** this is graph *exploration* only.
+`swarm-memory graph add` / `graph remove` (the graph's mutation verbs) are
+never wrapped by `engine.mjs`, never routed by `server.mjs`, and never called
+by `ui/app.js` — no UI action can reach them. See `test/graph-route.mjs`'s
+"hard constraint" block, which greps the actual source for reachable
+fetch()/route/CLI-argv patterns (not just prose) to prove this.
 
 ## Port / route
 

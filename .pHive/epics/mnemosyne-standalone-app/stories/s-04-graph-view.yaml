@@ -1,7 +1,7 @@
 id: s-04-graph-view
 epic: mnemosyne-standalone-app
 title: Impact graph view (node-link render of swarm-memory graph)
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
 depends_on: [s-03-collections-search]

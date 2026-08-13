@@ -316,10 +316,272 @@ searchForm.addEventListener("submit", async (evt) => {
   }
 });
 
+// --- Graph panel (s-04): renders swarm-memory's real impact graph
+// (GET /graph/stats + GET /graph/edges) as a vanilla SVG node-link diagram —
+// no charting/graph-viz library (zero-dep guardrail). Clicking a node fetches
+// GET /graph/impact/:node + GET /graph/deps/:node and shows them in the side
+// inspector panel.
+//
+// READ-ONLY: this panel (and this whole file) never calls `swarm-memory
+// graph add`/`graph remove` or any /graph/add or /graph/remove route — graph
+// mutation is out of scope for this story. Every request below is a GET.
+const graphStatusEl = document.getElementById("graph-status");
+const graphBodyEl = document.getElementById("graph-body");
+const graphEmptyStateEl = document.getElementById("graph-empty-state");
+const graphSvgEl = document.getElementById("graph-svg");
+const graphInspectorStatusEl = document.getElementById("graph-inspector-status");
+const graphInspectorDetailEl = document.getElementById("graph-inspector-detail");
+const graphSelectedNodeEl = document.getElementById("graph-selected-node");
+const graphImpactListEl = document.getElementById("graph-impact-list");
+const graphImpactEmptyEl = document.getElementById("graph-impact-empty");
+const graphDepsListEl = document.getElementById("graph-deps-list");
+const graphDepsEmptyEl = document.getElementById("graph-deps-empty");
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+const GRAPH_WIDTH = 640;
+const GRAPH_HEIGHT = 480;
+
+function svgEl(tag, attrs = {}) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  return el;
+}
+
+// Last path segment (e.g. "swarm-memory/src/swarm_memory/cli.py" -> "cli.py")
+// as the on-canvas label; the full node id is always available via the
+// element's <title> tooltip and the click-to-inspect side panel.
+function shortLabel(nodeId) {
+  const parts = String(nodeId).split("/");
+  return parts[parts.length - 1] || String(nodeId);
+}
+
+// Minimal force-directed layout (Fruchterman-Reingold style: repulsion
+// between every node pair + spring attraction along edges + a gentle
+// center-pull), run for a fixed number of iterations. Deterministic (nodes
+// start on a circle, not randomized) so a reload with unchanged data
+// produces the same layout. Fine at this data scale (tens of nodes) per
+// design-discussion.md's "vanilla-JS force-layout territory" call.
+function forceLayout(nodeIds, edges, { width = GRAPH_WIDTH, height = GRAPH_HEIGHT, iterations = 300 } = {}) {
+  const n = nodeIds.length;
+  const positions = new Map();
+  const radius = Math.min(width, height) / 3;
+  nodeIds.forEach((id, i) => {
+    const angle = (2 * Math.PI * i) / Math.max(n, 1);
+    positions.set(id, {
+      x: width / 2 + radius * Math.cos(angle),
+      y: height / 2 + radius * Math.sin(angle),
+    });
+  });
+  if (n <= 1) return positions;
+
+  const edgePairs = edges
+    .map((e) => [e.src, e.dst])
+    .filter(([a, b]) => positions.has(a) && positions.has(b));
+
+  const k = Math.sqrt((width * height) / n);
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const pad = 30;
+
+  for (let iter = 0; iter < iterations; iter++) {
+    const disp = new Map(nodeIds.map((id) => [id, { x: 0, y: 0 }]));
+
+    for (let i = 0; i < n; i++) {
+      const a = nodeIds[i];
+      const pa = positions.get(a);
+      for (let j = i + 1; j < n; j++) {
+        const b = nodeIds[j];
+        const pb = positions.get(b);
+        const dx = pa.x - pb.x;
+        const dy = pa.y - pb.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+        const force = (k * k) / dist;
+        const fx = (dx / dist) * force;
+        const fy = (dy / dist) * force;
+        disp.get(a).x += fx; disp.get(a).y += fy;
+        disp.get(b).x -= fx; disp.get(b).y -= fy;
+      }
+    }
+
+    for (const [a, b] of edgePairs) {
+      const pa = positions.get(a);
+      const pb = positions.get(b);
+      const dx = pa.x - pb.x;
+      const dy = pa.y - pb.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+      const force = (dist * dist) / k;
+      const fx = (dx / dist) * force;
+      const fy = (dy / dist) * force;
+      disp.get(a).x -= fx; disp.get(a).y -= fy;
+      disp.get(b).x += fx; disp.get(b).y += fy;
+    }
+
+    const temp = Math.max(1, ((iterations - iter) / iterations) * 8);
+    for (const id of nodeIds) {
+      const p = positions.get(id);
+      const d = disp.get(id);
+      const dlen = Math.sqrt(d.x * d.x + d.y * d.y) || 0.01;
+      p.x += (d.x / dlen) * Math.min(dlen, temp);
+      p.y += (d.y / dlen) * Math.min(dlen, temp);
+      p.x += (centerX - p.x) * 0.01;
+      p.y += (centerY - p.y) * 0.01;
+      p.x = Math.max(pad, Math.min(width - pad, p.x));
+      p.y = Math.max(pad, Math.min(height - pad, p.y));
+    }
+  }
+
+  return positions;
+}
+
+function renderNodeList(ulEl, emptyEl, items) {
+  ulEl.textContent = "";
+  if (!items || items.length === 0) {
+    ulEl.hidden = true;
+    emptyEl.hidden = false;
+    return;
+  }
+  ulEl.hidden = false;
+  emptyEl.hidden = true;
+  for (const it of items) {
+    const li = document.createElement("li");
+    li.textContent = `${it.node} (depth ${it.depth})`;
+    if (it.via) li.title = it.via;
+    ulEl.appendChild(li);
+  }
+}
+
+// GET-only: fetches impact + deps for a clicked node and renders them in the
+// side inspector. Never calls anything but GET /graph/impact/:node and
+// GET /graph/deps/:node.
+async function selectGraphNode(node) {
+  graphSvgEl.querySelectorAll(".graph-node").forEach((el) => {
+    el.classList.toggle("selected", el.dataset.node === node);
+  });
+  graphSelectedNodeEl.textContent = node;
+  setStatus(graphInspectorStatusEl, "loading", "loading…");
+  graphInspectorDetailEl.hidden = true;
+  try {
+    const [impactRes, depsRes] = await Promise.all([
+      fetch("/graph/impact/" + encodeURIComponent(node)),
+      fetch("/graph/deps/" + encodeURIComponent(node)),
+    ]);
+    const impactBody = await impactRes.json();
+    const depsBody = await depsRes.json();
+    if (!impactRes.ok || !depsRes.ok) {
+      setStatus(graphInspectorStatusEl, "fail",
+        `FAIL — ${(impactBody && impactBody.error) || (depsBody && depsBody.error) || "could not load node detail"}`);
+      return;
+    }
+    renderNodeList(graphImpactListEl, graphImpactEmptyEl, impactBody.impact || []);
+    renderNodeList(graphDepsListEl, graphDepsEmptyEl, depsBody.deps || []);
+    graphInspectorDetailEl.hidden = false;
+    setStatus(graphInspectorStatusEl, "pass", `${impactBody.count} impacted, ${depsBody.count} dep(s)`);
+  } catch (err) {
+    setStatus(graphInspectorStatusEl, "fail", `FAIL — ${err && err.message ? err.message : err}`);
+  }
+}
+
+function renderGraph(nodeIds, edges) {
+  graphSvgEl.textContent = "";
+  const positions = forceLayout(nodeIds, edges);
+
+  const edgesGroup = svgEl("g", { class: "graph-edges" });
+  for (const e of edges) {
+    const p1 = positions.get(e.src);
+    const p2 = positions.get(e.dst);
+    if (!p1 || !p2) continue;
+    const line = svgEl("line", { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, class: "graph-edge" });
+    const title = svgEl("title");
+    title.textContent = `${e.src} --${e.predicate}--> ${e.dst} [${e.origin}]`;
+    line.appendChild(title);
+    edgesGroup.appendChild(line);
+  }
+  graphSvgEl.appendChild(edgesGroup);
+
+  const nodesGroup = svgEl("g", { class: "graph-nodes" });
+  for (const id of nodeIds) {
+    const p = positions.get(id);
+    const g = svgEl("g", { class: "graph-node", tabindex: "0", role: "button", "aria-label": `node ${id}` });
+    g.dataset.node = id;
+    const circle = svgEl("circle", { cx: p.x, cy: p.y, r: 7 });
+    const label = svgEl("text", { x: p.x + 10, y: p.y + 4, class: "graph-node-label" });
+    label.textContent = shortLabel(id);
+    const title = svgEl("title");
+    title.textContent = id;
+    g.appendChild(circle);
+    g.appendChild(label);
+    g.appendChild(title);
+    const activate = () => selectGraphNode(id);
+    g.addEventListener("click", activate);
+    g.addEventListener("keydown", (evt) => {
+      if (evt.key === "Enter" || evt.key === " ") {
+        evt.preventDefault();
+        activate();
+      }
+    });
+    nodesGroup.appendChild(g);
+  }
+  graphSvgEl.appendChild(nodesGroup);
+}
+
+function resetGraphInspector() {
+  graphSelectedNodeEl.textContent = "";
+  graphInspectorStatusEl.textContent = "Click a node to inspect it.";
+  graphInspectorStatusEl.className = "panel-status";
+  graphInspectorDetailEl.hidden = true;
+}
+
+async function loadGraph() {
+  setStatus(graphStatusEl, "loading", "loading…");
+  graphBodyEl.hidden = true;
+  graphEmptyStateEl.hidden = true;
+  try {
+    const statsRes = await fetch("/graph/stats");
+    const stats = await statsRes.json();
+    if (!statsRes.ok) {
+      setStatus(graphStatusEl, "fail", `FAIL — ${stats.error || `GET /graph/stats returned ${statsRes.status}`}`);
+      return;
+    }
+    if (!stats.edges) {
+      // Explicit empty-state (fresh install / no edges) — never a broken render.
+      setStatus(graphStatusEl, "pass", "0 nodes, 0 edges");
+      graphEmptyStateEl.hidden = false;
+      return;
+    }
+
+    const edgesRes = await fetch("/graph/edges");
+    const edgesBody = await edgesRes.json();
+    if (!edgesRes.ok) {
+      setStatus(graphStatusEl, "fail", `FAIL — ${edgesBody.error || `GET /graph/edges returned ${edgesRes.status}`}`);
+      return;
+    }
+    const edges = Array.isArray(edgesBody.edges) ? edgesBody.edges : [];
+    const nodeSet = new Set();
+    for (const e of edges) {
+      nodeSet.add(e.src);
+      nodeSet.add(e.dst);
+    }
+    const nodeIds = Array.from(nodeSet).sort();
+
+    if (nodeIds.length === 0) {
+      setStatus(graphStatusEl, "pass", "0 nodes, 0 edges");
+      graphEmptyStateEl.hidden = false;
+      return;
+    }
+
+    renderGraph(nodeIds, edges);
+    graphBodyEl.hidden = false;
+    resetGraphInspector();
+    setStatus(graphStatusEl, "pass", `${stats.nodes} node(s), ${stats.edges} edge(s)`);
+  } catch (err) {
+    setStatus(graphStatusEl, "fail", "FAIL — could not reach GET /graph/stats or GET /graph/edges");
+  }
+}
+
 async function refreshAll() {
   refreshBtn.disabled = true;
   try {
-    await Promise.all([loadLiveliness(), loadSettings(), loadLanes(), loadSearchScopes()]);
+    await Promise.all([loadLiveliness(), loadSettings(), loadLanes(), loadSearchScopes(), loadGraph()]);
     lastRefreshedEl.textContent = `last refreshed ${new Date().toLocaleTimeString()}`;
   } finally {
     refreshBtn.disabled = false;

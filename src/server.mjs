@@ -15,6 +15,12 @@
 //   POST /lanes   {name, collection, ladder?} -> add-only config.toml write
 //   GET  /search  ?q=&scope=&mode=recall|grep&hits=&escalate=&min_score=&radius=
 //                    -> thin dispatcher to recall()/grep() for the UI's Search panel
+//   GET  /graph/stats            -> graph size + origin breakdown (swarm-memory graph stats)
+//   GET  /graph/edges  ?node=    -> list edges, optionally touching `node` (graph edges)
+//   GET  /graph/impact/:node ?depth= -> reverse closure: what's affected if :node changes
+//   GET  /graph/deps/:node   ?depth= -> forward closure: what :node depends on
+//                    -> READ-ONLY graph exploration. `graph add`/`graph remove` (the
+//                       graph's mutation verbs) are never wrapped or reachable here.
 //
 // GET / content negotiation: no consumer in this repo (hooks/lib/mnemo-client.mjs,
 // test/smoke.mjs) depends on GET /'s bare path today, and Node's fetch() sends
@@ -30,7 +36,19 @@ import http from "node:http";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { health, scopes, recall, remember, grep, scopeMap, addLane } from "./engine.mjs";
+import {
+  health,
+  scopes,
+  recall,
+  remember,
+  grep,
+  scopeMap,
+  addLane,
+  graphStats,
+  graphEdges,
+  graphImpact,
+  graphDeps,
+} from "./engine.mjs";
 
 const PORT = Number(process.env.PORT || 8477);
 const SERVICE = { god: "mnemosyne", role: "memory", version: "0.1.0" };
@@ -130,6 +148,10 @@ const server = http.createServer(async (req, res) => {
           "POST /grep": "{query, scope?, hits?, escalate?, radius?} -> KEYWORD hits (exact-string, no embedder)",
           "POST /lanes": "{name, collection, ladder?} -> add-only atomic write of a new scope to config.toml",
           "GET /search": "?q=&scope=&mode=recall|grep&hits=&escalate=&min_score=&radius= -> dispatches to recall()/grep()",
+          "GET /graph/stats": "graph size + origin breakdown (swarm-memory graph stats)",
+          "GET /graph/edges": "?node= -> list edges, optionally touching `node` (READ-ONLY)",
+          "GET /graph/impact/:node": "?depth= -> reverse closure: what's affected if :node changes",
+          "GET /graph/deps/:node": "?depth= -> forward closure: what :node depends on",
         },
       });
     }
@@ -225,6 +247,37 @@ const server = http.createServer(async (req, res) => {
       const b = await readJson(req);
       const result = await addLane(b.name, b.collection, b.ladder);
       return send(res, 200, { ...result, took_ms: Date.now() - t0 });
+    }
+
+    // --- Graph (s-04): READ-ONLY impact-graph exploration ------------------
+    // Wraps only swarm-memory's graph QUERY verbs (stats/edges/impact/deps).
+    // `graph add`/`graph remove` (the graph's mutation verbs) are never
+    // wrapped by engine.mjs and no route below reaches them — graph mutation
+    // is out of scope for this story (see s-04-graph-view.yaml).
+
+    if (route === "GET /graph/stats") {
+      const stats = await graphStats();
+      return send(res, 200, { ...stats, took_ms: Date.now() - t0 });
+    }
+
+    if (req.method === "GET" && url.pathname === "/graph/edges") {
+      const node = url.searchParams.get("node") || undefined;
+      const edges = await graphEdges(node);
+      return send(res, 200, { node: node || null, count: edges.length, edges, took_ms: Date.now() - t0 });
+    }
+
+    if (req.method === "GET" && url.pathname.startsWith("/graph/impact/")) {
+      const node = decodeURIComponent(url.pathname.slice("/graph/impact/".length));
+      const depthParam = url.searchParams.get("depth");
+      const impact = await graphImpact(node, { depth: depthParam != null ? Number(depthParam) : undefined });
+      return send(res, 200, { node, count: impact.length, impact, took_ms: Date.now() - t0 });
+    }
+
+    if (req.method === "GET" && url.pathname.startsWith("/graph/deps/")) {
+      const node = decodeURIComponent(url.pathname.slice("/graph/deps/".length));
+      const depthParam = url.searchParams.get("depth");
+      const deps = await graphDeps(node, { depth: depthParam != null ? Number(depthParam) : undefined });
+      return send(res, 200, { node, count: deps.length, deps, took_ms: Date.now() - t0 });
     }
 
     return send(res, 404, { error: "not found", route });

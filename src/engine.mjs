@@ -38,16 +38,22 @@ const NOTES_DIR =
 const CLI_TIMEOUT_MS = Number(process.env.MNEMOSYNE_CLI_TIMEOUT_MS || 90_000);
 
 // A generous env so the child CLI finds uv-installed tools + the qdrant key.
-const CHILD_ENV = {
-  ...process.env,
-  PATH: `/opt/homebrew/bin:${homedir()}/.local/bin:${process.env.PATH || ""}`,
-};
+// Built fresh on every call (not cached at module load) — same rationale as
+// defaultConfigPath() above: tests set env vars like SWARM_MEMORY_CONFIG /
+// SWARM_MEMORY_GRAPH_DB on process.env after this module is imported (via a
+// throwaway fixture), and a stale snapshot would silently ignore them.
+function childEnv() {
+  return {
+    ...process.env,
+    PATH: `/opt/homebrew/bin:${homedir()}/.local/bin:${process.env.PATH || ""}`,
+  };
+}
 
 async function run(args, { timeout = CLI_TIMEOUT_MS } = {}) {
   const { stdout, stderr } = await execFileP(CLI, args, {
     timeout,
     maxBuffer: 32 * 1024 * 1024,
-    env: CHILD_ENV,
+    env: childEnv(),
   });
   return { stdout, stderr };
 }
@@ -166,6 +172,62 @@ export async function grep(query, scope, opts = {}) {
   const scopesArr = JSON.parse(stdout);
   const total = scopesArr.reduce((n, s) => n + (s.hits ? s.hits.length : 0), 0);
   return { query: String(query), total_hits: total, scopes: scopesArr, match_mode: "keyword" };
+}
+
+// --- graph: READ-ONLY impact-graph exploration ------------------------------
+//
+// Wraps `swarm-memory graph {stats,edges,impact,deps}` — the graph's own
+// query verbs. Deliberately does NOT wrap `graph add`/`graph remove` (the
+// graph's mutation verbs): nothing in the design discussion calls for
+// editing the graph from the UI, and doing so would be scope creep beyond
+// what s-04 asked for. See s-04-graph-view.yaml's acceptance criteria.
+
+// graphStats — graph size + origin breakdown. `graph stats` has no --json
+// flag because its output is already bare JSON (confirmed via a live run:
+// `{"nodes": 22, "edges": 30, "edges_by_origin": {...}, "db": "..."}`).
+export async function graphStats() {
+  const { stdout } = await run(["graph", "stats"]);
+  return JSON.parse(stdout);
+}
+
+// graphEdges(node?) — list edges, or only those touching `node` when given.
+// Each edge: {src, predicate, dst, origin, created_at}.
+export async function graphEdges(node) {
+  const args = ["graph", "edges"];
+  if (node) args.push(String(node));
+  args.push("--json");
+  const { stdout } = await run(args);
+  return JSON.parse(stdout);
+}
+
+function requireGraphNode(node, who) {
+  if (!node || !String(node).trim()) {
+    const err = new Error(`${who}: node is required`);
+    err.status = 400;
+    throw err;
+  }
+}
+
+// graphImpact(node, {depth}) — reverse closure: what is affected if `node`
+// changes. A node with no impact (or an unknown node) returns `[]` with a
+// clean exit — confirmed live, not assumed — so this never throws for a
+// merely-unknown node, only for a missing/blank one.
+export async function graphImpact(node, opts = {}) {
+  requireGraphNode(node, "graph impact");
+  const args = ["graph", "impact", String(node), "--json"];
+  if (opts.depth != null) args.push("--depth", String(opts.depth));
+  const { stdout } = await run(args);
+  return JSON.parse(stdout);
+}
+
+// graphDeps(node, {depth}) — forward closure: what `node` depends on. Same
+// unknown-node-returns-[] behavior as graphImpact (confirmed live).
+export async function graphDeps(node, opts = {}) {
+  requireGraphNode(node, "graph deps");
+  const args = ["graph", "deps", String(node), "--json"];
+  if (opts.depth != null) args.push("--depth", String(opts.depth));
+  const { stdout } = await run(args);
+  return JSON.parse(stdout);
 }
 
 // --- addLane: the ONLY supported config.toml mutation ----------------------

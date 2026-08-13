@@ -101,6 +101,32 @@
         <p id="search-empty-state" class="panel-status" hidden>No hits.</p>
       </div>
     </section>
+
+    <section id="graph" class="panel panel-wide">
+      <h2>Graph</h2>
+      <p class="panel-status" id="graph-status">loading…</p>
+      <p class="panel-hint">Read-only impact graph (swarm-memory's <code>graph.sqlite</code>) — click a node to inspect its impact / deps. Viewing only; this panel never adds or removes graph edges.</p>
+
+      <div id="graph-body" hidden>
+        <div id="graph-view">
+          <svg id="graph-svg" viewBox="0 0 640 480" role="img" aria-label="impact graph node-link diagram"></svg>
+        </div>
+        <div id="graph-inspector">
+          <h3>Node inspector</h3>
+          <p class="panel-status" id="graph-inspector-status">Click a node to inspect it.</p>
+          <div id="graph-inspector-detail" hidden>
+            <p class="graph-node-name" id="graph-selected-node"></p>
+            <h4>Impact <span class="panel-hint-inline">(what's affected if this changes)</span></h4>
+            <ul id="graph-impact-list" class="graph-node-list"></ul>
+            <p id="graph-impact-empty" class="panel-status" hidden>No impact — nothing depends on this node.</p>
+            <h4>Deps <span class="panel-hint-inline">(what this depends on)</span></h4>
+            <ul id="graph-deps-list" class="graph-node-list"></ul>
+            <p id="graph-deps-empty" class="panel-status" hidden>No deps — this node depends on nothing.</p>
+          </div>
+        </div>
+      </div>
+      <p id="graph-empty-state" class="panel-status" hidden>Graph is empty — no nodes or edges yet (run <code>swarm-memory graph scan</code> to populate it).</p>
+    </section>
   </main>
 
   <footer>
