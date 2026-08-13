@@ -1,3 +1,9 @@
 node_modules/
 .DS_Store
 *.log
+
+# Hive ephemeral session/telemetry bookkeeping (not project state)
+.pHive/agent-complete/
+.pHive/interrupts/
+.pHive/metrics/
+.pHive/session-effort.txt

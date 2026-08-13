@@ -1,0 +1,53 @@
+name: api-team
+description: Backend service team for Mnemosyne — thin HTTP service wrapping swarm-memory (Qdrant SSOT); no frontend/UI work.
+lead: team-lead
+methodology: tdd  # from hive.config.yaml -> execution.default_methodology
+
+members:
+  - agent: backend-developer
+    role: HTTP service + swarm-memory engine wrapper implementation
+    domain:
+      - path: src/**
+        read: true
+        write: true
+        delete: false
+      - path: bin/**
+        read: true
+        write: true
+        delete: false
+
+  - agent: backend-developer
+    role: Claude Code agent-loop hooks (shipped for consumers)
+    domain:
+      - path: hooks/**
+        read: true
+        write: true
+        delete: false
+
+  - agent: tester
+    role: Smoke + hook test authoring and execution
+    domain:
+      - path: test/**
+        read: true
+        write: true
+        delete: false
+
+  - agent: reviewer
+    role: Code review
+    tool_access: [codex]
+
+context:
+  tech_stack:
+    backend: node (zero deps, ESM)
+    data_layer: swarm-memory CLI over Qdrant Cloud
+  commit_granularity: feature-scoped
+  pr_style: single-commit
+  review_depth: thorough
+  notes: |
+    Generated from project discovery (re-kickoff, 2026-08-12).
+    Guardrails from SERVICE.md: wraps swarm-memory only, never re-embeds or wipes
+    Qdrant collections; remember is additive (--no-prune); zero third-party deps.
+    Full layer-stack escalation (meta/enterprise/project layers) is planned but
+    not yet implemented — see .pHive/epics/mnemosyne-foundation/.
+
+team_memory_path: .pHive/team-memories/api-team/

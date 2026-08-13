@@ -1,7 +1,7 @@
 project_name: Mnemosyne
-type: greenfield
-discovered: "2026-07-27T10:46:00Z"
-source: "idea brief"
+type: brownfield
+discovered: "2026-08-12T00:00:00Z"
+source: "re-kickoff — README.md + SERVICE.md + codebase scan (source code now exists; original greenfield discovery was from idea brief on 2026-07-27)"
 
 project_type: framework
 has_ui: false
@@ -23,28 +23,39 @@ claude_md_summary: |
   - Build ON what exists (swarm-memory at ~/Documents/work/dostal/code/swarm-memory)
 
 tech_stack:
-  languages: []
+  languages: [javascript]
   frameworks: []
   build_tools: []
-  package_managers: []
-  versions: {}
+  package_managers: [npm]
+  versions:
+    node: ">=20"
 
 structure:
-  modules: []
-  entry_points: []
+  modules:
+    - name: server
+      purpose: "Thin HTTP service exposing recall/remember/scopes/health"
+      source: src/server.mjs
+    - name: engine
+      purpose: "Wraps the swarm-memory CLI (Qdrant Cloud SSOT); only file that shells out"
+      source: src/engine.mjs
+    - name: hooks
+      purpose: "Claude Code agent-loop hooks (pre-recall, post-remember) shipped for consumers"
+      source: hooks/
+      tests: test/hooks.mjs
+  entry_points: [bin/mnemosyne, src/server.mjs]
 
 architecture:
-  pattern: "To be determined during architecture phase"
+  pattern: "Thin HTTP service wrapping an external CLI — transport (server.mjs) / engine (engine.mjs) split, zero deps"
   di_framework: null
-  state_management: "Layer-stack escalation with provenance tracking"
+  state_management: "Stateless HTTP; scope→collection map cached in-memory from `swarm-memory config`"
   navigation: null
-  data_layer: "Multi-layer: meta(Obsidian) → enterprise → project → code-graph → vector(Qdrant) → file"
+  data_layer: "swarm-memory CLI over Qdrant Cloud SSOT via execFile; full layer-stack escalation (meta→enterprise→project→code-graph→vector→file) from the idea brief is not yet implemented — v0.1.0 rides the swarm-memory scope ladder only"
 
 conventions:
-  naming: "To be established"
-  file_organization: "To be established"
-  branching: "To be established"
-  commit_messages: "To be established"
+  naming: "camelCase functions/vars, kebab-case or lowerCamel .mjs filenames, ESM (`type: module`)"
+  file_organization: "src/ = HTTP + engine; hooks/ = Claude Code agent-loop hooks shipped for consumers; test/ = smoke + hook tests; bin/ = CLI entry"
+  branching: "feat/<slug> off main, PR into main; epic.yaml declares branch_strategy: per-epic"
+  commit_messages: "Conventional-ish prefixes: feat(scope):, ci:, docs:, plan:"
 
 test_infrastructure:
   unit:
@@ -53,26 +64,41 @@ test_infrastructure:
     count: "0 files"
     coverage_tool: null
   integration:
-    framework: null
-    location: null
+    framework: "Node built-in (execFile/http), no test framework dependency"
+    location: test/
   e2e:
     framework: null
     location: null
     count: "0 flows"
-  mocking: null
-  test_commands: []
+  mocking: "none — smoke tests hit the live Qdrant/swarm-memory corpus"
+  test_commands:
+    - "npm run smoke"
+    - "npm run test:hooks"
 
 ci_cd:
-  platform: null
-  workflows: []
-  gating: null
+  platform: "GitHub Actions"
+  workflows:
+    - "ci.yml — auto-detects node/python/go stack, runs install+build+test; required gate on PRs into dev/main/master"
+    - "promote.yml"
+  gating: "ci.yml is the standard Pantheon-wide gate; required on PRs into dev/main/master"
 
-documentation_found: []
+documentation_found:
+  - path: README.md
+    content_summary: "OSS-facing overview — problem statement, layer-stack architecture, mermaid diagram"
+  - path: SERVICE.md
+    content_summary: "v0.1.0 running slice — API reference, run instructions, guardrails honored, honest deferred-scope list"
+  - path: VISION.md
+    content_summary: "Long-term product vision"
+  - path: idea-brief.md
+    content_summary: "Original idea brief that seeded the greenfield kickoff"
+  - path: hooks/README.md
+    content_summary: "Instructions for wiring Mnemosyne hooks into a consumer's Claude Code settings.json"
 
 existing_knowledge:
   mcp_servers: []
   existing_skills: []
   existing_hooks: []
+  note: "No .claude/ directory in this repo. hooks/ contains hook scripts this repo SHIPS for consumers to wire into their own settings.json (see hooks/settings.hooks.json) — not hooks enabled in this repo's own session."
 
 north_star:
   goal: "Unify memory layers behind one recall/write API so 'memory over find' becomes the default retrieval path for every agent"
@@ -90,7 +116,7 @@ integrations:
       qdrant_key_configured: true
     codex:
       detected: true
-      path: null
+      path: "/Users/mdostal/.local/bin/codex"
     linearis:
       detected: false
     frame0:
@@ -119,10 +145,20 @@ code_quality:
   pre_commit:
     framework: null
     hooks: []
-  code_snippets: []
+  code_snippets:
+    - path: src/engine.mjs
+      pattern: cli-wrapper
+      annotation: "Shells out to an external CLI (swarm-memory --json) via execFile; caches config in module-level state; every op returns the CLI's native JSON shape untouched."
+      lines: "1-56"
+    - path: src/server.mjs
+      pattern: zero-dep-http-router
+      annotation: "Node built-in `http` module, no framework; manual method/path routing dispatching to engine.mjs functions."
+      lines: "1-40"
   test_first_signals:
     co_located_tests: false
     test_before_source: inconclusive
     test_runner_in_precommit: false
     bdd_keywords: false
-    test_absence: true
+    test_absence: false
+
+project_maturity: "early"  # v0.1.0 running slice; 2 source files, zero deps, no linters/CI-gated tests yet
