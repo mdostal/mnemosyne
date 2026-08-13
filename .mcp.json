@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "mnemosyne": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "bin/mnemosyne-mcp.mjs"
+      ],
+      "env": {}
+    }
+  }
+}
