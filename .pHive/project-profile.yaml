@@ -105,8 +105,8 @@ north_star:
   audience: "Pantheon gods (Minerva, Argus, Metis, etc.) and swarm agents"
   expected_scale: "Cross-project meta-layer serving all Pantheon components"
   pain_points: "Memory infrastructure exists but is fragmented — no single god owns the layer stack, no unified API, agents fall back to grep/find"
-  success: "One recall/write API in use by ≥1 other god spanning ≥3 layers; recall beats find on token cost"
-  avoid: "Reinventing existing vector DB or embedder; wiping Qdrant collections; silent failures"
+  success: "Standalone-first: recall/write usable by any harness (hooks, MCP, skillsets) without bespoke per-god wiring; recall beats find on token cost. Reframed 2026-08-13 — 'used by another god' does NOT mean hand-wiring Mnemosyne into a specific god's repo (e.g. Minerva); real cross-god availability happens via Pantheon/Multica-level context injection, which is deferred, explicitly NOT this epic's job to build. See memory: project_north_star_reframed."
+  avoid: "Reinventing existing vector DB or embedder; wiping Qdrant collections; silent failures; bespoke per-god integration wiring (cross-repo changes to another god's repo) — ask before ever proposing this again"
 
 integrations:
   cli_tools:
