@@ -1,7 +1,8 @@
 id: pl-01-layer-registry
 epic: mnemosyne-pluggable-layers
 title: Config-driven layer registry — the actual swap mechanism
-status: pending
+status: complete
+note: "Built lib/mnemosyne/layers/registry.ts (LayerRegistry, explicit register/create, unknown-name throws) + config.ts (resolveLayerStackConfig: explicit > MNEMOSYNE_LAYERS env > mnemosyne.layers.json > default [code-graph,vector,file]). Refactored MnemosyneClient to a generic N-layer cascade reproducing the exact original 3-layer semantics -- including the escalated-flag asymmetry (only set for non-first-layer zero-hit transitions, never the first layer or a failure-driven transition) and the terminal-failure rule (last attempted layer's own outcome wins, discarding an earlier zero-hit success's tentative empty result if the escalation target then fails). All 21 pre-existing client.test.ts assertions pass completely unmodified -- verified, not assumed. Legacy codeGraphLayer/vectorLayer/layerAdapter constructor options still work as per-slot overrides on top of the resolved stack. Added getConfiguredLayers() for pl-03's GET /layers. 20 new tests across registry.test.ts, config.test.ts, client-layer-config.test.ts."
 complexity: high
 methodology: tdd
 depends_on: []

@@ -23,16 +23,16 @@
 import { createHash } from 'node:crypto';
 import { logger as defaultLogger, type Logger } from '../../src/observability/logger.js';
 import { metrics as defaultMetrics, type Metrics } from '../../src/observability/metrics.js';
-import { CodeGraphLayerAdapter } from './layers/CodeGraphLayerAdapter.js';
-import { FileLayerAdapter } from './layers/FileLayerAdapter.js';
 import type { LayerAdapter, RecallOptions } from './layers/LayerAdapter.js';
-import { VectorLayerAdapter } from './layers/VectorLayerAdapter.js';
+import { defaultRegistry, LayerRegistry } from './layers/registry.js';
+import { resolveLayerStackConfig, type LayerStackConfig } from './layers/config.js';
 import type {
   Content,
   Hit,
   Intent,
   Layer,
   LayerSkip,
+  RecallFailure,
   RecallResult,
   RememberResult,
   Scope,
@@ -41,29 +41,69 @@ import type {
 export interface MnemosyneClientOptions {
   /** Directory the file layer searches. Defaults to `process.cwd()`. */
   rootDirectory?: string;
-  /** Override the code-graph adapter (mainly for tests). Defaults to a real `CodeGraphLayerAdapter`. */
+  /**
+   * Override the code-graph adapter slot (mainly for tests). Takes priority
+   * over whatever the resolved layer stack would otherwise construct for
+   * the 'code-graph' name.
+   */
   codeGraphLayer?: LayerAdapter;
-  /** Override the vector layer adapter (mainly for tests). Defaults to a real `VectorLayerAdapter`. */
+  /** Override the vector adapter slot (mainly for tests). See codeGraphLayer. */
   vectorLayer?: LayerAdapter;
-  /** Override the file fallback adapter (mainly for tests). Defaults to a real `FileLayerAdapter`. */
+  /** Override the file adapter slot (mainly for tests). See codeGraphLayer. */
   layerAdapter?: LayerAdapter;
   logger?: Logger;
   metrics?: Metrics;
+  /**
+   * Explicit layer-stack config (pl-01-layer-registry) — which layers to
+   * build, in what order, with what per-layer options. Omitted: resolved
+   * from MNEMOSYNE_LAYERS env, then mnemosyne.layers.json, then the
+   * hardcoded default (code-graph, vector, file — today's exact behavior).
+   */
+  layerStack?: LayerStackConfig;
+  /** Override the layer registry (mainly for tests that register a fake layer under a test-only name). Defaults to the shared module-level registry. */
+  registry?: LayerRegistry;
+}
+
+/** Describes one configured layer for introspection (GET /layers, pl-03). */
+export interface ConfiguredLayerInfo {
+  layer: Layer;
+  writable: boolean;
 }
 
 export class MnemosyneClient {
-  private readonly codeGraphLayer: LayerAdapter;
-  private readonly fileLayer: LayerAdapter;
+  private readonly layers: LayerAdapter[];
   private readonly logger: Logger;
   private readonly metrics: Metrics;
-  private readonly vectorLayer: LayerAdapter;
 
   constructor(options: MnemosyneClientOptions = {}) {
-    this.codeGraphLayer = options.codeGraphLayer ?? new CodeGraphLayerAdapter();
-    this.fileLayer = options.layerAdapter ?? new FileLayerAdapter(options.rootDirectory ?? process.cwd());
     this.logger = options.logger ?? defaultLogger;
     this.metrics = options.metrics ?? defaultMetrics;
-    this.vectorLayer = options.vectorLayer ?? new VectorLayerAdapter();
+
+    const registry = options.registry ?? defaultRegistry();
+    const stackConfig = resolveLayerStackConfig({ explicit: options.layerStack });
+    const ctx = { rootDirectory: options.rootDirectory };
+
+    // Legacy per-slot overrides (codeGraphLayer/vectorLayer/layerAdapter)
+    // apply on top of the resolved stack, replacing whichever entry has a
+    // matching `.layer` name — this preserves every existing call site
+    // (tests, current consumers) that injects a stub via these three fields
+    // without requiring them to learn the new registry/config API.
+    const legacyOverrideByName: Partial<Record<string, LayerAdapter>> = {
+      'code-graph': options.codeGraphLayer,
+      vector: options.vectorLayer,
+      file: options.layerAdapter,
+    };
+
+    this.layers = stackConfig.layers.map((entry) => {
+      const override = legacyOverrideByName[entry.name];
+      if (override) return override;
+      return registry.create(entry.name, entry.options ?? {}, ctx);
+    });
+  }
+
+  /** The resolved layer stack, in cascade order — for GET /layers (pl-03) and similar introspection. */
+  getConfiguredLayers(): ConfiguredLayerInfo[] {
+    return this.layers.map((layer) => ({ layer: layer.layer, writable: typeof layer.remember === 'function' }));
   }
 
   async recall(query: string, scope: Scope, intent?: Intent): Promise<RecallResult> {
@@ -93,74 +133,86 @@ export class MnemosyneClient {
     const recallOptions = { scope, intent: resolvedIntent };
     const layersQueried: Layer[] = [];
     const layersSkipped: LayerSkip[] = [];
-    let hits: Hit[];
     let degraded = false;
     let escalated = false;
+    let finalHits: Hit[] | undefined;
+    let lastResult: RecallResult | undefined;
 
-    const codeGraphResult = await this.queryLayer(this.codeGraphLayer, query, recallOptions);
-    if (codeGraphResult.ok) {
-      layersQueried.push('code-graph');
-      degraded = degraded || codeGraphResult.degraded;
-      hits = codeGraphResult.hits;
+    // Generic N-layer cascade (pl-01-layer-registry), reproducing the
+    // original hand-written 3-layer chain's exact semantics:
+    //   - The FIRST layer never sets `escalated` on a zero-hit continuation
+    //     (code-graph is a "bonus early check", not part of the escalation
+    //     ladder proper) — every SUBSEQUENT layer's zero-hit continuation
+    //     does set `escalated`.
+    //   - A layer FAILING (ok:false) never sets `escalated`, at any index —
+    //     only a successful-but-empty continuation does.
+    //   - The moment any layer succeeds with >0 hits, the cascade stops and
+    //     those hits win, regardless of position.
+    //   - If the cascade runs off the end without ever finding a non-empty
+    //     success, the LAST layer's own raw outcome decides the return: if
+    //     it failed, that RecallFailure is returned verbatim (discarding any
+    //     earlier zero-hit success's tentative empty result — an escalation
+    //     that ends in failure surfaces the failure, not a stale "found
+    //     nothing"); if it succeeded (even empty), a RecallSuccess with its
+    //     (possibly empty) hits is returned.
+    for (let i = 0; i < this.layers.length; i++) {
+      const layerAdapter = this.layers[i]!;
+      const result = await this.queryLayer(layerAdapter, query, recallOptions);
+      lastResult = result;
 
-      if (hits.length > 0) {
-        const result: RecallResult = {
-          ok: true,
-          query,
-          scope,
-          intent: resolvedIntent,
-          hits: mergeHits(hits),
-          layers_queried: layersQueried,
-          layers_skipped: layersSkipped,
-          escalated,
-          degraded,
-        };
-
-        this.recordRecallEnd(result, startedAt);
-        return result;
+      if (!result.ok) {
+        degraded = true;
+        layersSkipped.push({
+          layer: layerAdapter.layer,
+          reason: result.error.code ?? `${layerAdapter.layer}_unavailable`,
+          detail: result.error.message,
+        });
+        continue;
       }
-    } else {
-      degraded = true;
-      layersSkipped.push({
-        layer: 'code-graph',
-        reason: codeGraphResult.error.code ?? 'code_graph_unavailable',
-        detail: codeGraphResult.error.message,
-      });
+
+      layersQueried.push(layerAdapter.layer);
+      degraded = degraded || result.degraded;
+      finalHits = result.hits;
+
+      if (result.hits.length > 0) {
+        break;
+      }
+      if (i > 0) {
+        escalated = true;
+      }
+      // zero hits, not the first layer's special-case pass-through — loop
+      // continues to the next layer (or ends naturally if this was last).
     }
 
-    const vectorResult = await this.queryLayer(this.vectorLayer, query, recallOptions);
-    if (vectorResult.ok) {
-      layersQueried.push('vector');
-      degraded = degraded || vectorResult.degraded;
-      hits = vectorResult.hits;
+    if (this.layers.length === 0) {
+      // No layer configured at all — the loop never ran, lastResult/finalHits
+      // are both still undefined. Distinct from "every configured layer
+      // failed" below (that case has a real lastResult to surface).
+      const result: RecallFailure = {
+        ok: false,
+        query,
+        scope,
+        intent: resolvedIntent,
+        error: { layer: null, message: 'no layers configured', code: 'no_layers_configured' },
+      };
+      this.recordRecallEnd(result, startedAt);
+      return result;
+    }
 
-      if (hits.length === 0) {
-        escalated = true;
-        const fileResult = await this.queryLayer(this.fileLayer, query, recallOptions);
-        if (!fileResult.ok) {
-          this.recordRecallEnd(fileResult, startedAt);
-          return fileResult;
-        }
-        layersQueried.push('file');
-        degraded = degraded || fileResult.degraded;
-        hits = fileResult.hits;
-      }
-    } else {
-      degraded = true;
-      layersSkipped.push({
-        layer: 'vector',
-        reason: vectorResult.error.code ?? 'vector_unreachable',
-        detail: vectorResult.error.message,
-      });
+    if (finalHits === undefined) {
+      // Every configured layer failed outright (no layer ever succeeded) —
+      // lastResult is guaranteed to be the final layer's own RecallFailure.
+      const failure = lastResult as RecallFailure;
+      this.recordRecallEnd(failure, startedAt);
+      return failure;
+    }
 
-      const fileResult = await this.queryLayer(this.fileLayer, query, recallOptions);
-      if (!fileResult.ok) {
-        this.recordRecallEnd(fileResult, startedAt);
-        return fileResult;
-      }
-      layersQueried.push('file');
-      degraded = degraded || fileResult.degraded;
-      hits = fileResult.hits;
+    if (lastResult && !lastResult.ok) {
+      // An earlier layer succeeded with zero hits (escalating onward), but
+      // the layer we escalated TO then failed — surface that failure, don't
+      // silently fall back to the earlier empty success.
+      this.recordRecallEnd(lastResult, startedAt);
+      return lastResult;
     }
 
     const result: RecallResult = {
@@ -168,7 +220,7 @@ export class MnemosyneClient {
       query,
       scope,
       intent: resolvedIntent,
-      hits: mergeHits(hits),
+      hits: mergeHits(finalHits),
       layers_queried: layersQueried,
       layers_skipped: layersSkipped,
       escalated,
@@ -182,9 +234,8 @@ export class MnemosyneClient {
   async remember(content: Content, scope: Scope, layer?: Layer): Promise<RememberResult> {
     const startedAt = Date.now();
     // Auto-routing beyond a fixed default is a later story's concern (per
-    // interfaces.ts's RememberFn docs) — today the only writable layer is
-    // vector, so an explicit non-vector `layer` is a caller error, not a
-    // silent reroute.
+    // interfaces.ts's RememberFn docs) — 'vector' remains the default
+    // target, matching pre-pl-01 behavior exactly when no layer is given.
     const resolvedLayer = layer ?? 'vector';
     const contentHash = sha256(content.text);
 
@@ -194,27 +245,35 @@ export class MnemosyneClient {
       content_hash: contentHash,
     });
 
+    // Resolve by NAME against the configured stack (pl-01) rather than a
+    // hardcoded field — any registered, configured, writable layer can be
+    // targeted this way, not only 'vector'. A name absent from the current
+    // stack, or present but recall-only (no remember()), is the same
+    // caller-facing error as before: 'layer_not_writable', never a silent
+    // no-op or a fake success.
+    const targetAdapter = this.layers.find((candidate) => candidate.layer === resolvedLayer);
+
     let result: RememberResult;
-    if (resolvedLayer !== 'vector') {
+    if (!targetAdapter) {
       result = {
         ok: false,
         error: {
           layer: resolvedLayer,
-          message: `remember() to layer '${resolvedLayer}' is not supported — only 'vector' is writable today`,
+          message: `remember() to layer '${resolvedLayer}' is not supported — that layer is not in the configured stack`,
           code: 'layer_not_writable',
         },
       };
-    } else if (typeof this.vectorLayer.remember !== 'function') {
+    } else if (typeof targetAdapter.remember !== 'function') {
       result = {
         ok: false,
         error: {
           layer: resolvedLayer,
-          message: 'the configured vector layer adapter does not implement remember()',
+          message: `the configured '${resolvedLayer}' layer adapter does not implement remember()`,
           code: 'layer_not_writable',
         },
       };
     } else {
-      result = await this.vectorLayer.remember(content.text, { scope });
+      result = await targetAdapter.remember(content.text, { scope });
     }
 
     const durationMs = elapsedMs(startedAt);
