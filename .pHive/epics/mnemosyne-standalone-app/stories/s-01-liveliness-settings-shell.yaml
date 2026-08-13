@@ -1,0 +1,117 @@
+id: s-01-liveliness-settings-shell
+epic: mnemosyne-standalone-app
+title: Standalone UI shell — liveliness + read-only settings view
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: []
+
+description: |
+  Add a zero-dep static UI shell served by the existing src/server.mjs process
+  under GET /ui (and mount /ui as the default GET / redirect target so opening
+  the service in a browser lands on the UI, not the raw JSON info blob — keep
+  the existing GET / JSON response available at, e.g., GET /api or via an
+  Accept: application/json check, so nothing currently depending on GET /
+  breaks). The shell renders two live panels on load and on a manual refresh
+  button (no auto-polling in v1 — keep it simple):
+    1. Liveliness — calls GET /health and renders swarm-memory's check output
+       (Qdrant reachable + collection count, default collection point count,
+       embedder reachable, impact graph node/edge count) as a pass/fail panel.
+    2. Settings — calls the new GET /config endpoint (wraps engine.mjs's
+       scopeMap(), which already caches swarm-memory config --json) and
+       renders it read-only: qdrant_url, embedder provider/model, default
+       scope, fallback collection. No editing in this story — that's config
+       mutation and belongs to s-02 (lanes) for the one thing that needs it
+       (add-lane), scoped narrowly there.
+
+  This story establishes the serving pattern (static assets + a small
+  client-side router/fetch layer, still zero third-party deps) that every
+  later slice (s-02..s-05) builds on.
+
+acceptance_criteria:
+  - "Given the service is running, when a browser opens http://127.0.0.1:8477/ui, then it renders a page (not raw JSON) with a liveliness panel and a settings panel"
+  - "Given the liveliness panel loads, when the underlying swarm-memory check passes, then the panel shows Qdrant/embedder/graph status matching GET /health's JSON"
+  - "Given the liveliness panel loads, when the underlying swarm-memory check fails (e.g. Qdrant unreachable), then the panel shows the failure clearly, not a blank/broken page"
+  - "Given the settings panel loads, when GET /config succeeds, then it shows qdrant_url, embedder config, default_scope, and fallback_collection as read-only text"
+  - "Given an existing consumer calls GET / expecting the current JSON info blob, when this story ships, then that consumer still gets valid JSON (no breaking change to GET /'s existing contract)"
+
+steps:
+  - id: research
+    description: Confirm how existing consumers use GET / (check hooks/lib/mnemo-client.mjs and test/smoke.mjs for any GET / dependency) before deciding the redirect-vs-content-negotiation approach.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests (test/ui-shell.mjs or similar, following test/smoke.mjs's
+      pattern of hitting a running server) asserting: GET /ui returns HTML with
+      expected marker content; GET /config returns the scope/embedder JSON shape;
+      GET / still returns valid JSON for a JSON-accepting client. Do NOT read
+      the implementation first — derive expectations from the acceptance criteria.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      Add GET /config to server.mjs (thin wrapper around engine.mjs's scopeMap()).
+      Add static UI serving under GET /ui/* (plain HTML/CSS/vanilla JS files,
+      e.g. under a new ui/ directory, served with no build step). Decide and
+      implement the GET / routing per the research step's findings (redirect
+      to /ui for browser navigations, keep JSON for existing programmatic
+      callers). Do not modify the tests.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review for zero-dep compliance (no new package.json dependencies), and that GET /'s existing JSON contract is genuinely preserved for programmatic callers.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-standalone-app.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  tech_stack:
+    runtime: "Node >=20, zero third-party deps"
+    transport: "node:http"
+  key_files:
+    - path: src/server.mjs
+      purpose: "Existing HTTP router — new GET /config and GET /ui/* routes are added here following the existing route pattern"
+    - path: src/engine.mjs
+      purpose: "scopeMap() already fetches+caches swarm-memory config --json — GET /config wraps this, no new engine logic needed"
+    - path: test/smoke.mjs
+      purpose: "Existing pattern for hitting a running server in tests — new UI tests should follow this convention, not introduce a new test framework"
+
+files_to_modify:
+  - file: src/server.mjs
+    change: "Add GET /config route; add GET /ui/* static serving; adjust GET / routing per research findings"
+  - file: src/engine.mjs
+    change: "Expose scopeMap() result shape suitable for direct JSON response (likely already sufficient — confirm during implement)"
+
+code_examples:
+  - title: "Existing route pattern to follow"
+    file: src/server.mjs
+    snippet: |
+      if (route === "GET /scopes") {
+        return send(res, 200, { ...SERVICE, ...(await scopes()) });
+      }
+    lines: "79-81"
+
+design_decisions:
+  - decision: "Serve UI from the same process/port as the API (no second process)"
+    rationale: "Matches SERVICE.md's zero-dep, single-process philosophy — one PORT, one thing to run"
+  - decision: "No auto-polling; manual refresh button only in v1"
+    rationale: "Keeps the shell simple and avoids adding a client-side scheduling layer before there's a real need"
+
+cross_cutting:
+  - concern: documentation
+    action: "Update SERVICE.md's endpoint table to add GET /config and GET /ui; note the GET / behavior change (or lack thereof) explicitly"
+
+risks:
+  - severity: medium
+    description: "Changing GET /'s behavior could break an existing consumer that expects the JSON info blob unconditionally"
+    mitigation: "Research step confirms actual current consumers before deciding the routing approach; acceptance criteria requires the existing JSON contract to survive for programmatic callers"
+
+references:
+  - path: SERVICE.md
+    relevant_excerpt: |
+      | `GET /`         | —      | service info + endpoints |
+      | `GET /health`   | —      | engine self-test (`swarm-memory check`): Qdrant + embedder + graph |

@@ -1,0 +1,98 @@
+id: s-02-lanes-browser
+epic: mnemosyne-standalone-app
+title: Lanes (scopes) browser with add-lane
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [s-01-liveliness-settings-shell]
+
+description: |
+  Add a "Lanes" panel to the /ui shell (built in s-01) that renders
+  swarm-memory's scope -> collection map + escalation ladder (GET /scopes,
+  already exists) as a table: lane name, backing collection, ladder
+  (escalation order), default marker. Add an "add lane" form that creates a
+  new scope -> collection mapping.
+
+  The only supported mutation in this story is ADDING a scope entry to
+  ~/.config/swarm-memory/config.toml — never removing or overwriting an
+  existing entry, and never touching Qdrant itself (per the
+  existing-infrastructure cross-cutting concern). Implement as an atomic
+  write: read the current config.toml, back it up to config.toml.bak
+  (overwriting any prior single backup — one generation of backup is
+  sufficient for this v1), append the new [scopes.<name>] entry, write to a
+  temp file in the same directory, validate the temp file parses correctly
+  by pointing `swarm-memory --config <tmp> config --json` at it and
+  confirming the new scope round-trips, then rename the temp file over the
+  original. On any validation failure, leave the original config.toml
+  untouched and surface the error to the UI.
+
+acceptance_criteria:
+  - "Given the lanes panel loads, when GET /scopes returns successfully, then every scope is rendered with its collection and ladder"
+  - "Given the add-lane form is submitted with a new scope name + collection, when the write succeeds, then the new scope appears in `swarm-memory scopes --json` output and in the UI on next load"
+  - "Given the add-lane form is submitted with a scope name that already exists, when validated, then the request is rejected with a clear error and config.toml is not modified"
+  - "Given the atomic-write validation step fails for any reason, when that happens, then config.toml is byte-identical to its pre-write state (verify via checksum in the test)"
+  - "Given no add-lane action is taken, when this story ships, then no existing scope's collection or ladder mapping changes"
+
+steps:
+  - id: research
+    description: Confirm swarm-memory's config.toml schema for [scopes.*] and [ladder.*] tables (read a sample config or the swarm-memory repo if accessible) so the write format is correct.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests against a throwaway/temp config.toml fixture (never
+      the real ~/.config/swarm-memory/config.toml) covering: successful add,
+      duplicate-name rejection, and byte-identical-on-failure. Use a
+      SWARM_MEMORY_CONFIG-style override or a temp HOME so tests never touch
+      real config.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement the lanes panel UI, GET /scopes wiring (already exists, just render it), and the add-lane POST endpoint + atomic-write logic in engine.mjs.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review the atomic-write path specifically for the existing-infrastructure guardrail — confirm no path exists that could silently overwrite or corrupt config.toml, and no path touches Qdrant.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-standalone-app.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: src/engine.mjs
+      purpose: "scopeMap() already parses swarm-memory config --json output — the add-lane write logic lives alongside it as a new exported function"
+    - path: src/server.mjs
+      purpose: "Add POST /lanes route following the existing POST /remember pattern (read JSON body, call engine function, return result)"
+
+files_to_modify:
+  - file: src/engine.mjs
+    change: "Add addLane(name, collection, ladder) with atomic write + validation as described"
+  - file: src/server.mjs
+    change: "Add POST /lanes route"
+
+design_decisions:
+  - decision: "Add-only; no remove/edit of existing lanes in v1"
+    rationale: "Keeps the mutation surface minimal and matches the user's ask (\"add new lanes\") without inventing scope-deletion semantics nobody asked for"
+
+cross_cutting:
+  - concern: existing-infrastructure
+    action: "Atomic write + round-trip validation + single backup, as specified in the story description; never touches Qdrant"
+  - concern: documentation
+    action: "Document the add-lane flow and config.toml write behavior in SERVICE.md"
+
+risks:
+  - severity: high
+    description: "A malformed config.toml write breaks every scope resolution across the whole swarm-memory install, not just Mnemosyne"
+    mitigation: "Atomic write + validate-before-rename + backup, per story description; test-spec explicitly covers byte-identical-on-failure"
+
+references:
+  - path: src/engine.mjs
+    relevant_excerpt: |
+      let _scopeMap = null;
+      export async function scopeMap() {
+        if (_scopeMap) return _scopeMap;
+        const { stdout } = await run(["config"]);
+        const cfg = JSON.parse(stdout);

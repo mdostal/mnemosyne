@@ -1,0 +1,51 @@
+name: mnemosyne-standalone-app
+title: Mnemosyne Standalone App — UI + Skill Harness
+target_codebase: .
+methodology: tdd
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: main
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [ui, integration, architecture]
+  roster: [researcher, technical-writer, tpm]
+  per_tag_reasoning:
+    ui: "New local web UI (lanes, search, graph, reindex controls) served zero-dep from the existing HTTP service"
+    integration: "Wraps existing swarm-memory CLI surface (index/graph/config/scopes) — no new store"
+    architecture: "New transport surface (UI static assets + new read/write API routes) added to the existing transport/engine split"
+  confidence: high
+  gate_decisions: {}
+
+stories:
+  - id: s-01-liveliness-settings-shell
+    title: Standalone UI shell — liveliness + read-only settings view
+    complexity: medium
+    depends_on: []
+
+  - id: s-02-lanes-browser
+    title: Lanes (scopes) browser with add-lane
+    complexity: medium
+    depends_on: [s-01-liveliness-settings-shell]
+
+  - id: s-03-collections-search
+    title: Collections search — recall/grep query box with provenance
+    complexity: medium
+    depends_on: [s-02-lanes-browser]
+
+  - id: s-04-graph-view
+    title: Impact graph view (node-link render of swarm-memory graph)
+    complexity: medium
+    depends_on: [s-03-collections-search]
+
+  - id: s-05-reindex-controls
+    title: Reindex + local-cache-refresh controls
+    complexity: high
+    depends_on: [s-04-graph-view]
+
+  - id: s-06-skill-harness-layer
+    title: Claude Code skill harness for standalone operation
+    complexity: medium
+    depends_on: [s-05-reindex-controls]
