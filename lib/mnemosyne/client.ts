@@ -181,7 +181,11 @@ export class MnemosyneClient {
 
   async remember(content: Content, scope: Scope, layer?: Layer): Promise<RememberResult> {
     const startedAt = Date.now();
-    const resolvedLayer = layer ?? 'file';
+    // Auto-routing beyond a fixed default is a later story's concern (per
+    // interfaces.ts's RememberFn docs) — today the only writable layer is
+    // vector, so an explicit non-vector `layer` is a caller error, not a
+    // silent reroute.
+    const resolvedLayer = layer ?? 'vector';
     const contentHash = sha256(content.text);
 
     this.logInfo('remember_start', {
@@ -190,19 +194,28 @@ export class MnemosyneClient {
       content_hash: contentHash,
     });
 
-    const result: RememberResult = {
-      ok: true,
-      layer: resolvedLayer,
-      provenance: {
-        layer: resolvedLayer,
-        source: `stub:remember:${scope}`,
-        chunk_span: null,
-        index_timestamp: null,
-        content_hash: contentHash,
-        embedder: null,
-        retrieval_time: new Date().toISOString(),
-      },
-    };
+    let result: RememberResult;
+    if (resolvedLayer !== 'vector') {
+      result = {
+        ok: false,
+        error: {
+          layer: resolvedLayer,
+          message: `remember() to layer '${resolvedLayer}' is not supported — only 'vector' is writable today`,
+          code: 'layer_not_writable',
+        },
+      };
+    } else if (typeof this.vectorLayer.remember !== 'function') {
+      result = {
+        ok: false,
+        error: {
+          layer: resolvedLayer,
+          message: 'the configured vector layer adapter does not implement remember()',
+          code: 'layer_not_writable',
+        },
+      };
+    } else {
+      result = await this.vectorLayer.remember(content.text, { scope });
+    }
 
     const durationMs = elapsedMs(startedAt);
 
@@ -210,13 +223,17 @@ export class MnemosyneClient {
       duration_ms: durationMs,
       layer: resolvedLayer,
       scope,
-      ok: true,
+      ok: result.ok,
+      ...(result.ok ? {} : { error_code: result.error.code }),
     });
     this.recordHistogram('remember_duration_ms', durationMs, {
       layer: resolvedLayer,
       scope,
-      ok: true,
+      ok: result.ok,
     });
+    if (!result.ok) {
+      this.recordLayerDegraded(resolvedLayer, scope, result.error.code ?? 'remember_failed', result.error.message);
+    }
 
     return result;
   }

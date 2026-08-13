@@ -5,11 +5,31 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../../../src/observability/logger.js';
 import type { Metrics } from '../../../src/observability/metrics.js';
 import { MnemosyneClient, type MnemosyneClientOptions } from '../client.js';
-import type { Hit, RecallResult } from '../interfaces.js';
-import type { LayerAdapter, RecallOptions } from '../layers/LayerAdapter.js';
+import type { Hit, RecallResult, RememberResult } from '../interfaces.js';
+import type { LayerAdapter, RecallOptions, RememberOptions } from '../layers/LayerAdapter.js';
 
 function stubVectorLayer(recall: (query: string, options?: RecallOptions) => Promise<RecallResult>): LayerAdapter {
   return { layer: 'vector', recall };
+}
+
+function stubWritableVectorLayer(
+  remember: (content: string, options?: RememberOptions) => Promise<RememberResult>,
+): LayerAdapter {
+  return {
+    layer: 'vector',
+    recall: async (query, options) => ({
+      ok: true,
+      query,
+      scope: options?.scope ?? 'project',
+      intent: options?.intent ?? 'narrow',
+      hits: [],
+      layers_queried: ['vector'],
+      layers_skipped: [],
+      escalated: false,
+      degraded: false,
+    }),
+    remember,
+  };
 }
 
 function stubCodeGraphLayer(
@@ -219,33 +239,90 @@ describe('MnemosyneClient', () => {
     expect(provenance?.retrieval_time).toEqual(expect.any(String));
   });
 
-  it('remember() returns a stub RememberSuccess', async () => {
+  it('remember() delegates to the vector layer adapter and returns its real result', async () => {
     const root = await makeTempRoot();
-    const client = makeClient({ rootDirectory: root });
+    const rememberSpy = vi.fn(async (content: string): Promise<RememberResult> => ({
+      ok: true,
+      layer: 'vector',
+      provenance: {
+        layer: 'vector',
+        source: '/notes/real-write.md',
+        chunk_span: null,
+        index_timestamp: '2026-08-13T00:00:00.000Z',
+        content_hash: 'abc123',
+        embedder: null,
+        retrieval_time: null,
+      },
+    }));
+    const client = makeClient({ rootDirectory: root, vectorLayer: stubWritableVectorLayer(rememberSpy) });
 
     const result = await client.remember({ text: 'remember this' }, 'project');
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error(result.error.message);
-    }
-    expect(result.layer).toBe('file');
-    expect(result.provenance.content_hash).toEqual(expect.any(String));
-    expect(result.provenance.retrieval_time).toEqual(expect.any(String));
-  });
-
-  it('remember() resolves to the caller-specified layer', async () => {
-    const root = await makeTempRoot();
-    const client = makeClient({ rootDirectory: root });
-
-    const result = await client.remember({ text: 'remember this' }, 'project', 'vector');
-
+    expect(rememberSpy).toHaveBeenCalledWith('remember this', { scope: 'project' });
     expect(result.ok).toBe(true);
     if (!result.ok) {
       throw new Error(result.error.message);
     }
     expect(result.layer).toBe('vector');
-    expect(result.provenance.layer).toBe('vector');
+    // Not the old stub shape — a real source path from the layer's own write.
+    expect(result.provenance.source).toBe('/notes/real-write.md');
+    expect(result.provenance.source).not.toContain('stub:remember');
+  });
+
+  it('remember() rejects a non-vector layer request — only vector is writable today', async () => {
+    const root = await makeTempRoot();
+    const client = makeClient({ rootDirectory: root });
+
+    const result = await client.remember({ text: 'remember this' }, 'project', 'file');
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error('expected remember to fail');
+    }
+    expect(result.error.layer).toBe('file');
+    expect(result.error.code).toBe('layer_not_writable');
+  });
+
+  it('remember() returns RememberFailure (not a fake success) when the vector layer adapter has no remember()', async () => {
+    const root = await makeTempRoot();
+    const recallOnlyVectorLayer = stubVectorLayer(async (query, options) => ({
+      ok: true,
+      query,
+      scope: options?.scope ?? 'project',
+      intent: options?.intent ?? 'narrow',
+      hits: [],
+      layers_queried: ['vector'],
+      layers_skipped: [],
+      escalated: false,
+      degraded: false,
+    }));
+    const client = makeClient({ rootDirectory: root, vectorLayer: recallOnlyVectorLayer });
+
+    const result = await client.remember({ text: 'remember this' }, 'project');
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error('expected remember to fail');
+    }
+    expect(result.error.code).toBe('layer_not_writable');
+  });
+
+  it('remember() propagates a real RememberFailure from the vector layer without swallowing it', async () => {
+    const root = await makeTempRoot();
+    const failingRemember = vi.fn(async (): Promise<RememberResult> => ({
+      ok: false,
+      error: { layer: 'vector', message: 'qdrant upsert failed', code: 'swarm_memory_error' },
+    }));
+    const client = makeClient({ rootDirectory: root, vectorLayer: stubWritableVectorLayer(failingRemember) });
+
+    const result = await client.remember({ text: 'remember this' }, 'project');
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error('expected remember to fail');
+    }
+    expect(result.error.code).toBe('swarm_memory_error');
+    expect(result.error.message).toBe('qdrant upsert failed');
   });
 
   it('logs recall_start when recall begins', async () => {
@@ -353,7 +430,20 @@ describe('MnemosyneClient', () => {
 
   it('logs remember_start and remember_end with duration metrics', async () => {
     const { logger, metrics } = makeObservabilityMocks();
-    const client = makeClient({ logger, metrics });
+    const rememberSpy = vi.fn(async (): Promise<RememberResult> => ({
+      ok: true,
+      layer: 'vector',
+      provenance: {
+        layer: 'vector',
+        source: '/notes/logged-write.md',
+        chunk_span: null,
+        index_timestamp: '2026-08-13T00:00:00.000Z',
+        content_hash: 'abc123',
+        embedder: null,
+        retrieval_time: null,
+      },
+    }));
+    const client = makeClient({ logger, metrics, vectorLayer: stubWritableVectorLayer(rememberSpy) });
 
     await client.remember({ text: 'remember this' }, 'project');
 
@@ -361,7 +451,7 @@ describe('MnemosyneClient', () => {
       'remember_start',
       expect.objectContaining({
         scope: 'project',
-        layer: 'file',
+        layer: 'vector',
         content_hash: expect.any(String),
       }),
     );
@@ -369,7 +459,7 @@ describe('MnemosyneClient', () => {
       'remember_end',
       expect.objectContaining({
         duration_ms: expect.any(Number),
-        layer: 'file',
+        layer: 'vector',
         scope: 'project',
         ok: true,
       }),
@@ -378,11 +468,35 @@ describe('MnemosyneClient', () => {
       'remember_duration_ms',
       expect.any(Number),
       expect.objectContaining({
-        layer: 'file',
+        layer: 'vector',
         scope: 'project',
         ok: true,
       }),
     );
+  });
+
+  it('logs and counts layer_degraded when remember() fails', async () => {
+    const { logger, metrics } = makeObservabilityMocks();
+    const failingRemember = vi.fn(async (): Promise<RememberResult> => ({
+      ok: false,
+      error: { layer: 'vector', message: 'qdrant upsert failed', code: 'swarm_memory_error' },
+    }));
+    const client = makeClient({ logger, metrics, vectorLayer: stubWritableVectorLayer(failingRemember) });
+
+    await client.remember({ text: 'remember this' }, 'project');
+
+    expect(logger.warn).toHaveBeenCalledWith('layer_degraded', {
+      layer: 'vector',
+      scope: 'project',
+      reason: 'swarm_memory_error',
+      detail: 'qdrant upsert failed',
+    });
+    expect(metrics.counter).toHaveBeenCalledWith('layer_degraded_total', 1, {
+      layer: 'vector',
+      scope: 'project',
+      reason: 'swarm_memory_error',
+      detail: 'qdrant upsert failed',
+    });
   });
 
   it('queries the code-graph layer before vector recall and returns impact hits', async () => {

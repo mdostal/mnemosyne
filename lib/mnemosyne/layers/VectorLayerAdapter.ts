@@ -1,12 +1,34 @@
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import path from 'node:path';
 import { promisify } from 'node:util';
-import type { ChunkSpan, Hit, RecallFailure, RecallResult, RecallSuccess } from '../interfaces.js';
-import type { LayerAdapter, RecallOptions } from './LayerAdapter.js';
+import type {
+  ChunkSpan,
+  Hit,
+  RecallFailure,
+  RecallResult,
+  RecallSuccess,
+  RememberFailure,
+  RememberResult,
+  RememberSuccess,
+} from '../interfaces.js';
+import type { LayerAdapter, RecallOptions, RememberOptions } from './LayerAdapter.js';
 
 const execFileAsync = promisify(execFile);
 
 const DEFAULT_TIMEOUT_MS = 5_000;
+// remember()'s index step shells to the live Qdrant Cloud SSOT and can
+// legitimately take several seconds (observed ~2-3s for a single-file
+// index in this repo's JS-side equivalent, src/engine.mjs) — a much longer
+// floor than DEFAULT_TIMEOUT_MS, which is sized for a single recall() call.
+const DEFAULT_INDEX_TIMEOUT_MS = 30_000;
 const DEFAULT_COMMAND = process.env.SWARM_MEMORY_BIN || 'swarm-memory';
+
+interface SwarmMemoryConfig {
+  scopes?: Record<string, string>;
+}
 
 interface SwarmMemoryProvenance {
   indexed_at?: string | null;
@@ -43,6 +65,10 @@ export interface VectorLayerAdapterOptions {
   command?: string;
   /** Timeout for the swarm-memory shell exec, in milliseconds. Qdrant Cloud can be slow. */
   timeoutMs?: number;
+  /** Timeout for remember()'s index step specifically. Defaults to `DEFAULT_INDEX_TIMEOUT_MS`. */
+  indexTimeoutMs?: number;
+  /** Directory remember() writes note files to before indexing. Defaults to `MNEMOSYNE_NOTES_DIR` env or `~/.local/share/mnemosyne/notes`. */
+  notesDirectory?: string;
 }
 
 /**
@@ -58,10 +84,17 @@ export class VectorLayerAdapter implements LayerAdapter {
 
   private readonly command: string;
   private readonly timeoutMs: number;
+  private readonly indexTimeoutMs: number;
+  private readonly notesDirectory: string;
 
   constructor(options: VectorLayerAdapterOptions = {}) {
     this.command = options.command ?? DEFAULT_COMMAND;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.indexTimeoutMs = options.indexTimeoutMs ?? DEFAULT_INDEX_TIMEOUT_MS;
+    this.notesDirectory =
+      options.notesDirectory ??
+      process.env.MNEMOSYNE_NOTES_DIR ??
+      path.join(homedir(), '.local', 'share', 'mnemosyne', 'notes');
   }
 
   async recall(query: string, options: RecallOptions = {}): Promise<RecallResult> {
@@ -116,6 +149,96 @@ export class VectorLayerAdapter implements LayerAdapter {
       escalated: false,
       degraded: false,
     } satisfies RecallSuccess;
+  }
+
+  /**
+   * Write content to Qdrant via `swarm-memory index`. Mirrors the
+   * already-working, already-tested pattern in this repo's zero-dep JS
+   * sibling service (`src/engine.mjs`'s `remember()`): persist a note file,
+   * then index it with `--no-prune` (pure-additive — never wipes/prunes any
+   * other file's chunks, matches the existing-infrastructure guardrail from
+   * `.pHive/cross-cutting-concerns.yaml` and SERVICE.md's hard "never wipe
+   * Qdrant collections" rule). Fails loudly (ok:false) on any CLI error or
+   * on a report of zero chunks upserted — never a silent no-op success.
+   */
+  async remember(content: string, options: RememberOptions = {}): Promise<RememberResult> {
+    const text = content.trim();
+    const scope = options.scope ?? 'project';
+
+    if (!text) {
+      return this.rememberFailure('invalid_content', 'content must not be empty');
+    }
+
+    let collection: string;
+    try {
+      const configResult = await execFileAsync(this.command, ['config'], {
+        timeout: this.timeoutMs,
+      });
+      const cfg = JSON.parse(configResult.stdout) as SwarmMemoryConfig;
+      const resolved = cfg.scopes?.[scope];
+      if (!resolved) {
+        return this.rememberFailure(
+          'unknown_scope',
+          `scope '${scope}' is not configured (known: ${Object.keys(cfg.scopes ?? {}).join(', ')})`,
+        );
+      }
+      collection = resolved;
+    } catch (error) {
+      const [code, message] = this.classifyExecError(error);
+      return this.rememberFailure(code, `config resolution failed: ${message}`);
+    }
+
+    await mkdir(this.notesDirectory, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const tag = (options.tag ?? 'note').replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 40);
+    const file = path.join(this.notesDirectory, `${stamp}-${tag}.md`);
+    const header = `<!-- remembered via Mnemosyne (TS client) @ ${new Date().toISOString()} scope=${scope} -->\n`;
+    await writeFile(file, header + text + '\n', 'utf8');
+
+    let indexOutput: string;
+    try {
+      const indexResult = await execFileAsync(
+        this.command,
+        ['index', collection, '--no-prune', file],
+        { timeout: this.indexTimeoutMs },
+      );
+      indexOutput = `${indexResult.stdout}${indexResult.stderr ?? ''}`.trim();
+    } catch (error) {
+      // The note file is already on disk and is kept regardless — it's the
+      // recovery artifact for manual reconciliation if the upsert failed.
+      const [code, message] = this.classifyExecError(error);
+      return this.rememberFailure(code, `index command errored, file kept at ${file} for recovery: ${message}`);
+    }
+
+    const upserted = /upserted\s+(\d+)\s+chunks/i.exec(indexOutput);
+    const chunksUpserted = upserted ? Number(upserted[1]) : 0;
+    if (!(chunksUpserted > 0)) {
+      return this.rememberFailure(
+        'no_chunks_upserted',
+        `swarm-memory index did not confirm any upserted chunks, file kept at ${file} for recovery: ${
+          indexOutput || '(empty output)'
+        }`,
+      );
+    }
+
+    const indexTimestamp = new Date().toISOString();
+    return {
+      ok: true,
+      layer: 'vector',
+      provenance: {
+        layer: 'vector',
+        source: file,
+        chunk_span: null,
+        index_timestamp: indexTimestamp,
+        content_hash: sha256(text),
+        embedder: null,
+        retrieval_time: null,
+      },
+    } satisfies RememberSuccess;
+  }
+
+  private rememberFailure(code: string, message: string): RememberFailure {
+    return { ok: false, error: { layer: 'vector', message, code } };
   }
 
   private toHit(hit: SwarmMemoryHit, fallbackRetrievalTime: string): Hit {
@@ -187,4 +310,8 @@ export class VectorLayerAdapter implements LayerAdapter {
       },
     };
   }
+}
+
+function sha256(text: string): string {
+  return createHash('sha256').update(text).digest('hex');
 }

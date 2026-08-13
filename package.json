@@ -22,6 +22,7 @@
     "test:write-through": "node test/write-through.mjs",
     "test:code-graph": "node test/code-graph.mjs",
     "start:client-api": "tsx lib/mnemosyne/server.ts",
+    "benchmark:recall-vs-find": "tsx benchmarks/recall-vs-find.ts",
     "build": "tsc --noEmit",
     "test:contracts": "vitest run lib/mnemosyne lib/minerva benchmarks src/planning src/config src/runners",
     "typecheck": "tsc --noEmit",
