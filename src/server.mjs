@@ -21,6 +21,13 @@
 //   GET  /graph/deps/:node   ?depth= -> forward closure: what :node depends on
 //                    -> READ-ONLY graph exploration. `graph add`/`graph remove` (the
 //                       graph's mutation verbs) are never wrapped or reachable here.
+//   POST /index   {collection, paths[]} -> `swarm-memory index <collection> <paths...>`,
+//                     CLI's DEFAULT pruning (never --no-prune). Requires an explicit
+//                     operator-selected collection + >=1 path; no reindex-everything mode.
+//   POST /cache/refresh -> LOCAL-ONLY: clears engine.mjs's in-memory scopeMap cache.
+//                     Touches zero external state (not Qdrant, not config.toml, not
+//                     graph.sqlite) and spawns zero subprocesses. See "Refresh config
+//                     cache" in SERVICE.md — never confuse this with data deletion.
 //
 // GET / content negotiation: no consumer in this repo (hooks/lib/mnemo-client.mjs,
 // test/smoke.mjs) depends on GET /'s bare path today, and Node's fetch() sends
@@ -48,6 +55,8 @@ import {
   graphEdges,
   graphImpact,
   graphDeps,
+  reindex,
+  resetScopeMapCache,
 } from "./engine.mjs";
 
 const PORT = Number(process.env.PORT || 8477);
@@ -152,6 +161,8 @@ const server = http.createServer(async (req, res) => {
           "GET /graph/edges": "?node= -> list edges, optionally touching `node` (READ-ONLY)",
           "GET /graph/impact/:node": "?depth= -> reverse closure: what's affected if :node changes",
           "GET /graph/deps/:node": "?depth= -> forward closure: what :node depends on",
+          "POST /index": "{collection, paths[]} -> swarm-memory index <collection> <paths...> (default pruning, never --no-prune)",
+          "POST /cache/refresh": "clears ONLY the in-memory config cache (local, zero subprocesses, zero external state)",
         },
       });
     }
@@ -247,6 +258,31 @@ const server = http.createServer(async (req, res) => {
       const b = await readJson(req);
       const result = await addLane(b.name, b.collection, b.ladder);
       return send(res, 200, { ...result, took_ms: Date.now() - t0 });
+    }
+
+    // --- Operations (s-05): Reindex + Refresh config cache ------------------
+    // TWO DISTINCT actions that must never be conflated:
+    //   POST /index         -> shells out to `swarm-memory index` (default
+    //                           pruning; live Qdrant Cloud write). Requires an
+    //                           explicit collection + >=1 path from the operator.
+    //   POST /cache/refresh -> purely local: clears engine.mjs's in-memory
+    //                           scopeMap cache only. No subprocess, no Qdrant,
+    //                           no config.toml, no graph.sqlite. NOT a data
+    //                           deletion of any kind.
+    // Neither route, nor any function either calls, ever wraps a Qdrant
+    // collection delete/wipe/drop — no such verb exists in the swarm-memory
+    // CLI and none is invented here. See SERVICE.md's hard guardrail.
+
+    if (route === "POST /index") {
+      const b = await readJson(req);
+      const result = await reindex(b.collection, b.paths);
+      return send(res, 200, { ...result, took_ms: Date.now() - t0 });
+    }
+
+    if (route === "POST /cache/refresh") {
+      // Synchronous, local-only — never awaits anything, spawns nothing.
+      const result = resetScopeMapCache();
+      return send(res, 200, { ...SERVICE, ...result, took_ms: Date.now() - t0 });
     }
 
     // --- Graph (s-04): READ-ONLY impact-graph exploration ------------------

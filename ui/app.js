@@ -578,10 +578,139 @@ async function loadGraph() {
   }
 }
 
+// --- Operations panel (s-05): Reindex (POST /index) + Refresh config cache
+// (POST /cache/refresh). TWO DISTINCT actions, never conflated:
+//   - Reindex shells out against the live Qdrant Cloud store (real write,
+//     default CLI pruning) and requires an operator-selected lane + path(s)
+//     plus an explicit confirm() before it runs.
+//   - Refresh config cache is purely local (clears engine.mjs's in-memory
+//     scopeMap cache only) — no confirmation needed because it cannot
+//     change or delete anything external.
+// This file never fetch()es any delete/wipe-style endpoint — none exists.
+const reindexForm = document.getElementById("reindex-form");
+const reindexLaneSelect = document.getElementById("reindex-lane");
+const reindexPathsEl = document.getElementById("reindex-paths");
+const reindexStatusEl = document.getElementById("reindex-status");
+const reindexResultEl = document.getElementById("reindex-result");
+const refreshCacheBtn = document.getElementById("refresh-cache-btn");
+const refreshCacheStatusEl = document.getElementById("refresh-cache-status");
+
+// Populates the lane <select> from GET /scopes — one option per configured
+// lane, value = that lane's underlying collection (what POST /index needs).
+async function loadReindexLanes() {
+  try {
+    const res = await fetch("/scopes");
+    if (!res.ok) return;
+    const body = await res.json();
+    const scopeMap = body.scopes || {};
+    const names = Object.keys(scopeMap).sort();
+    const current = reindexLaneSelect.value;
+    reindexLaneSelect.textContent = "";
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.disabled = true;
+    placeholder.textContent = "select a lane…";
+    reindexLaneSelect.appendChild(placeholder);
+    for (const name of names) {
+      const opt = document.createElement("option");
+      opt.value = scopeMap[name];
+      opt.textContent = `${name} (${scopeMap[name]})`;
+      reindexLaneSelect.appendChild(opt);
+    }
+    if (names.some((n) => scopeMap[n] === current)) reindexLaneSelect.value = current;
+    else reindexLaneSelect.value = "";
+  } catch {
+    // Non-fatal — the operator can still retry via the manual refresh button.
+  }
+}
+
+reindexForm.addEventListener("submit", async (evt) => {
+  evt.preventDefault();
+  const collection = reindexLaneSelect.value;
+  const paths = String(reindexPathsEl.value || "")
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  reindexResultEl.hidden = true;
+  reindexResultEl.textContent = "";
+
+  if (!collection) {
+    setStatus(reindexStatusEl, "fail", "FAIL — select a lane first");
+    return;
+  }
+  if (paths.length === 0) {
+    setStatus(reindexStatusEl, "fail", "FAIL — enter at least one path");
+    return;
+  }
+
+  const confirmed = window.confirm(
+    `Reindex ${paths.length} path(s) into '${collection}'?\n\n` +
+      "This shells out to swarm-memory against the LIVE Qdrant Cloud store and " +
+      "can take real time. It writes/refreshes data — it never deletes a collection.\n\n" +
+      paths.join("\n")
+  );
+  if (!confirmed) {
+    setStatus(reindexStatusEl, "", "cancelled");
+    return;
+  }
+
+  const submitBtn = document.getElementById("reindex-submit");
+  setStatus(reindexStatusEl, "loading", "reindexing… (this can take a while against the live store)");
+  submitBtn.disabled = true;
+  try {
+    const res = await fetch("/index", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ collection, paths }),
+    });
+    const body = await res.json();
+    if (!res.ok) {
+      setStatus(reindexStatusEl, "fail", `FAIL — ${body.error || `HTTP ${res.status}`}`);
+      return;
+    }
+    setStatus(
+      reindexStatusEl,
+      "pass",
+      `done — ${body.files_indexed ?? "?"} file(s) indexed, ${body.chunks_upserted ?? "?"} chunk(s) upserted, ` +
+        `${body.embed_failures ?? 0} embed failure(s), ${body.total_points ?? "?"} total point(s) in ${body.collection}`
+    );
+    if (body.engine_output) {
+      reindexResultEl.textContent = body.engine_output;
+      reindexResultEl.hidden = false;
+    }
+  } catch (err) {
+    setStatus(reindexStatusEl, "fail", `FAIL — ${err && err.message ? err.message : err}`);
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+
+refreshCacheBtn.addEventListener("click", async () => {
+  setStatus(refreshCacheStatusEl, "loading", "refreshing local config cache…");
+  refreshCacheBtn.disabled = true;
+  try {
+    const res = await fetch("/cache/refresh", { method: "POST" });
+    const body = await res.json();
+    if (!res.ok) {
+      setStatus(refreshCacheStatusEl, "fail", `FAIL — ${body.error || `HTTP ${res.status}`}`);
+      return;
+    }
+    setStatus(refreshCacheStatusEl, "pass", "config cache cleared — re-reading fresh on next load");
+    // Re-load the panels that read through the now-cleared cache so the
+    // effect is visible immediately, not just claimed.
+    await Promise.all([loadSettings(), loadLanes(), loadReindexLanes(), loadSearchScopes()]);
+  } catch (err) {
+    setStatus(refreshCacheStatusEl, "fail", `FAIL — ${err && err.message ? err.message : err}`);
+  } finally {
+    refreshCacheBtn.disabled = false;
+  }
+});
+
 async function refreshAll() {
   refreshBtn.disabled = true;
   try {
-    await Promise.all([loadLiveliness(), loadSettings(), loadLanes(), loadSearchScopes(), loadGraph()]);
+    await Promise.all([loadLiveliness(), loadSettings(), loadLanes(), loadSearchScopes(), loadGraph(), loadReindexLanes()]);
     lastRefreshedEl.textContent = `last refreshed ${new Date().toLocaleTimeString()}`;
   } finally {
     refreshBtn.disabled = false;

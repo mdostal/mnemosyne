@@ -1,7 +1,7 @@
 id: s-05-reindex-controls
 epic: mnemosyne-standalone-app
 title: Reindex + local-cache-refresh controls
-status: pending
+status: complete
 complexity: high
 methodology: tdd
 depends_on: [s-04-graph-view]

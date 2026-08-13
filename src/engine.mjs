@@ -77,6 +77,21 @@ export async function scopeMap() {
   return _scopeMap;
 }
 
+// resetScopeMapCache — s-05's "Refresh config cache" action. Clears ONLY the
+// in-memory _scopeMap cache above, so the next scopeMap() call (reached via
+// GET /scopes, GET /config, or remember()'s scope->collection lookup)
+// re-shells out to `swarm-memory config` and reads it fresh instead of
+// serving the cached copy. This function itself does not call run() —
+// spawns ZERO subprocesses, touches ZERO external state: not Qdrant, not
+// config.toml (no read, no write), not graph.sqlite. This is the entire,
+// deliberately narrow meaning of "clear"/"refresh" in this codebase — never
+// confuse this with deleting or wiping anything. See
+// s-05-reindex-controls.yaml and SERVICE.md's hard no-wipe guardrail.
+export function resetScopeMapCache() {
+  _scopeMap = null;
+  return { cache_cleared: true };
+}
+
 // health — run the engine self-test (Qdrant + embedder + graph reachability).
 export async function health() {
   try {
@@ -149,6 +164,63 @@ export async function remember(text, scope, opts = {}) {
     collection,
     file,
     chunks_upserted: upserted ? Number(upserted[1]) : null,
+    engine_output: out,
+  };
+}
+
+// reindex(collection, paths) — s-05's general-purpose Reindex action, wrapping
+// `swarm-memory index <collection> <paths...>`. This is DELIBERATELY the CLI's
+// DEFAULT pruning behavior — --no-prune is NEVER passed here. That flag is
+// reserved for remember()'s pure-additive single-note-file writes above (a
+// freshly generated file has nothing to prune anyway). Default pruning, per
+// swarm_memory/indexer.py's index_paths(): for each indexed path, after
+// upserting its chunks, the CLI deletes points matching
+// `full_path == <that exact file>` AND `chunk_index >= <its new chunk
+// count>` — i.e. only the stale tail chunks of a file that shrank since its
+// last index, scoped strictly to that one file's own full_path. It is never
+// a collection-wide delete and never touches any file that wasn't passed in
+// `paths`. This is refresh/cleanup, not a wipe.
+//
+// Requires an explicit, operator-selected collection (from the s-02 lanes
+// list in the UI) and at least one path — no "reindex everything" / no
+// wildcard / no-target mode is supported. Both are validated (400) before
+// any subprocess is spawned.
+export async function reindex(collection, paths) {
+  if (!collection || !String(collection).trim()) {
+    const err = new Error("collection is required");
+    err.status = 400;
+    throw err;
+  }
+  const pathList = Array.isArray(paths)
+    ? paths.map((p) => String(p).trim()).filter(Boolean)
+    : [];
+  if (pathList.length === 0) {
+    const err = new Error("at least one path is required");
+    err.status = 400;
+    throw err;
+  }
+  // Reindexing an operator-selected path set (potentially a whole directory)
+  // can genuinely take a while against the live embedder + Qdrant Cloud —
+  // give it a generous floor well above the default CLI_TIMEOUT_MS, which is
+  // sized for single-call recall/remember/grep, not bulk indexing.
+  const timeout = Math.max(CLI_TIMEOUT_MS, 10 * 60_000);
+  const args = ["index", String(collection), ...pathList];
+  const { stdout, stderr } = await run(args, { timeout });
+  const out = (stdout + stderr).trim();
+  // Matches cmd_index's real summary line (swarm_memory/cli.py):
+  //   "✓ <collection>: N files indexed, M chunks upserted, F embed failures → T total points"
+  const summary =
+    /✓\s+\S+:\s+(\d+)\s+files indexed,\s+(\d+)\s+chunks upserted,\s+(\d+)\s+embed failures\s+→\s+([\d,]+)\s+total points/.exec(
+      out
+    );
+  return {
+    reindexed: true,
+    collection: String(collection),
+    paths: pathList,
+    files_indexed: summary ? Number(summary[1]) : null,
+    chunks_upserted: summary ? Number(summary[2]) : null,
+    embed_failures: summary ? Number(summary[3]) : null,
+    total_points: summary ? Number(summary[4].replace(/,/g, "")) : null,
     engine_output: out,
   };
 }

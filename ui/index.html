@@ -127,6 +127,55 @@
       </div>
       <p id="graph-empty-state" class="panel-status" hidden>Graph is empty — no nodes or edges yet (run <code>swarm-memory graph scan</code> to populate it).</p>
     </section>
+
+    <section id="operations" class="panel panel-wide">
+      <h2>Operations</h2>
+      <p class="panel-hint">
+        Two distinct actions. <strong>Reindex</strong> shells out against the live Qdrant
+        Cloud store and writes real data. <strong>Refresh config cache</strong> is purely
+        local — it never touches Qdrant, <code>config.toml</code>, or the graph, and never
+        deletes anything. Neither action, nor anything in this app, can wipe or drop a
+        Qdrant collection.
+      </p>
+
+      <div id="operations-body">
+        <div id="reindex-op" class="op-block">
+          <h3>Reindex</h3>
+          <p class="panel-hint">
+            Chunk, embed and upsert the given path(s) into the selected lane's collection
+            (<code>swarm-memory index</code>, default pruning — stale tail chunks of a
+            shrunk file are cleaned up; nothing else is touched). Requires an explicit
+            lane and at least one path — there is no "reindex everything" option.
+          </p>
+          <form id="reindex-form">
+            <div class="form-row">
+              <label for="reindex-lane">Lane (collection)</label>
+              <select id="reindex-lane" name="lane" required>
+                <option value="" disabled selected>select a lane…</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label for="reindex-paths">Path(s)</label>
+              <textarea id="reindex-paths" name="paths" required rows="3" placeholder="one path per line, e.g.&#10;/path/to/notes.md&#10;/path/to/dir"></textarea>
+            </div>
+            <button type="submit" id="reindex-submit">Reindex…</button>
+            <p class="panel-status" id="reindex-status"></p>
+            <pre id="reindex-result" class="detail" hidden></pre>
+          </form>
+        </div>
+
+        <div id="refresh-cache-op" class="op-block">
+          <h3>Refresh config cache</h3>
+          <p class="panel-hint">
+            Clears only this service's in-memory copy of <code>swarm-memory config</code>,
+            so the next load re-reads it fresh. Does not touch Qdrant, <code>config.toml</code>,
+            or the graph — nothing is deleted.
+          </p>
+          <button type="button" id="refresh-cache-btn">Refresh config cache</button>
+          <p class="panel-status" id="refresh-cache-status"></p>
+        </div>
+      </div>
+    </section>
   </main>
 
   <footer>

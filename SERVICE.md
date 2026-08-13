@@ -31,6 +31,8 @@ Every memory op runs over the live Qdrant corpus; nothing is stubbed or mocked.
 | `GET /graph/edges` | query params: `node?`                                    | list edges, or only those touching `node` when given (`swarm-memory graph edges [node]`) |
 | `GET /graph/impact/:node` | query params: `depth?`                             | reverse closure: what is affected if `:node` changes (`swarm-memory graph impact NODE`) — unknown node returns `[]`, not an error |
 | `GET /graph/deps/:node` | query params: `depth?`                               | forward closure: what `:node` depends on (`swarm-memory graph deps NODE`) — unknown node returns `[]`, not an error |
+| `POST /index`   | `{collection, paths: [...]}`                                 | Reindex: `swarm-memory index <collection> <paths...>` (default pruning, live Qdrant write) — see "Operations" below |
+| `POST /cache/refresh` | —                                                       | Refresh config cache: clears only `engine.mjs`'s in-memory `_scopeMap` — see "Operations" below |
 
 **`GET /` routing:** no existing consumer (`hooks/lib/mnemo-client.mjs`, `test/smoke.mjs`)
 calls the bare `GET /` path, and Node's `fetch()` sends `Accept: */*` when the
@@ -155,6 +157,61 @@ by `ui/app.js` — no UI action can reach them. See `test/graph-route.mjs`'s
 "hard constraint" block, which greps the actual source for reachable
 fetch()/route/CLI-argv patterns (not just prose) to prove this.
 
+## Operations (Reindex / Refresh config cache)
+
+The `/ui` Operations panel exposes **two deliberately distinct actions that
+must never be conflated**. Both exist to resolve the same design-discussion
+risk: an operator's ask for "clear/refresh/reindex" controls must never
+become a way to wipe a Qdrant collection. There is no such verb in the
+`swarm-memory` CLI, and this story invents none.
+
+**1. Reindex (`POST /index {collection, paths: [...]}`)** — wraps
+`swarm-memory index <collection> <paths...>` directly. It:
+
+- Requires an explicit, operator-selected `collection` (chosen from the
+  lanes list in the UI) and **at least one** path — both are validated
+  (`400`) before any subprocess is spawned. There is no "reindex
+  everything" / no-target / wildcard mode.
+- Runs with the CLI's **default pruning behavior** — it never passes
+  `--no-prune`. Per `swarm_memory/indexer.py`'s `index_paths()`, default
+  pruning only deletes points matching that **exact file's own
+  `full_path`** with `chunk_index >= <its new chunk count>` — i.e. the
+  stale tail chunks of a file that shrank since its last index. It never
+  touches any other file's chunks and never drops a collection. (This is
+  different from `remember()`'s `--no-prune`, which exists only because a
+  freshly generated note file has nothing to prune anyway — the two flags
+  serve different, non-overlapping write patterns.)
+- Shells out against the **live Qdrant Cloud SSOT** and can take real time
+  on a large path set, so the UI shows an explicit confirmation dialog
+  (naming the target collection + paths) before it runs, and a "reindexing…"
+  status while the request is in flight.
+- Reports the CLI's own real output back to the caller: `files_indexed`,
+  `chunks_upserted`, `embed_failures`, `total_points` (parsed from the
+  CLI's own summary line), plus the raw `engine_output`.
+
+**2. Refresh config cache (`POST /cache/refresh`)** — a purely local action.
+It calls `engine.mjs`'s `resetScopeMapCache()`, which does nothing more than
+set the in-memory `_scopeMap` variable back to `null`. That's it: **no
+subprocess is spawned, no Qdrant call, no `config.toml` read or write, no
+`graph.sqlite` touch.** The only observable effect is that the *next* call to
+`scopeMap()` (reached via `GET /scopes`, `GET /config`, or `remember()`'s
+scope→collection lookup) re-shells out to `swarm-memory config` instead of
+serving the cached copy. The UI labels this **"Refresh config cache"** —
+never "Clear" — specifically so it cannot be mistaken for a data-deletion
+action. See `test/reindex-route.mjs` for a test that proves this directly:
+it swaps in a throwaway stub CLI (via the `SWARM_MEMORY_BIN` env override)
+and asserts the call-log the stub keeps is byte-for-byte unchanged by the
+refresh call itself.
+
+**Hard constraint, verified, not assumed:** `test/reindex-route.mjs`'s
+closing block greps the actual source of `engine.mjs`, `server.mjs`, and
+`ui/app.js` (not prose/comments) for any destructive-verb pattern
+(`delete`/`remove`/`drop`/`wipe`/`purge`/`truncate`/DELETE-method routes),
+confirms `engine.mjs` has exactly two `"index"`-argv call sites
+(`remember()` and `reindex()`, both upsert/refresh, never delete), and
+confirms `resetScopeMapCache()`'s body contains no subprocess or
+filesystem-mutation call at all.
+
 ## Port / route
 
 - Local: `http://127.0.0.1:8477`
@@ -163,8 +220,11 @@ fetch()/route/CLI-argv patterns (not just prose) to prove this.
 ## Guardrails honored
 
 - Wraps the existing engine — **no new store, no re-embed**. `remember` is
-  **additive** (`--no-prune`, upsert of a brand-new note file only); the Qdrant
-  collections (SSOT) are never wiped.
+  **additive** (`--no-prune`, upsert of a brand-new note file only); `reindex`
+  (`POST /index`) uses the CLI's own default pruning (stale tail chunks of a
+  shrunk file, scoped to that one file's own path); the Qdrant collections
+  (SSOT) are never wiped. There is no delete/wipe/drop-collection endpoint,
+  UI action, or CLI verb anywhere in this service — see "Operations" above.
 - No secrets printed. No Don-stack / multica-daemon / auriga touched.
 - Zero third-party deps — runs on the hive's Node with no install step.
 

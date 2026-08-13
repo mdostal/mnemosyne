@@ -19,7 +19,8 @@
     "test:lanes-route": "node test/lanes-route.mjs",
     "test:search-route": "node test/search-route.mjs",
     "test:graph-engine": "node test/graph-engine.mjs",
-    "test:graph-route": "node test/graph-route.mjs"
+    "test:graph-route": "node test/graph-route.mjs",
+    "test:reindex-route": "node test/reindex-route.mjs"
   },
   "dependencies": {}
 }
