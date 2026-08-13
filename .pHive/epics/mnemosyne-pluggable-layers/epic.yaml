@@ -1,0 +1,33 @@
+name: mnemosyne-pluggable-layers
+title: Pluggable, swappable, testable layer architecture + Hive memory as a layer
+target_codebase: .
+methodology: tdd
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: dev
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [architecture, integration]
+  roster: [researcher, technical-writer]
+  per_tag_reasoning:
+    architecture: "New registry/plugin mechanism for layer swap-in, replacing hardcoded client fields"
+    integration: "New layer wraps plugin-hive's existing kg.sqlite knowledge graph — a separate, previously-unconnected memory system"
+  confidence: high
+  gate_decisions: {}
+
+stories:
+  - id: pl-01-layer-registry
+    title: Config-driven layer registry — the actual swap mechanism
+    complexity: high
+    depends_on: []
+  - id: pl-02-hive-memory-layer
+    title: HiveMemoryLayerAdapter — plugin-hive's kg.sqlite as a real Mnemosyne layer
+    complexity: medium
+    depends_on: [pl-01-layer-registry]
+  - id: pl-03-layer-ab-testing
+    title: Layer A/B benchmark harness + GET /layers visibility
+    complexity: medium
+    depends_on: [pl-01-layer-registry, pl-02-hive-memory-layer]

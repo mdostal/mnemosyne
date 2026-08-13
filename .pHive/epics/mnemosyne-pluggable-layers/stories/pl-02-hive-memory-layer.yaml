@@ -1,0 +1,113 @@
+id: pl-02-hive-memory-layer
+epic: mnemosyne-pluggable-layers
+title: HiveMemoryLayerAdapter — plugin-hive's kg.sqlite as a real Mnemosyne layer
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [pl-01-layer-registry]
+
+description: |
+  The prior-art audit (2026-08-13) found plugin-hive (~/Code/plugin-hive/hive/) runs its own,
+  completely separate memory system that Mnemosyne has never touched: a SQLite knowledge
+  graph at ~/.claude/hive/kg.sqlite (subject-predicate-object triples, schema confirmed
+  live: `triples(subject, predicate, object, valid_from, valid_until, source_epic,
+  source_agent)`, indexed on subject/object/predicate/valid), plus per-agent markdown
+  memory files (~/.claude/hive/memories/{agent}/*.md) and project-scoped team memories
+  (.pHive/team-memories/{team}/*.md -- note: in mnemosyne's OWN repo these files don't
+  exist yet since no Hive team has run here, but the adapter must work when they do).
+  Full schema reference: ~/Code/plugin-hive/hive/references/knowledge-graph-schema.md.
+
+  Build a real `HiveMemoryLayerAdapter implements LayerAdapter` (registered under name
+  "hive-memory" via pl-01's registry) that makes this knowledge queryable through
+  Mnemosyne's normal recall() path -- READ-ONLY, this adapter must never write to
+  kg.sqlite or any Hive memory file (that's plugin-hive's own write path; Mnemosyne only
+  reads it as a new memory source).
+
+  Query strategy (kg.sqlite has no vector embeddings -- it's a graph, not a vector store,
+  so this is a structured/keyword search, not semantic):
+  1. Query `triples` where the search query (tokenized) matches `subject` or `object`
+     (SQL LIKE or a simple tokenized substring match against the indexed columns -- keep
+     it simple, this doesn't need to be fancy, `swarm-memory grep`'s keyword-exact
+     philosophy is the right model to follow, not `recall`'s semantic one).
+  2. Also scan per-agent (`~/.claude/hive/memories/*/*.md`) and team (`.pHive/team-memories/
+     */*.md`) markdown files for the query string (plain substring/grep, same philosophy).
+  3. Merge both sources into `Hit[]` results with real, honest provenance: `layer:
+     "hive-memory"`, `source` = the triple's subject-predicate-object (for KG hits) or the
+     file path (for memory-file hits), `content` = a rendered one-line description of the
+     triple, or the matching file excerpt. `content_hash`/`chunk_span`/`embedder` should be
+     `null` where genuinely not applicable (KG triples have no embedder or chunk concept) --
+     do not fabricate values, this repo's existing provenance-completeness convention
+     (see .pHive/cross-cutting-concerns.yaml) requires explicit nulls over omission, but
+     never a fake value.
+  4. Both data sources are OPTIONAL at runtime -- kg.sqlite may not exist on a fresh
+     install, memory directories may be empty or absent. Missing sources return zero hits
+     from that source (not an error) unless the query genuinely can't run (e.g. sqlite file
+     exists but is corrupt) -- then fail per this layer only, same degraded/layers_skipped
+     pattern the existing three layers already use (see VectorLayerAdapter's error handling
+     for the pattern to match).
+
+  Add `"hive-memory"` to the `Layer` type union in interfaces.ts if it isn't already a
+  valid layer value, and confirm the merge/hits-decoration logic elsewhere (mergeHits in
+  client.ts) doesn't assume only the three original layer names.
+
+acceptance_criteria:
+  - "Given kg.sqlite has a triple whose subject or object contains the query string, when HiveMemoryLayerAdapter.recall() is called with that query, then it returns a hit with layer:'hive-memory' and provenance describing the real subject/predicate/object"
+  - "Given a per-agent or team memory markdown file contains the query string, when recall() is called, then it returns a hit for that file with a real file-path source and an accurate content excerpt"
+  - "Given kg.sqlite does not exist at the configured path, when recall() is called, then it returns an empty-but-ok result for that source (not an error), and still checks the memory-files source"
+  - "Given the query matches nothing anywhere, when recall() is called, then it returns ok:true with zero hits, not a false failure"
+  - "Given this adapter is registered and added to a layer-stack config (via pl-01's registry/config), when MnemosyneClient.recall() runs with hive-memory in the stack, then hive-memory hits appear in the merged result alongside file/vector/code-graph hits with correct provenance"
+  - "Given this adapter's code is inspected, when checked for write operations, then it contains zero INSERT/UPDATE/DELETE against kg.sqlite and zero writeFile calls into any Hive memory directory -- read-only, verified by source inspection same as this repo's existing no-destructive-verb hard-constraint tests (test/reindex-route.mjs, test/graph-route.mjs, test/mcp-server.mjs)"
+
+steps:
+  - id: research
+    description: Read ~/Code/plugin-hive/hive/references/knowledge-graph-schema.md in full, confirm the live kg.sqlite schema matches (query it directly), and inventory what per-agent/team memory files actually look like (read a few real ones from ~/.claude/hive/memories/ if any exist).
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests against throwaway fixture sqlite/markdown files (never the real ~/.claude/hive/kg.sqlite or real memory dirs) covering the acceptance criteria above, following this repo's existing fixture-based test conventions (see lib/mnemosyne/layers/__tests__/fixtures/).
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement HiveMemoryLayerAdapter.ts, register it under "hive-memory" in the registry from pl-01, extend the Layer type union if needed.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm read-only (source-grep for INSERT/UPDATE/DELETE/writeFile, same hard-constraint pattern as existing tests), confirm graceful degradation when kg.sqlite/memory dirs are absent, confirm provenance fields are honest (explicit null, never fabricated).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-pluggable-layers.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: lib/mnemosyne/layers/VectorLayerAdapter.ts
+      purpose: "Pattern to follow for graceful error/absence handling and provenance shaping"
+    - path: lib/mnemosyne/layers/__tests__/fixtures/fake-swarm-memory.mjs
+      purpose: "This repo's existing convention for fixture-backed adapter tests -- never touch real external state in a unit test"
+
+files_to_modify:
+  - file: lib/mnemosyne/layers/HiveMemoryLayerAdapter.ts
+    change: "New: read-only KG + memory-file query adapter"
+  - file: lib/mnemosyne/interfaces.ts
+    change: "Add 'hive-memory' to the Layer type union if not already present"
+
+design_decisions:
+  - decision: "Keyword/substring matching, not semantic — kg.sqlite has no embeddings"
+    rationale: "Honest about what the data source actually supports; don't fake semantic search over a graph store"
+  - decision: "Read-only, hard constraint"
+    rationale: "plugin-hive owns writes to its own memory system; Mnemosyne consuming it as a read source must not create a second writer to data it doesn't own — same principle as never wiping Qdrant"
+
+cross_cutting:
+  - concern: documentation
+    action: "Document the hive-memory layer (what it reads, read-only guarantee, how to enable it via pl-01's config) in lib/mnemosyne/README.md and SERVICE.md"
+
+risks:
+  - severity: medium
+    description: "kg.sqlite schema could differ across machines/versions if plugin-hive evolves it"
+    mitigation: "Query defensively (check table/column existence before querying, degrade to zero-hits on schema mismatch rather than crashing) -- do not hard-fail the whole recall() call over one optional source's schema drift"
+
+references:
+  - path: ~/Code/plugin-hive/hive/references/knowledge-graph-schema.md
+    relevant_excerpt: "Confirmed live schema: triples(subject, predicate, object, valid_from, valid_until, source_epic, source_agent), indexed on subject/object/predicate/valid_from+valid_until"

@@ -1,0 +1,112 @@
+id: pl-01-layer-registry
+epic: mnemosyne-pluggable-layers
+title: Config-driven layer registry — the actual swap mechanism
+status: pending
+complexity: high
+methodology: tdd
+depends_on: []
+
+description: |
+  The layer-inventory audit (2026-08-13) found `MnemosyneClient` (lib/mnemosyne/client.ts)
+  hardcodes exactly three layer fields (codeGraphLayer, vectorLayer, fileLayer) in a fixed
+  cascade order, each defaulting to a concrete adapter class. There is no way to add,
+  remove, reorder, or swap a layer without editing client.ts's source. "Pluggable backends"
+  is documented (idea-brief.md, README) but not implemented anywhere.
+
+  Build the actual swap mechanism:
+
+  1. A `LayerRegistry` (lib/mnemosyne/layers/registry.ts) that maps a layer NAME (string,
+     e.g. "file", "vector", "code-graph", "hive-memory") to a FACTORY function producing a
+     `LayerAdapter` instance. Registration is explicit (`registry.register(name, factory)`),
+     not magic/auto-discovery -- keep it simple and traceable.
+  2. A config shape (e.g. `lib/mnemosyne/layers/config.ts` exporting a `LayerStackConfig`
+     type: `{ layers: Array<{ name: string; options?: Record<string, unknown> }> }`) resolved
+     from, in priority order: (a) an options param passed to `MnemosyneClient`'s constructor
+     (for tests/programmatic use), (b) a `MNEMOSYNE_LAYERS` env var (JSON string), (c) a
+     `mnemosyne.layers.json` file at the repo root, (d) a hardcoded default matching TODAY's
+     behavior exactly: `[{name:"code-graph"}, {name:"vector"}, {name:"file"}]` in that order
+     -- so an unconfigured install is byte-for-byte behaviorally identical to before this
+     story (zero silent behavior change for existing consumers).
+  3. Refactor `MnemosyneClient` to build its layer list from the registry + resolved config
+     at construction time, and to run recall()'s cascade over that ordered list generically
+     (try layer N, on failure or (for non-terminal layers) zero hits, escalate to layer N+1)
+     instead of the current hand-written 3-layer if/else chain. PRESERVE existing semantics
+     exactly: code-graph queried first and returned immediately if it has hits (no
+     escalation past a successful code-graph hit), vector->file escalation only on zero
+     hits or vector failure, degraded/layers_skipped/layers_queried tracking unchanged.
+     Every existing test in lib/mnemosyne/__tests__/client.test.ts must keep passing
+     unmodified (behavior-preserving refactor) -- do not weaken or delete an existing
+     assertion to make this pass; if the generic cascade genuinely cannot reproduce an
+     existing documented behavior, stop and flag it rather than quietly dropping the test.
+  4. Each registered adapter's `remember()` capability (optional per LayerAdapter) continues
+     to work the same way -- MnemosyneClient.remember() should resolve which registered
+     layer to write to by name (defaulting to "vector", matching current behavior) rather
+     than a hardcoded field reference.
+
+acceptance_criteria:
+  - "Given no config is supplied anywhere, when MnemosyneClient is constructed and recall()/remember() are called, then behavior is identical to before this story (same cascade order, same escalation rules, same existing tests pass unmodified)"
+  - "Given a MNEMOSYNE_LAYERS env var listing a different layer order or a subset of layers, when MnemosyneClient is constructed, then it uses that order/subset instead of the default"
+  - "Given a layer name in config that isn't registered, when MnemosyneClient is constructed, then it throws a clear error naming the unknown layer -- not a silent no-op"
+  - "Given a test wants to inject a fake/mock layer adapter, when it registers a factory under a test-only name and configures MnemosyneClient to use it, then no change to client.ts's source is required to do so"
+
+steps:
+  - id: research
+    description: Read lib/mnemosyne/client.ts, layers/LayerAdapter.ts, layers/{File,Vector,CodeGraph}LayerAdapter.ts, and __tests__/client.test.ts in full to understand the exact current cascade semantics before generalizing them.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for LayerRegistry (register/resolve/unknown-name-error) and for MnemosyneClient's config resolution priority (constructor options > env var > file > default), plus a regression check that the existing client.test.ts suite is unaffected.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement registry.ts, config.ts, and the MnemosyneClient refactor per the description. Do not modify existing test files except where a config-injection seam is genuinely needed for testability (and even then, prefer additive changes over rewriting existing assertions).
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm every pre-existing client.test.ts assertion still passes unmodified, confirm the unconfigured-default path is byte-identical in behavior to pre-refactor, confirm unknown-layer-name fails loudly.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-pluggable-layers (based on dev).
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: lib/mnemosyne/client.ts
+      purpose: "The hardcoded cascade this story generalizes -- read recall()/remember() in full before touching anything"
+    - path: lib/mnemosyne/layers/LayerAdapter.ts
+      purpose: "Existing interface contract every layer (including the new hive-memory one in pl-02) must implement"
+    - path: lib/mnemosyne/__tests__/client.test.ts
+      purpose: "Must keep passing unmodified -- this is the regression bar for the refactor"
+
+files_to_modify:
+  - file: lib/mnemosyne/layers/registry.ts
+    change: "New: LayerRegistry class/factory-map"
+  - file: lib/mnemosyne/layers/config.ts
+    change: "New: LayerStackConfig type + resolution logic (constructor opts > env > file > default)"
+  - file: lib/mnemosyne/client.ts
+    change: "Refactor to build layer list from registry+config, generic cascade instead of hardcoded 3-layer chain"
+
+design_decisions:
+  - decision: "Explicit registration (registry.register(name, factory)), not auto-discovery/magic globbing"
+    rationale: "Traceable, testable, no import-order surprises -- matches this repo's existing preference for explicit over clever (see engine.mjs's comments throughout)"
+  - decision: "Default config reproduces exact current behavior when nothing is configured"
+    rationale: "Zero silent behavior change for any existing consumer (the HTTP wrapper in lib/mnemosyne/server.ts, any future consumer) -- pluggability is additive, not a breaking change"
+
+cross_cutting:
+  - concern: documentation
+    action: "Document the config resolution priority and the default layer stack in lib/mnemosyne/README.md"
+
+risks:
+  - severity: high
+    description: "Generalizing a hand-written 3-layer cascade into a generic N-layer loop can subtly change escalation semantics (e.g. when exactly 'degraded' gets set, whether code-graph's early-return-on-hit behavior generalizes correctly to a reordered stack)"
+    mitigation: "Existing client.test.ts must pass completely unmodified -- that's the regression contract, not a suggestion"
+
+references:
+  - path: lib/mnemosyne/layers/LayerAdapter.ts
+    relevant_excerpt: |
+      export interface LayerAdapter {
+        readonly layer: Layer;
+        recall(query: string, options?: RecallOptions): Promise<RecallResult>;
+      }

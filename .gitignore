@@ -23,3 +23,5 @@ config/minerva.local.yaml
 !.pHive/epics/mnemosyne-standalone-app/**
 !.pHive/epics/mnemosyne-mcp-server/
 !.pHive/epics/mnemosyne-mcp-server/**
+!.pHive/epics/mnemosyne-pluggable-layers/
+!.pHive/epics/mnemosyne-pluggable-layers/**

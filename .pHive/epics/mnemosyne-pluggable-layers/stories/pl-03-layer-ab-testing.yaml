@@ -1,0 +1,91 @@
+id: pl-03-layer-ab-testing
+epic: mnemosyne-pluggable-layers
+title: Layer A/B benchmark harness + GET /layers visibility
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [pl-01-layer-registry, pl-02-hive-memory-layer]
+
+description: |
+  Two remaining gaps from the 2026-08-13 audit this epic should close:
+  (1) no way to test/A-B-compare layer configurations against each other, and
+  (2) no API/UI surface shows "here are your configured layers."
+
+  Part A -- A/B benchmark harness (benchmarks/layer-ab-test.ts): generalizes the existing
+  real recall-vs-find benchmark (benchmarks/recall-vs-find.ts, already fixed this session
+  to genuinely measure both sides -- follow that file's real-measurement discipline, do
+  not reintroduce a fake baseline). Given two named layer-stack configs (e.g. "baseline":
+  [code-graph, vector, file] vs "with-hive-memory": [code-graph, vector, file, hive-memory])
+  and a set of real test queries, run each query against both configs using real
+  MnemosyneClient instances (constructed via pl-01's config injection -- no source edits
+  needed to run a different config) and report, per query and aggregated: hit count, token
+  cost (reuse estimateTokens() from recall-vs-find.ts), latency, and which layers actually
+  contributed hits. This is a comparison tool, not a pass/fail gate -- it reports numbers,
+  it doesn't assert one config is "better." Runnable via a new package.json script
+  (`benchmark:layer-ab`).
+
+  Part B -- GET /layers on the TS HTTP wrapper (lib/mnemosyne/server.ts): returns the
+  currently-resolved layer stack (names, in cascade order, and whether each is
+  read-only/write-capable per its `remember` presence) -- the config visibility the audit
+  found missing. Read-only endpoint, no new business logic beyond introspecting the
+  registry/config already built in pl-01.
+
+acceptance_criteria:
+  - "Given two layer-stack configs and a query set, when the A/B benchmark runs, then it reports real per-query and aggregate numbers for both configs (not fabricated/simulated) -- run it for real against this repo's own live setup and report the actual output"
+  - "Given a config includes hive-memory and a query matches something in kg.sqlite or a memory file, when the A/B benchmark runs, then the 'with-hive-memory' config's report shows hive-memory contributing at least one hit that the baseline config does not have"
+  - "Given GET /layers is called, when the server has a layer stack resolved (default or configured), then it returns the layer names in cascade order with a write-capability flag per layer, matching what MnemosyneClient actually constructed -- not a hardcoded/stale list"
+  - "Given no MNEMOSYNE_LAYERS config is set, when GET /layers is called, then it returns exactly the default 3-layer stack (code-graph, vector, file) matching pl-01's default"
+
+steps:
+  - id: research
+    description: Read benchmarks/recall-vs-find.ts in full (the real-measurement pattern to follow) and lib/mnemosyne/server.ts (the HTTP wrapper GET /layers is added to).
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for GET /layers (default stack, configured stack) following test/http-api.mjs's existing conventions for this server. The A/B benchmark itself is a reporting tool, not something with pass/fail unit tests beyond "does it run and produce well-formed output" -- write a smoke-level test for that.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement benchmarks/layer-ab-test.ts and GET /layers, add the benchmark:layer-ab package.json script.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the A/B benchmark's numbers are real (actually invokes MnemosyneClient.recall() for both configs, no shortcuts), confirm GET /layers reflects real resolved state not a hardcoded echo.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-pluggable-layers. Run the A/B benchmark for real one final time and report its actual output in the commit message or a follow-up report.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: benchmarks/recall-vs-find.ts
+      purpose: "Real-measurement discipline to follow -- this session already fixed it once from a fake-baseline stub, don't regress that lesson"
+    - path: lib/mnemosyne/server.ts
+      purpose: "HTTP wrapper GET /layers is added to"
+
+files_to_modify:
+  - file: benchmarks/layer-ab-test.ts
+    change: "New: real A/B comparison harness for layer-stack configs"
+  - file: lib/mnemosyne/server.ts
+    change: "Add GET /layers"
+  - file: package.json
+    change: "Add benchmark:layer-ab script"
+
+design_decisions:
+  - decision: "A/B tool reports numbers, does not gate/assert a winner"
+    rationale: "Layer tradeoffs (coverage vs. noise vs. latency) are an operator judgment call, not something to auto-decide"
+
+cross_cutting:
+  - concern: documentation
+    action: "Document GET /layers and the A/B benchmark in SERVICE.md / lib/mnemosyne/README.md"
+
+risks:
+  - severity: low
+    description: "A/B benchmark could be tempting to fake/simplify under time pressure, same failure mode recall-vs-find.ts already had once this session"
+    mitigation: "Explicit acceptance criterion requires running it for real and reporting real output, not just that the code compiles"
+
+references:
+  - path: benchmarks/recall-vs-find.ts
+    relevant_excerpt: "Real baseline measurement pattern already fixed this session -- reuse estimateTokens(), reuse the real full-file-read 'find' measurement approach"
