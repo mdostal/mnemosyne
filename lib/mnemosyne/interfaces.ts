@@ -15,10 +15,15 @@
 // ---------------------------------------------------------------------------
 
 /**
- * The six layers of the Mnemosyne memory stack, ordered meta (broadest) to
- * file (narrowest/last-resort). A single `recall()` call may traverse
- * several layers within one `Scope`; `Layer` identifies which layer produced
- * a given `Hit`, independent of which `Scope` was requested.
+ * The layers of the Mnemosyne memory stack. `meta`/`enterprise`/`project`
+ * were reserved by this file's original contract but have no live adapter
+ * yet (see the 2026-08-13 layer-inventory audit — src/layers/{meta,
+ * enterprise,project}.mjs exist on the zero-dep JS side but are not wired
+ * into any reachable call path). `code-graph`/`vector`/`file` are the three
+ * live layers as of m-01..m-07. `hive-memory` (pl-02-hive-memory-layer) is
+ * a fourth live, OPTIONAL layer — plugin-hive's own knowledge graph +
+ * per-agent/team memory files, read-only, not part of the default stack
+ * unless explicitly configured (see layers/config.ts).
  */
 export type Layer =
   | 'meta'
@@ -26,7 +31,8 @@ export type Layer =
   | 'project'
   | 'code-graph'
   | 'vector'
-  | 'file';
+  | 'file'
+  | 'hive-memory';
 
 /**
  * The caller-specified boundary for a recall/remember call. Deliberately a

@@ -1,7 +1,8 @@
 id: pl-02-hive-memory-layer
 epic: mnemosyne-pluggable-layers
 title: HiveMemoryLayerAdapter — plugin-hive's kg.sqlite as a real Mnemosyne layer
-status: pending
+status: complete
+note: "HiveMemoryLayerAdapter.ts built shelling to the `sqlite3` CLI (not better-sqlite3 -- that native binding segfaults on this dev machine, confirmed live; sqlite3 CLI matches VectorLayerAdapter's existing shell-out-not-link philosophy). Two independent optional sources: kg.sqlite triples (subject/object LIKE match, valid_until IS NULL filter, SQL-injection-safe via manual LIKE/quote escaping, verified with a literal-quote test case that both doesn't crash AND correctly matches) + recursive per-agent/team .md file substring scan. Registers itself into defaultRegistry() under 'hive-memory' at import time. Added 'hive-memory' to interfaces.ts's Layer union. 12 fixture-backed tests (never touch real ~/.claude/hive data) plus a LIVE verification against the real kg.sqlite: real positive match (saf-03-secrets-adapter), real zero-hit query, and a shasum-before/after proving byte-identical file state -- read-only confirmed by actual measurement, not just source-grep."
 complexity: medium
 methodology: tdd
 depends_on: [pl-01-layer-registry]
