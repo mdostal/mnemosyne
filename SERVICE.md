@@ -18,11 +18,21 @@ Every memory op runs over the live Qdrant corpus; nothing is stubbed or mocked.
 
 | Method / path   | Body                                                        | Returns |
 |-----------------|-------------------------------------------------------------|---------|
-| `GET /`         | —                                                           | service info + endpoints |
+| `GET /`         | —                                                           | service info + endpoints (JSON) for any caller **except** one sending `Accept: text/html` (a browser), which gets a `302` to `GET /ui` instead — see below |
+| `GET /ui`, `GET /ui/*` | —                                                      | standalone UI shell (static HTML/CSS/vanilla JS, zero-dep, no build step) — liveliness + read-only settings panels with a manual refresh button |
 | `GET /health`   | —                                                           | engine self-test (`swarm-memory check`): Qdrant + embedder + graph |
 | `GET /scopes`   | —                                                           | scopes → collections + escalation ladders |
+| `GET /config`   | —                                                           | read-only effective config: `qdrant_url`, `embedder` (provider/model), `default_scope`, `fallback_collection`, `scopes`, `ladder` — thin wrapper over `engine.mjs`'s cached `scopeMap()` |
 | `POST /recall`  | `{query, scope?, hits?, escalate?, min_score?, radius?}`    | ranked hits **with full provenance** (layer/collection, file, chunk span, embedder, retrieved_at) |
 | `POST /remember`| `{text, scope?, tag?}`                                       | write-back: persists a note + indexes (upsert, `--no-prune`) it into the scope's collection so it is immediately recallable |
+
+**`GET /` routing:** no existing consumer (`hooks/lib/mnemo-client.mjs`, `test/smoke.mjs`)
+calls the bare `GET /` path, and Node's `fetch()` sends `Accept: */*` when the
+caller doesn't set one — so the JSON info blob remains the default response for
+every programmatic caller. Only a request whose `Accept` header contains
+`text/html` (i.e. an actual browser navigation) gets redirected to `/ui`. This
+is a non-breaking addition, verified against the two real current consumers,
+not assumed.
 
 `recall` returns the engine's native `--json` shape (`total_hits`, `scopes[].hits[]`
 with `provenance`). `scope` defaults to the engine default (`top`) for recall and

@@ -1,7 +1,7 @@
 id: s-01-liveliness-settings-shell
 epic: mnemosyne-standalone-app
 title: Standalone UI shell — liveliness + read-only settings view
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
 depends_on: []

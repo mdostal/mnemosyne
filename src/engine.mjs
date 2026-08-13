@@ -39,14 +39,17 @@ async function run(args, { timeout = CLI_TIMEOUT_MS } = {}) {
   return { stdout, stderr };
 }
 
-// Cache the scope -> collection map (from `swarm-memory config`) so `remember`
-// can resolve which collection a scope writes to.
+// Cache the effective config (from `swarm-memory config`) so `remember` can
+// resolve which collection a scope writes to, and GET /config can expose the
+// rest (qdrant_url, embedder) read-only without a second shell-out.
 let _scopeMap = null;
 export async function scopeMap() {
   if (_scopeMap) return _scopeMap;
   const { stdout } = await run(["config"]);
   const cfg = JSON.parse(stdout);
   _scopeMap = {
+    qdrant_url: cfg.qdrant_url || null,
+    embedder: cfg.embedder || null,
     scopes: cfg.scopes || {},
     ladder: cfg.ladder || {},
     default_scope: cfg.default_scope || "top",

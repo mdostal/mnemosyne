@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mnemosyne — memory god</title>
+  <link rel="stylesheet" href="/ui/style.css" />
+</head>
+<body>
+  <header>
+    <h1>Mnemosyne <span class="subtitle">memory god — standalone shell</span></h1>
+    <button id="refresh-btn" type="button">Refresh</button>
+  </header>
+
+  <main>
+    <section id="liveliness" class="panel">
+      <h2>Liveliness</h2>
+      <p class="panel-status" id="liveliness-status">loading…</p>
+      <pre id="liveliness-detail" class="detail"></pre>
+    </section>
+
+    <section id="settings" class="panel">
+      <h2>Settings</h2>
+      <p class="panel-status" id="settings-status">loading…</p>
+      <dl id="settings-fields" class="fields"></dl>
+    </section>
+  </main>
+
+  <footer>
+    <span id="last-refreshed"></span>
+  </footer>
+
+  <script src="/ui/app.js"></script>
+</body>
+</html>

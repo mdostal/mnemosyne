@@ -1,0 +1,125 @@
+:root {
+  color-scheme: light dark;
+  --bg: #0f1115;
+  --panel-bg: #171a21;
+  --border: #2a2f3a;
+  --text: #e6e8ec;
+  --muted: #9aa2b1;
+  --pass: #4fd17a;
+  --fail: #ff6b6b;
+  --accent: #7aa2f7;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+h1 {
+  font-size: 1.25rem;
+  margin: 0;
+}
+
+.subtitle {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: normal;
+  color: var(--muted);
+  margin-top: 0.15rem;
+}
+
+#refresh-btn {
+  background: var(--accent);
+  color: #10131a;
+  border: none;
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+#refresh-btn:hover { opacity: 0.9; }
+#refresh-btn:disabled { opacity: 0.5; cursor: default; }
+
+main {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+  padding: 1.5rem;
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+@media (min-width: 760px) {
+  main { grid-template-columns: 1fr 1fr; }
+}
+
+.panel {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+}
+
+.panel h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.panel-status {
+  font-weight: 600;
+  margin: 0 0 0.75rem;
+}
+
+.panel-status.pass { color: var(--pass); }
+.panel-status.fail { color: var(--fail); }
+.panel-status.loading { color: var(--muted); }
+
+.detail {
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.detail .line-pass { color: var(--pass); }
+.detail .line-fail { color: var(--fail); }
+.detail .line-neutral { color: var(--muted); }
+
+.fields {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.35rem 0.75rem;
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.fields dt {
+  color: var(--muted);
+}
+
+.fields dd {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-all;
+}
+
+footer {
+  padding: 1rem 1.5rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-align: center;
+}
