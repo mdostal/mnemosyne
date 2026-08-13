@@ -24,6 +24,40 @@
       <p class="panel-status" id="settings-status">loading…</p>
       <dl id="settings-fields" class="fields"></dl>
     </section>
+
+    <section id="lanes" class="panel panel-wide">
+      <h2>Lanes</h2>
+      <p class="panel-status" id="lanes-status">loading…</p>
+      <table id="lanes-table">
+        <thead>
+          <tr>
+            <th>Lane</th>
+            <th>Collection</th>
+            <th>Ladder</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="lanes-tbody"></tbody>
+      </table>
+
+      <form id="add-lane-form">
+        <h3>Add lane</h3>
+        <div class="form-row">
+          <label for="lane-name">Name</label>
+          <input id="lane-name" name="name" type="text" required pattern="[A-Za-z][A-Za-z0-9_-]*" placeholder="e.g. research" />
+        </div>
+        <div class="form-row">
+          <label for="lane-collection">Collection</label>
+          <input id="lane-collection" name="collection" type="text" required pattern="[A-Za-z][A-Za-z0-9_-]*" placeholder="e.g. research_memory" />
+        </div>
+        <div class="form-row">
+          <label for="lane-ladder">Ladder (optional)</label>
+          <input id="lane-ladder" name="ladder" type="text" placeholder="comma-separated, e.g. knowledge,top" />
+        </div>
+        <button type="submit">Add lane</button>
+        <p class="panel-status" id="add-lane-status"></p>
+      </form>
+    </section>
   </main>
 
   <footer>

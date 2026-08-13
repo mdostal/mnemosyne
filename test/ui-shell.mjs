@@ -27,6 +27,8 @@ const ok = (c, m) => { console.log(`${c ? "  PASS" : "  FAIL"}  ${m}`); if (!c) 
   ok(/liveliness/i.test(body), `GET /ui body mentions a liveliness panel`);
   ok(/settings/i.test(body), `GET /ui body mentions a settings panel`);
   ok(/refresh/i.test(body), `GET /ui body has a manual refresh control`);
+  ok(/lanes/i.test(body), `GET /ui body mentions a lanes panel (s-02)`);
+  ok(/add-lane-form/i.test(body), `GET /ui body has an add-lane form (s-02)`);
 }
 
 // --- GET /ui/ (trailing slash) also serves the shell ------------------------

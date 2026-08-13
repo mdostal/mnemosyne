@@ -19,12 +19,13 @@ Every memory op runs over the live Qdrant corpus; nothing is stubbed or mocked.
 | Method / path   | Body                                                        | Returns |
 |-----------------|-------------------------------------------------------------|---------|
 | `GET /`         | —                                                           | service info + endpoints (JSON) for any caller **except** one sending `Accept: text/html` (a browser), which gets a `302` to `GET /ui` instead — see below |
-| `GET /ui`, `GET /ui/*` | —                                                      | standalone UI shell (static HTML/CSS/vanilla JS, zero-dep, no build step) — liveliness + read-only settings panels with a manual refresh button |
+| `GET /ui`, `GET /ui/*` | —                                                      | standalone UI shell (static HTML/CSS/vanilla JS, zero-dep, no build step) — liveliness, read-only settings, and lanes (scopes) panels with a manual refresh button |
 | `GET /health`   | —                                                           | engine self-test (`swarm-memory check`): Qdrant + embedder + graph |
 | `GET /scopes`   | —                                                           | scopes → collections + escalation ladders |
 | `GET /config`   | —                                                           | read-only effective config: `qdrant_url`, `embedder` (provider/model), `default_scope`, `fallback_collection`, `scopes`, `ladder` — thin wrapper over `engine.mjs`'s cached `scopeMap()` |
 | `POST /recall`  | `{query, scope?, hits?, escalate?, min_score?, radius?}`    | ranked hits **with full provenance** (layer/collection, file, chunk span, embedder, retrieved_at) |
 | `POST /remember`| `{text, scope?, tag?}`                                       | write-back: persists a note + indexes (upsert, `--no-prune`) it into the scope's collection so it is immediately recallable |
+| `POST /lanes`   | `{name, collection, ladder?}`                                | **add-only** atomic write of a new `[scopes]`/`[ladder]` entry to `~/.config/swarm-memory/config.toml` — see "Lanes / add-lane" below |
 
 **`GET /` routing:** no existing consumer (`hooks/lib/mnemo-client.mjs`, `test/smoke.mjs`)
 calls the bare `GET /` path, and Node's `fetch()` sends `Accept: */*` when the
@@ -52,6 +53,38 @@ Smoke test (health + scopes + recall + remember round-trip):
 ```bash
 MNEMOSYNE_URL=http://127.0.0.1:8477 npm run smoke
 ```
+
+## Lanes / add-lane (config.toml write)
+
+The `/ui` Lanes panel renders `GET /scopes` (scope → collection map + escalation
+ladder) as a table. The **only** supported mutation is *adding* a new scope —
+never removing or overwriting an existing one, and never touching Qdrant.
+
+`POST /lanes {name, collection, ladder?}` appends a new `[scopes]` entry (and,
+if `ladder` is given, a matching `[ladder]` entry) to
+`~/.config/swarm-memory/config.toml` (override via `SWARM_MEMORY_CONFIG`, the
+same env var swarm-memory's own CLI honors) as an **atomic write**:
+
+1. Read the current `config.toml`.
+2. Back it up to `config.toml.bak` (single generation — overwrites any prior
+   backup).
+3. Textually insert the new entry/entries (surgical line insertion; existing
+   lines are never touched or reordered).
+4. Write the result to a temp file in the same directory.
+5. Validate by pointing the real CLI at the temp file
+   (`swarm-memory --config <tmp> config`, which loads+dumps JSON with no
+   Qdrant/network I/O) and confirming the new scope (and ladder) round-trips
+   exactly.
+6. Only on success: rename the temp file over the original (atomic). On
+   **any** validation failure, the temp file is discarded and the original is
+   left byte-identical to its pre-write state; the error is surfaced to the
+   caller.
+
+A duplicate `name` (already present in `[scopes]`) is rejected before any
+file is touched. See `src/engine.mjs`'s `addLane()` and
+`test/add-lane.mjs` / `test/lanes-route.mjs` for the atomic-write logic and
+its test coverage (both run entirely against throwaway fixtures — never the
+real config file).
 
 ## Port / route
 

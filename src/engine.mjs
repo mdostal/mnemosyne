@@ -7,14 +7,27 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { writeFile, mkdir } from "node:fs/promises";
+import { writeFile, mkdir, readFile, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { randomBytes } from "node:crypto";
 
 const execFileP = promisify(execFile);
 
 // CLI binary — override with SWARM_MEMORY_BIN; otherwise resolve on PATH.
 export const CLI = process.env.SWARM_MEMORY_BIN || "swarm-memory";
+
+// Effective config.toml path — same resolution swarm-memory's own CLI uses
+// (SWARM_MEMORY_CONFIG env override, else ~/.config/swarm-memory/config.toml;
+// see swarm_memory/config.py's load_config()). Resolved fresh on every call
+// (not cached at module load) so tests can point this at a throwaway fixture
+// via process.env without ever touching the real file.
+function defaultConfigPath() {
+  return (
+    process.env.SWARM_MEMORY_CONFIG ||
+    path.join(homedir(), ".config", "swarm-memory", "config.toml")
+  );
+}
 
 // Where `remember` writes note files before they are indexed. Append-only;
 // the Qdrant collections themselves are never wiped or re-embedded wholesale.
@@ -153,4 +166,159 @@ export async function grep(query, scope, opts = {}) {
   const scopesArr = JSON.parse(stdout);
   const total = scopesArr.reduce((n, s) => n + (s.hits ? s.hits.length : 0), 0);
   return { query: String(query), total_hits: total, scopes: scopesArr, match_mode: "keyword" };
+}
+
+// --- addLane: the ONLY supported config.toml mutation ----------------------
+//
+// Adds a new [scopes]/[ladder] entry to swarm-memory's config.toml. Never
+// removes or overwrites an existing entry, and never touches Qdrant — this is
+// a local text-file edit only. Schema confirmed by reading the real
+// ~/.config/swarm-memory/config.toml (read-only) and swarm_memory/config.py:
+// [scopes] and [ladder] are flat tables (`name = "collection"` /
+// `name = ["parent", ...]`), not `[scopes.<name>]` sub-tables.
+//
+// Atomic-write sequence (per s-02-lanes-browser):
+//   1. Read the current config.toml.
+//   2. Back it up to config.toml.bak (single generation — overwrites any
+//      prior backup).
+//   3. Textually insert the new entry/entries (surgical line insertion right
+//      after the relevant table header — never touches existing lines).
+//   4. Write the result to a temp file in the same directory.
+//   5. Validate: run `swarm-memory --config <tmp> config` (the config
+//      subcommand already emits JSON; it does not talk to Qdrant) and
+//      confirm the new scope (and ladder, if given) round-trips exactly.
+//   6. Only on success: rename the temp file over the original (atomic).
+//      On ANY failure: delete the temp file and leave the original
+//      byte-identical; throw a clear error.
+const SCOPE_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+const COLLECTION_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]{0,127}$/;
+
+function tomlString(value) {
+  return `"${String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+// Extracts the existing keys of a flat top-level TOML table by scanning raw
+// text between `[tableName]` and the next `[...]` header (or EOF). This is a
+// deliberately minimal text scan — not a full TOML parser — matched to the
+// same surgical-insertion approach used for the write itself, so both read
+// and write agree on where a table's boundaries are.
+function tableKeys(text, tableName) {
+  const headerRe = new RegExp(`^\\s*\\[${tableName}\\]\\s*$`);
+  const anyHeaderRe = /^\s*\[/;
+  const keys = [];
+  let inTable = false;
+  for (const line of text.split("\n")) {
+    if (headerRe.test(line)) {
+      inTable = true;
+      continue;
+    }
+    if (inTable && anyHeaderRe.test(line)) break;
+    if (inTable) {
+      const m = /^\s*([A-Za-z0-9_.-]+)\s*=/.exec(line);
+      if (m) keys.push(m[1]);
+    }
+  }
+  return keys;
+}
+
+// Inserts a new line immediately after `[tableName]`'s header line — i.e.
+// inside the table, before any of its existing entries. Existing lines are
+// never modified or reordered.
+function insertIntoTable(text, tableName, newLine) {
+  const headerRe = new RegExp(`^\\s*\\[${tableName}\\]\\s*$`);
+  const lines = text.split("\n");
+  const idx = lines.findIndex((l) => headerRe.test(l));
+  if (idx === -1) {
+    const err = new Error(`config.toml has no [${tableName}] table — refusing to guess where to insert`);
+    err.status = 500;
+    throw err;
+  }
+  lines.splice(idx + 1, 0, newLine);
+  return lines.join("\n");
+}
+
+export async function addLane(name, collection, ladder) {
+  if (!name || !SCOPE_NAME_RE.test(String(name))) {
+    const err = new Error(
+      "invalid lane name: must start with a letter and contain only letters, digits, '-' or '_'"
+    );
+    err.status = 400;
+    throw err;
+  }
+  if (!collection || !COLLECTION_NAME_RE.test(String(collection))) {
+    const err = new Error(
+      "invalid collection name: must start with a letter and contain only letters, digits, '-' or '_'"
+    );
+    err.status = 400;
+    throw err;
+  }
+  let ladderArr;
+  if (ladder != null) {
+    if (!Array.isArray(ladder) || ladder.some((s) => !SCOPE_NAME_RE.test(String(s)))) {
+      const err = new Error("ladder must be an array of valid scope names");
+      err.status = 400;
+      throw err;
+    }
+    ladderArr = ladder.map(String);
+  }
+
+  const configPath = defaultConfigPath();
+  const original = await readFile(configPath, "utf8");
+
+  // Duplicate check against the raw file itself (the source of truth for
+  // this mutation) — not the in-process scopeMap() cache, which may be stale.
+  const existingScopes = tableKeys(original, "scopes");
+  if (existingScopes.includes(String(name))) {
+    const err = new Error(`lane '${name}' already exists in config.toml — add-only, refusing to overwrite`);
+    err.status = 409;
+    throw err;
+  }
+
+  // Step 2: single-generation backup, overwriting any prior one.
+  const backupPath = configPath + ".bak";
+  await writeFile(backupPath, original, "utf8");
+
+  // Step 3: surgical insertion.
+  let mutated = insertIntoTable(original, "scopes", `${name} = ${tomlString(collection)}`);
+  if (ladderArr && ladderArr.length) {
+    const arr = `[${ladderArr.map((s) => tomlString(s)).join(", ")}]`;
+    mutated = insertIntoTable(mutated, "ladder", `${name} = ${arr}`);
+  }
+
+  // Step 4: write to a temp file in the same directory (same filesystem, so
+  // the final rename is atomic).
+  const tmpPath = path.join(path.dirname(configPath), `.config.toml.tmp-${randomBytes(6).toString("hex")}`);
+  await writeFile(tmpPath, mutated, "utf8");
+
+  // Step 5: validate by pointing the real CLI at the temp file. `config`
+  // already loads+dumps JSON with no Qdrant/network I/O.
+  try {
+    const { stdout } = await run(["--config", tmpPath, "config"], { timeout: 30_000 });
+    const parsed = JSON.parse(stdout);
+    if (!parsed.scopes || parsed.scopes[name] !== String(collection)) {
+      throw new Error("new scope did not round-trip through `swarm-memory config`");
+    }
+    if (ladderArr && ladderArr.length) {
+      const got = parsed.ladder && parsed.ladder[name];
+      const matches = Array.isArray(got) && got.length === ladderArr.length && got.every((v, i) => v === ladderArr[i]);
+      if (!matches) throw new Error("new ladder entry did not round-trip through `swarm-memory config`");
+    }
+  } catch (e) {
+    // ANY validation failure: clean up the temp file, leave the original
+    // untouched (it was never written to), surface a clear error.
+    await unlink(tmpPath).catch(() => {});
+    const detail = e && e.stderr ? String(e.stderr).trim().split("\n").pop() : e && e.message ? e.message : String(e);
+    const err = new Error(`add-lane validation failed — config.toml left untouched: ${detail}`);
+    err.status = 422;
+    throw err;
+  }
+
+  // Step 6: atomic rename over the original, only after validation passed.
+  await rename(tmpPath, configPath);
+
+  // The new lane won't be visible via the in-process cache until it's
+  // invalidated (recall/remember/GET /config/etc. all read through it).
+  _scopeMap = null;
+
+  return { added: true, name: String(name), collection: String(collection), ladder: ladderArr || null };
 }

@@ -8,6 +8,10 @@ const settingsStatusEl = document.getElementById("settings-status");
 const settingsFieldsEl = document.getElementById("settings-fields");
 const refreshBtn = document.getElementById("refresh-btn");
 const lastRefreshedEl = document.getElementById("last-refreshed");
+const lanesStatusEl = document.getElementById("lanes-status");
+const lanesTbodyEl = document.getElementById("lanes-tbody");
+const addLaneForm = document.getElementById("add-lane-form");
+const addLaneStatusEl = document.getElementById("add-lane-status");
 
 function setStatus(el, kind, text) {
   el.textContent = text;
@@ -96,10 +100,81 @@ async function loadSettings() {
   }
 }
 
+// --- Lanes panel (s-02): renders GET /scopes as a table, plus an add-lane
+// form that POSTs to /lanes (the only supported mutation: appending a new
+// scope entry to config.toml — see engine.mjs's addLane()).
+function laneCell(text) {
+  const td = document.createElement("td");
+  td.textContent = text;
+  return td;
+}
+
+async function loadLanes() {
+  setStatus(lanesStatusEl, "loading", "loading…");
+  lanesTbodyEl.textContent = "";
+  try {
+    const res = await fetch("/scopes");
+    const body = await res.json();
+    if (!res.ok) {
+      setStatus(lanesStatusEl, "fail", `FAIL — GET /scopes returned ${res.status}`);
+      return;
+    }
+    const scopeMap = body.scopes || {};
+    const ladderMap = body.ladder || {};
+    const names = Object.keys(scopeMap).sort();
+    for (const name of names) {
+      const tr = document.createElement("tr");
+      const ladder = ladderMap[name] || [];
+      tr.appendChild(laneCell(name));
+      tr.appendChild(laneCell(scopeMap[name]));
+      tr.appendChild(laneCell(ladder.length ? ladder.join(" → ") : "—"));
+      tr.appendChild(laneCell(name === body.default_scope ? "default" : ""));
+      lanesTbodyEl.appendChild(tr);
+    }
+    setStatus(lanesStatusEl, "pass", `${names.length} lane(s)`);
+  } catch (err) {
+    setStatus(lanesStatusEl, "fail", "FAIL — could not reach GET /scopes");
+  }
+}
+
+addLaneForm.addEventListener("submit", async (evt) => {
+  evt.preventDefault();
+  const submitBtn = addLaneForm.querySelector("button[type=submit]");
+  const formData = new FormData(addLaneForm);
+  const name = String(formData.get("name") || "").trim();
+  const collection = String(formData.get("collection") || "").trim();
+  const ladderRaw = String(formData.get("ladder") || "").trim();
+  const ladder = ladderRaw
+    ? ladderRaw.split(",").map((s) => s.trim()).filter(Boolean)
+    : undefined;
+
+  setStatus(addLaneStatusEl, "loading", "adding…");
+  submitBtn.disabled = true;
+  try {
+    const res = await fetch("/lanes", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name, collection, ladder }),
+    });
+    const body = await res.json();
+    if (!res.ok) {
+      setStatus(addLaneStatusEl, "fail", `FAIL — ${body.error || `HTTP ${res.status}`}`);
+      return;
+    }
+    setStatus(addLaneStatusEl, "pass", `added lane '${body.name}' → ${body.collection}`);
+    addLaneForm.reset();
+    await loadLanes();
+  } catch (err) {
+    setStatus(addLaneStatusEl, "fail", `FAIL — ${err && err.message ? err.message : err}`);
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+
 async function refreshAll() {
   refreshBtn.disabled = true;
   try {
-    await Promise.all([loadLiveliness(), loadSettings()]);
+    await Promise.all([loadLiveliness(), loadSettings(), loadLanes()]);
     lastRefreshedEl.textContent = `last refreshed ${new Date().toLocaleTimeString()}`;
   } finally {
     refreshBtn.disabled = false;

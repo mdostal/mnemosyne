@@ -14,7 +14,9 @@
     "start": "node src/server.mjs",
     "smoke": "node test/smoke.mjs",
     "test:hooks": "node test/hooks.mjs",
-    "test:ui": "node test/ui-shell.mjs"
+    "test:ui": "node test/ui-shell.mjs",
+    "test:add-lane": "node test/add-lane.mjs",
+    "test:lanes-route": "node test/lanes-route.mjs"
   },
   "dependencies": {}
 }

@@ -12,6 +12,7 @@
 //   GET  /config           -> read-only effective config (qdrant_url, embedder, scopes)
 //   POST /recall  {query, scope?, hits?, escalate?, min_score?, radius?}
 //   POST /remember {text, scope?, tag?}
+//   POST /lanes   {name, collection, ladder?} -> add-only config.toml write
 //
 // GET / content negotiation: no consumer in this repo (hooks/lib/mnemo-client.mjs,
 // test/smoke.mjs) depends on GET /'s bare path today, and Node's fetch() sends
@@ -27,7 +28,7 @@ import http from "node:http";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { health, scopes, recall, remember, grep, scopeMap } from "./engine.mjs";
+import { health, scopes, recall, remember, grep, scopeMap, addLane } from "./engine.mjs";
 
 const PORT = Number(process.env.PORT || 8477);
 const SERVICE = { god: "mnemosyne", role: "memory", version: "0.1.0" };
@@ -125,6 +126,7 @@ const server = http.createServer(async (req, res) => {
           "POST /recall": "{query, scope?, hits?, escalate?, min_score?, radius?} -> ranked hits w/ provenance",
           "POST /remember": "{text, scope?, tag?} -> write-back (index into scope collection)",
           "POST /grep": "{query, scope?, hits?, escalate?, radius?} -> KEYWORD hits (exact-string, no embedder)",
+          "POST /lanes": "{name, collection, ladder?} -> add-only atomic write of a new scope to config.toml",
         },
       });
     }
@@ -183,6 +185,12 @@ const server = http.createServer(async (req, res) => {
     if (route === "POST /remember") {
       const b = await readJson(req);
       const result = await remember(b.text, b.scope, { tag: b.tag });
+      return send(res, 200, { ...result, took_ms: Date.now() - t0 });
+    }
+
+    if (route === "POST /lanes") {
+      const b = await readJson(req);
+      const result = await addLane(b.name, b.collection, b.ladder);
       return send(res, 200, { ...result, took_ms: Date.now() - t0 });
     }
 
