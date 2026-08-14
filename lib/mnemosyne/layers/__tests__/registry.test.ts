@@ -45,6 +45,22 @@ describe('LayerRegistry', () => {
     expect(registry.has('file')).toBe(true);
   });
 
+  it('defaultRegistry() also has "graphify" (la-02) registered alongside "code-graph", not replacing it', () => {
+    const registry = defaultRegistry();
+    expect(registry.has('graphify')).toBe(true);
+    expect(registry.has('code-graph')).toBe(true);
+  });
+
+  it('creates a real GraphifyLayerAdapter from the registry, resolvable purely by name (no client.ts changes needed)', () => {
+    const registry = defaultRegistry();
+    // command: process.execPath -- always resolvable on PATH, so this
+    // assertion doesn't depend on the real `graphify` CLI being installed
+    // in whatever environment runs this test (see GraphifyLayerAdapter's
+    // constructor-time loud-failure check on the binary).
+    const adapter = registry.create('graphify', { command: process.execPath }, { rootDirectory: '/tmp' });
+    expect(adapter.layer).toBe('graphify');
+  });
+
   it('defaultRegistry() is a stable singleton across calls', () => {
     expect(defaultRegistry()).toBe(defaultRegistry());
   });

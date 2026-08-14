@@ -39,7 +39,9 @@
     "test:graph-route": "node test/graph-route.mjs",
     "test:reindex-route": "node test/reindex-route.mjs",
     "test:skill-harness": "node test/skill-harness.mjs",
-    "test:mcp-server": "node test/mcp-server.mjs"
+    "test:mcp-server": "node test/mcp-server.mjs",
+    "test:graphify-bridge": "node test/graphify-bridge.mjs",
+    "test:mcp-server-graphify": "node test/mcp-server-graphify.mjs"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
