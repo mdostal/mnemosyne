@@ -34,6 +34,77 @@ The operator's 3-layer simplification and the CBA's 5-layer research map onto ea
 
 Cross-project impact is still answered by querying **up** to the company director, never held locally at the code tier — that part of the CBA's design holds regardless of 3 vs 4 tiers.
 
+## 1a. `la-09` finding: `graphify global`/`merge-graphs` evaluated for the company-director tier — **don't adopt as the tier's data source** (2026-08-14)
+
+`docs/cba-memory-layers.md`'s "New finding" flagged Graphify's cross-repo merge commands
+(`graphify global add/remove/list`, `graphify merge-graphs`, `~/.graphify/global-graph.json`)
+as possibly the right mechanism for the company-director tier's "light understanding of a
+company's resources/products/repos without holding full per-repo depth" need (§1 above). This
+was evaluated for real, not inferred from docs — verdict: **the merged graph itself is the
+wrong altitude for this tier; don't adopt it as company-director's data source.**
+
+**What was actually run** (real CLI, confirmed via `graphify --help` first — the CBA's
+paraphrase of the command surface was accurate): `graphify update .` against this repo
+(mnemosyne, at commit `a0e957a`) and against a second real Pantheon repo on this machine
+(`/Users/mdostal/Documents/work/pantheon/minerva`, branch `feat/fix-startrun-heimdall-routing`)
+to produce two real per-repo `graph.json` files (mnemosyne: 1467 nodes/2480 edges/104
+communities; minerva: 849 nodes/1526 edges/57 communities). Then both real cross-repo paths:
+`graphify global add <graph.json> --as <tag>` for each repo (writes/accumulates
+`~/.graphify/global-graph.json` + a `global-manifest.json`), and separately `graphify
+merge-graphs <g1> <g2> --out <path>` (a one-shot merge of two named files, no persistent
+store). Both commands produced numerically identical results (2316 nodes, 4006 edges) —
+confirmed to be the same underlying merge logic with two different persistence models.
+
+**Directly inspected content of the real merged output** (`~/.graphify/global-graph.json`,
+2.5MB for just these two modest repos):
+- It is a **structural union, not a synthesis**. `2316 = 1467 + 849` exactly — every function/
+  class/doc node from both repos' full-depth per-repo graphs is present verbatim, just
+  namespaced (`id: "mnemosyne::src_errors_..."` / `"minerva::src_driver_claudeadapter"`, new
+  `repo` field added per node).
+- **Zero cross-repo edges.** Of the 4006 merged edges, a direct check (`source`/`target` repo
+  comparison on every edge) found 0 edges connecting a mnemosyne node to a minerva node. The
+  merge does not discover or infer any real relationship between repos (shared dependencies,
+  API usage, imports) — it only avoids ID collisions. Running `graphify query "how does
+  mnemosyne relate to minerva" --graph ~/.graphify/global-graph.json` confirmed this live: the
+  BFS traversal it returned was entirely local to mnemosyne's own `package.json`/`docs/
+  architecture.md` nodes (lexical matches on the words "mnemosyne"/"minerva" within one repo's
+  own graph), not a real cross-repo path.
+- **Community IDs collide across repos** (both repos number communities `0..N` independently;
+  after merge, `community: 1` exists in both mnemosyne, `community_name: "metrics.ts"`, and
+  minerva, `community_name: "consus-resume.ts"`, as two unrelated things sharing one number).
+  Not fatal — every node still carries a distinct `id`/`repo` field — but a real footgun for
+  any naive consumer that groups by the bare `community` integer.
+- `god-nodes`/`query`/`explain`/`--json` all run fine against the merged file (same
+  `graph.json` shape reused, confirmed live) — the tooling itself is reusable, but what comes
+  back is full function/class-level detail from whichever repo the traversal happened to land
+  in, not a repo- or product-level rollup.
+- The one artifact from this whole workflow that actually is small and repo-scoped is
+  `~/.graphify/global-manifest.json`, written as a side effect of `global add`: `{repo tag,
+  added_at, source_path, node_count, edge_count, source_hash}` per repo — a few hundred bytes
+  per repo, and exactly the shape of "which repos exist and how big/fresh are they" that a
+  company-director tier could actually hold cheaply. `graphify global list` surfaces the same
+  thing as a one-line-per-repo summary.
+
+**Recommendation: don't adopt `graphify global add`/`merge-graphs`'s merged graph.json as the
+company-director tier's data source.** It fails the tier's own stated requirement two ways:
+(1) it is full per-repo AST-level depth for every company repo concatenated into one file with
+unbounded, linear growth per repo added (2.5MB for 2 modest repos — a real company's 10-30
+repo fleet would put tens of MB of raw code-graph nodes in a tier explicitly meant to avoid
+holding per-repo depth), and (2) its only real value-add over just concatenating files by hand
+— actual cross-repo relationship discovery — doesn't exist; 0 of 4006 edges cross a repo
+boundary.
+
+**Adopt-with-modification, narrowly:** the `global add`/`global list` side effect
+(`global-manifest.json` — repo tag, size, freshness, provenance) is a legitimate, already-free
+"which repos/products exist" inventory signal for company-director tier, cheap enough to hold
+directly. It should NOT be confused with or expanded into holding the merged graph itself.
+Real cross-repo/cross-project *impact* questions (already scoped in §1's tier design — "cross-
+project impact is still answered by querying up... never held locally at the code tier")
+should be answered by the company-director tier querying **down** into a specific project's
+own already-adopted (`la-02`) per-repo Graphify graph on demand, not by maintaining one
+permanently-fused blob. This is a sketch for a future story if/when company-director-tier work
+is actually scheduled — not built here; `la-09` is evaluation-only per its own spec.
+
 ## 2. New design element: flight-status-aware memory (agreed direction, mechanism proposed)
 
 **Problem the operator raised:** work in progress on a feature branch is true *for that branch*, not globally true, until a PR merges. An agent must not build on another branch's unmerged memory as if it were confirmed ground truth. This likely extends to the Layer 3 code graph too (built from whatever's checked out, not just main).
@@ -71,7 +142,7 @@ Epic: **`mnemosyne-layer-architecture-v2`** — "Flight-aware layers, hard-locke
 | `la-07` | Layer-1 enforcement mandate — bakes recall-on-entry/remember-on-exit + flight-status handling into every harness's native meta file | `la-01`, `la-05` | pending |
 | `la-08` | Lifecycle-outcome → memory feedback loop (generalized beyond CI — any lifecycle event via `la-06`'s adapters) | `la-06` | pending |
 | `la-09` | Graphify cross-repo eval (`graphify global`/`merge-graphs`) | `la-02` | pending |
-| `la-10` | A/B: Graphify vs. retired in-house code-graph | `la-02` | pending |
+| `la-10` | A/B: Graphify vs. retired in-house code-graph | `la-02` | **complete — see §7** |
 | `la-11` | Memory-lifecycle compliance audit — verifies agents/repos are actually calling recall/remember/promote correctly, not just that the mandate exists | `la-06`, `la-07` | pending |
 
 **Decided (2026-08-13):** start with `la-02`. Testing bar for the flight-status stories (`la-04`/`la-05`/`la-06`): all three of — unit tests on status transitions, a real subprocess integration test (branch → provisional write → merge → assert promotion, same rigor as the `pl-02` regression test), and live dogfooding in this repo before any other repo adopts it.
@@ -88,3 +159,58 @@ Original north star (`(.pHive/project-profile.yaml`): "Unify memory layers behin
 2. **Testing bar for `la-04`/`la-05`/`la-06`** — all three: unit tests on status transitions, a real subprocess integration test, and live dogfooding in this repo first.
 3. **Starting story: `la-02`** (Graphify adapter) — highest confidence, already PoC'd, immediately valuable standalone.
 4. **`la-06`/`la-08` scope note** — since the trigger system is pluggable and git-hook-first (not CI-webhook-first), there's no single "does it live in Mnemosyne or in each repo's CI" question anymore — the git-hook adapter installs per-repo by design; a future ticket-queue adapter would be a separate integration per queue system, evaluated when that need is concrete rather than speculated now.
+
+## 7. `la-10`: Graphify vs. code-graph A/B benchmark — go/no-go on retirement (2026-08-14)
+
+Extended the existing `pl-03` A/B harness (`benchmarks/layer-ab-test.ts`) with a `graphify`-configured
+stack (`graphify -> vector -> file`) run alongside the existing `code-graph`-configured baseline
+(`code-graph -> vector -> file`) — `vector`/`file` held identical on both sides so the only variable is
+the graph layer itself. Ran for real against this repo (`npm run benchmark:layer-ab`), using the
+harness's own existing default query set (`mnemosyne`, `layer registry`, `secrets-adapter` — no new
+query set invented, per the story's guidance). Both `code-graph` and `graphify` stay registered
+side by side (`registry.ts`) — this story does not remove either.
+
+**Root cause found (not assumed):** directly inspected `code-graph`'s actual backing store,
+`~/.local/share/swarm-memory/graph.sqlite` — 22 nodes total, and **zero of them are from this repo**
+(`mnemosyne`); all 22 are from two unrelated repos (`dostal-swarm/...`, `swarm-memory/...`). Confirmed
+in `CodeGraphLayerAdapter.ts` too: it takes no `repoRoot`/per-repo scoping at all — it always shells to
+one global `swarm-memory graph impact <query>` (or reads the one shared `graph.sqlite`), so it is
+architecturally unable to reflect this repo's own code structure, regardless of query. `graphify`, by
+contrast, is repo-scoped: a fresh `graphify update .` against this repo (steady state, cached
+`graph.json`) indexed **1470 nodes / 2484 links** from this repo's own source.
+
+**Benchmark numbers (steady state, `graph.json` cached — matches real operational use, not a
+cold-start number):**
+
+| Config | Total hits | Total tokens (`estimateTokens()`) | Avg latency | Queries ok |
+|---|---|---|---|---|
+| `baseline (code-graph)` [`code-graph -> vector -> file`] | 12 | 4808 | 2502.7ms | 3/3 |
+| `graphify` [`graphify -> vector -> file`] | 28 | 4797 | 1666.0ms | 3/3 |
+
+Per-query breakdown: for `"mnemosyne"`, `graphify` matched directly (20 hits, 174 tokens, 7ms — the
+graph layer alone, no fallback needed) while `code-graph` missed entirely and fell through to `vector`
+(4 hits, 185 tokens, 2483ms). For `"layer registry"` and `"secrets-adapter"`, neither graph layer had a
+direct match, so both configs fell through identically to `vector` (identical hit/token counts on those
+two queries — a tie, not a loss for either side). Net across all 3 queries: `graphify` hit-count is
+never worse than `code-graph`'s on any query, total tokens are within noise (-0.2%), and average latency
+is 33% lower (the short-circuit on `"mnemosyne"` avoids `vector`'s ~2.3-2.6s cost entirely).
+
+**Qualitative relevance spot-check** (not just counts — inspected actual hit content for `"mnemosyne"`):
+`code-graph`'s 4 fallback hits are generic changelog/memory-log entries that happen to mention the word
+"mnemosyne" in passing (`vector`-layer text search, not graph-structural). `graphify`'s 20 hits are real,
+line-addressable code/doc structure nodes and edges naming this repo directly — `.mcp.json:L1`,
+`README.md:L1`, `package.json:L11`, `bin/mnemosyne:L1`, `README.md --contains--> Mnemosyne` — i.e. actual
+"what references what" impact-graph answers, which is `code-graph`'s stated job and what it structurally
+cannot deliver against this repo today.
+
+**Recommendation: GO** — proceed toward retiring the in-house `code-graph` implementations
+(`CodeGraphLayerAdapter.ts`'s better-sqlite3 path + the JS CLI wrapper onto the same shared
+`graph.sqlite`), as a separate, later story (not bundled here, per this story's explicit scope).
+`graphify` matched or beat `code-graph` on every metric measured against this repo, and the root-cause
+finding above means this isn't a close call that might flip with more queries — `code-graph` cannot
+structurally produce a relevant hit for this repo's own code no matter what's asked, since this repo
+was never indexed into its shared dataset. One pre-removal check for that later story: confirm no other
+consumer depends on the shared `swarm-memory` `graph.sqlite` for a *different* repo's data before
+deleting the wiring — its 22 nodes span `dostal-swarm`/`swarm-memory` themselves, so removing
+`CodeGraphLayerAdapter.ts` from Mnemosyne is not the same decision as decommissioning `swarm-memory`
+itself, which may still serve other consumers.

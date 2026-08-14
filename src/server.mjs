@@ -11,8 +11,17 @@
 //   GET  /healthz          -> liveness alias (always 200 if the process is up)
 //   GET  /scopes           -> configured scopes + escalation ladders
 //   GET  /config           -> read-only effective config (qdrant_url, embedder, scopes)
-//   POST /recall  {query, scope?, hits?, escalate?, min_score?, radius?}
-//   POST /remember {text, scope?, tag?}
+//   POST /recall  {query, scope?, hits?, escalate?, min_score?, radius?, cwd?,
+//                   cross_branch_provisional?} -> cwd/cross_branch_provisional
+//                   are la-05-recall-status-filtering's flight-status filter
+//                   options: cwd resolves the CALLER's own current git branch
+//                   (default recall excludes cross-branch `provisional`/
+//                   `superseded` entries, but always includes the caller's
+//                   own-branch provisional writes); cross_branch_provisional
+//                   is the explicit opt-in to see cross-branch entries too.
+//   POST /remember {text, scope?, tag?, cwd?} -> cwd (la-04) resolves the
+//                   git context (branch/commit) a write's flight status is
+//                   auto-detected from; defaults to this process's own cwd.
 //   POST /lanes   {name, collection, ladder?} -> add-only config.toml write
 //   GET  /search  ?q=&scope=&mode=recall|grep&hits=&escalate=&min_score=&radius=
 //                    -> thin dispatcher to recall()/grep() for the UI's Search panel
@@ -229,10 +238,14 @@ const server = http.createServer(async (req, res) => {
       const radiusParam = url.searchParams.get("radius");
       const escalateParam = url.searchParams.get("escalate");
       const minScoreParam = url.searchParams.get("min_score");
+      const crossBranchProvisionalParam = url.searchParams.get("cross_branch_provisional");
       const opts = {
         hits: hitsParam != null ? Number(hitsParam) : undefined,
         escalate: escalateParam === "true" || escalateParam === "1",
         radius: radiusParam != null ? Number(radiusParam) : undefined,
+        cwd: url.searchParams.get("cwd") || undefined,
+        includeCrossBranchProvisional:
+          crossBranchProvisionalParam === "true" || crossBranchProvisionalParam === "1",
       };
       const result =
         mode === "recall"
@@ -258,6 +271,8 @@ const server = http.createServer(async (req, res) => {
         escalate: b.escalate,
         minScore: b.min_score,
         radius: b.radius,
+        cwd: b.cwd,
+        includeCrossBranchProvisional: b.cross_branch_provisional === true,
       });
       console.log(
         `[mnemosyne] recall q=${JSON.stringify(String(b.query || "").slice(0, 80))} ` +
@@ -274,7 +289,7 @@ const server = http.createServer(async (req, res) => {
         const result = await graph.remember(b.src, b.predicate, b.dst);
         return send(res, 200, { ...result, took_ms: Date.now() - t0 });
       }
-      const result = await remember(b.text, b.scope, { tag: b.tag });
+      const result = await remember(b.text, b.scope, { tag: b.tag, cwd: b.cwd });
       return send(res, 200, { ...result, took_ms: Date.now() - t0 });
     }
 

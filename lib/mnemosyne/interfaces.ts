@@ -27,7 +27,11 @@
  * live layers as of m-01..m-07. `hive-memory` (pl-02-hive-memory-layer) is
  * a fourth live, OPTIONAL layer — plugin-hive's own knowledge graph +
  * per-agent/team memory files, read-only, not part of the default stack
- * unless explicitly configured (see layers/config.ts).
+ * unless explicitly configured (see layers/config.ts). `graphify`
+ * (la-02-graphify-adapter) is a fifth live, OPTIONAL layer: a tree-sitter
+ * AST code/doc graph (Graphify-Labs/graphify, PyPI `graphifyy`), registered
+ * under a distinct name alongside `code-graph` rather than replacing it
+ * (see GraphifyLayerAdapter.ts; la-10 does the later A/B retirement).
  */
 export type Layer =
   | 'meta'
@@ -36,7 +40,8 @@ export type Layer =
   | 'code-graph'
   | 'vector'
   | 'file'
-  | 'hive-memory';
+  | 'hive-memory'
+  | 'graphify';
 
 /**
  * The caller-specified boundary for a recall/remember call. Deliberately a
