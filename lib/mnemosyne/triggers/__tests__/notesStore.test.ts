@@ -146,3 +146,63 @@ describe('NotesDirectoryStatusStore.updateStatus', () => {
     ).rejects.toThrow(/expected Mnemosyne note format/);
   });
 });
+
+/**
+ * la-08-lifecycle-outcome-feedback — `NotesDirectoryStatusStore.recordOutcome`
+ * against real note files on disk. Appends the outcome as a new section,
+ * never touching the header line (`updateStatus`'s job, already covered
+ * above) or any existing body content.
+ */
+describe('NotesDirectoryStatusStore.recordOutcome', () => {
+  it('appends the outcome summary to the note body, leaving the header and existing body untouched', async () => {
+    const dir = await makeNotesDir();
+    const file = await writeNote(dir, 'a.md', {
+      status: 'confirmed',
+      branch: 'feat/x',
+      commit: 'a'.repeat(40),
+      body: 'decision: ship the thing\n',
+    });
+    const before = await readFile(file, 'utf8');
+    const store = new NotesDirectoryStatusStore({ notesDirectory: dir });
+
+    await store.recordOutcome(
+      { id: file, status: 'confirmed', source_ref: { branch: 'feat/x', commit_sha: 'a'.repeat(40), pr_url: null } },
+      { summary: "merge to 'main' (fast-forward), 1 commit(s) from 'feat/x': ship the thing" },
+    );
+
+    const after = await readFile(file, 'utf8');
+    expect(after.startsWith(before)).toBe(true); // pre-existing content is a strict prefix — nothing rewritten, only appended
+    expect(after).toContain("merge to 'main' (fast-forward), 1 commit(s) from 'feat/x': ship the thing");
+  });
+
+  it('a second recordOutcome call appends again rather than replacing the first outcome (never silently loses a prior lesson)', async () => {
+    const dir = await makeNotesDir();
+    const file = await writeNote(dir, 'a.md', { status: 'confirmed', branch: 'feat/x', commit: 'a'.repeat(40) });
+    const store = new NotesDirectoryStatusStore({ notesDirectory: dir });
+
+    await store.recordOutcome(
+      { id: file, status: 'confirmed', source_ref: { branch: 'feat/x', commit_sha: 'a'.repeat(40), pr_url: null } },
+      { summary: 'first outcome' },
+    );
+    await store.recordOutcome(
+      { id: file, status: 'confirmed', source_ref: { branch: 'feat/x', commit_sha: 'a'.repeat(40), pr_url: null } },
+      { summary: 'second outcome' },
+    );
+
+    const after = await readFile(file, 'utf8');
+    expect(after).toContain('first outcome');
+    expect(after).toContain('second outcome');
+  });
+
+  it('does not disturb the flight-status header — findByStatus still resolves the same status after an outcome is recorded', async () => {
+    const dir = await makeNotesDir();
+    await writeNote(dir, 'a.md', { status: 'superseded', branch: 'feat/abandoned', commit: 'c'.repeat(40) });
+    const store = new NotesDirectoryStatusStore({ notesDirectory: dir });
+    const [entry] = await store.findByStatus('superseded');
+
+    await store.recordOutcome(entry!, { summary: "branch 'feat/abandoned' deleted without merging" });
+
+    const stillSuperseded = await store.findByStatus('superseded');
+    expect(stillSuperseded).toHaveLength(1);
+  });
+});

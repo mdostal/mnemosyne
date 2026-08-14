@@ -17,6 +17,7 @@ import type { SourceRef, Status } from '../../interfaces.js';
 import {
   applyLifecycleEvent,
   matchesSourceRef,
+  type LifecycleOutcome,
   type LifecycleTriggerEvent,
   type MemoryEntryRef,
   type MemoryStatusStore,
@@ -38,6 +39,20 @@ class FakeStore implements MemoryStatusStore {
     const found = this.entries.find((e) => e.id === entry.id);
     if (!found) throw new Error(`FakeStore: no entry with id ${entry.id}`);
     found.status = to;
+  }
+}
+
+/**
+ * (la-08-lifecycle-outcome-feedback) A `FakeStore` that also implements
+ * `recordOutcome`, recording every call it receives (entry id + outcome) so
+ * tests can assert outcome-tagged writes actually reach the store — without
+ * ever touching disk/git.
+ */
+class FakeOutcomeStore extends FakeStore {
+  recordedOutcomes: { id: string; status: Status; outcome: LifecycleOutcome }[] = [];
+
+  async recordOutcome(entry: MemoryEntryRef, outcome: LifecycleOutcome): Promise<void> {
+    this.recordedOutcomes.push({ id: entry.id, status: entry.status, outcome });
   }
 }
 
@@ -189,5 +204,114 @@ describe('a hypothetical second adapter — proves the interface is genuinely pl
     expect(result.updated.map((e) => e.id)).toEqual(['b']);
     expect(store.entries).toHaveLength(1);
     expect(store.entries[0]!.status).toBe('superseded');
+  });
+});
+
+/**
+ * la-08-lifecycle-outcome-feedback — outcome-tagged writes on the SAME
+ * `applyLifecycleEvent` firing path la-06 already ships, not a separate
+ * mechanism. Uses `FakeOutcomeStore` (in-memory, no disk/git) to prove the
+ * engine-level wiring in isolation; `notesStore.test.ts` and `gitAdapter.
+ * test.ts` cover the real-disk/real-git halves, and `test/git-hooks.mjs`
+ * covers the full real-subprocess path end to end.
+ */
+describe('applyLifecycleEvent — outcome-tagged writes (la-08)', () => {
+  it('promote: records the outcome against every entry it confirms, at the moment it flips them', async () => {
+    const store = new FakeOutcomeStore([
+      { id: 'a', status: 'provisional', source_ref: ref('feat/x', 'sha-a') },
+      { id: 'b', status: 'provisional', source_ref: ref('feat/other', 'sha-b') },
+    ]);
+    const outcome: LifecycleOutcome = {
+      summary: "merge to 'main' (fast-forward), 1 commit(s) from 'feat/x': fix the flaky retry loop",
+      detail: { mergeShape: 'fast-forward', commitSubjects: ['fix the flaky retry loop'] },
+    };
+    const event: LifecycleTriggerEvent = {
+      transition: 'promote',
+      matcher: { branch: 'feat/x' },
+      adapter: 'test-adapter',
+      detail: 'test',
+      outcome,
+    };
+
+    const result = await applyLifecycleEvent(event, store);
+
+    expect(result.updated.map((e) => e.id)).toEqual(['a']);
+    expect(store.recordedOutcomes).toHaveLength(1);
+    expect(store.recordedOutcomes[0]).toEqual({ id: 'a', status: 'confirmed', outcome });
+    // The non-matching entry was never touched, and never got an outcome recorded either.
+    expect(store.recordedOutcomes.some((r) => r.id === 'b')).toBe(false);
+  });
+
+  it('supersede: records the outcome against every entry it supersedes, capturing why it did not land', async () => {
+    const store = new FakeOutcomeStore([
+      { id: 'a', status: 'provisional', source_ref: ref('feat/abandoned', 'sha-a') },
+    ]);
+    const outcome: LifecycleOutcome = {
+      summary: "branch 'feat/abandoned' deleted without merging — last commit: \"try approach X\"",
+      detail: { branch: 'feat/abandoned', lastCommitSubject: 'try approach X' },
+    };
+    const event: LifecycleTriggerEvent = {
+      transition: 'supersede',
+      matcher: { branch: 'feat/abandoned' },
+      adapter: 'test-adapter',
+      detail: 'test',
+      outcome,
+    };
+
+    const result = await applyLifecycleEvent(event, store);
+
+    expect(result.updated.map((e) => e.id)).toEqual(['a']);
+    expect(store.recordedOutcomes).toEqual([{ id: 'a', status: 'superseded', outcome }]);
+  });
+
+  it('an event with no outcome records nothing, even against a store that supports recordOutcome', async () => {
+    const store = new FakeOutcomeStore([{ id: 'a', status: 'provisional', source_ref: ref('feat/x', 'sha-a') }]);
+    const event: LifecycleTriggerEvent = {
+      transition: 'promote',
+      matcher: { branch: 'feat/x' },
+      adapter: 'test-adapter',
+      detail: 'test',
+      // no outcome
+    };
+
+    const result = await applyLifecycleEvent(event, store);
+
+    expect(result.updated).toHaveLength(1);
+    expect(store.recordedOutcomes).toEqual([]);
+  });
+
+  it('an outcome present but a store with no recordOutcome capability is a silent no-op, not an error', async () => {
+    const store = new FakeStore([{ id: 'a', status: 'provisional', source_ref: ref('feat/x', 'sha-a') }]);
+    const event: LifecycleTriggerEvent = {
+      transition: 'promote',
+      matcher: { branch: 'feat/x' },
+      adapter: 'test-adapter',
+      detail: 'test',
+      outcome: { summary: 'some outcome' },
+    };
+
+    await expect(applyLifecycleEvent(event, store)).resolves.toBeTruthy();
+    expect(store.entries[0]!.status).toBe('confirmed'); // status transition still happened
+  });
+
+  it('a recordOutcome that throws never undoes or blocks the status transition that already succeeded', async () => {
+    class ThrowingOutcomeStore extends FakeStore {
+      async recordOutcome(): Promise<void> {
+        throw new Error('boom — outcome store is unavailable');
+      }
+    }
+    const store = new ThrowingOutcomeStore([{ id: 'a', status: 'provisional', source_ref: ref('feat/x', 'sha-a') }]);
+    const event: LifecycleTriggerEvent = {
+      transition: 'promote',
+      matcher: { branch: 'feat/x' },
+      adapter: 'test-adapter',
+      detail: 'test',
+      outcome: { summary: 'some outcome' },
+    };
+
+    const result = await applyLifecycleEvent(event, store);
+
+    expect(result.updated.map((e) => e.id)).toEqual(['a']);
+    expect(store.entries[0]!.status).toBe('confirmed'); // transition survived the recordOutcome failure
   });
 });

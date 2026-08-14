@@ -23,6 +23,18 @@
 //   5. Reads the note files back off disk and asserts the promotion/
 //      supersede actually happened, against real written memory entries.
 //
+// la-08-lifecycle-outcome-feedback extends both scenarios below (rather
+// than adding a separate test file — same real-subprocess rigor, same
+// installed hooks, same temp repo) with assertions that the SAME real merge
+// / real `git branch -D` also wrote an outcome-tagged "## Lifecycle
+// outcome" section into the note, not just flipped its status= token. The
+// branch-delete assertion in particular is the meaningful proof: it only
+// passes because the installed reference-transaction hook actually resolves
+// + stashes the abandoned branch's sha during git's real "prepared" phase
+// (a real `git branch -D`'s own reference-transaction data reports no
+// usable old value for the delete itself, confirmed by direct experiment —
+// see hooks/git/reference-transaction.mjs's doc comment).
+//
 //   node test/git-hooks.mjs
 
 import { execFile } from "node:child_process";
@@ -141,6 +153,21 @@ async function main() {
       "the unrelated branch's note was NOT promoted by this merge — matching is real, not blanket"
     );
 
+    // --- la-08-lifecycle-outcome-feedback: the SAME real merge above must
+    // also write an outcome-tagged entry, not just flip status=confirmed.
+    ok(
+      note1After.includes("## Lifecycle outcome") && note1After.includes("feat/real-merge"),
+      "la-08: the REAL merge also wrote an outcome/lesson section into note 1, naming the merged branch"
+    );
+    ok(
+      note1After.includes("merge-commit") && note1After.includes("feat commit 2"),
+      "la-08: the outcome correctly identifies this as a real (non-fast-forward) merge and includes the real commit message"
+    );
+    ok(
+      unrelatedAfter.includes("## Lifecycle outcome") === false,
+      "la-08: the unrelated (non-matching) branch's note got no outcome recorded either — matching is real, not blanket"
+    );
+
     // =======================================================================
     // Scenario B: real branch delete (abandoned, never merged) -> real
     // supersede, never a delete.
@@ -166,6 +193,25 @@ async function main() {
     ok(
       abandonedAfter.includes("decision: try approach X (later abandoned)"),
       "the superseded note's content is still fully present — NEVER deleted, only its status flipped"
+    );
+
+    // --- la-08-lifecycle-outcome-feedback: the SAME real `git branch -D`
+    // above must also write an outcome/lesson capturing WHY it didn't land
+    // — specifically the abandoned branch's own last commit message, which
+    // is only recoverable at all because the installed reference-transaction
+    // hook resolved+stashed it during git's "prepared" phase (BEFORE the
+    // ref was actually removed) — a real `git branch -D`'s own
+    // reference-transaction data reports no usable old value by the time
+    // "committed" fires (see hooks/git/reference-transaction.mjs's doc
+    // comment). This is the mandated proof that this really works end to
+    // end through the INSTALLED hooks, not just the unit-level primitives.
+    ok(
+      abandonedAfter.includes("## Lifecycle outcome") && abandonedAfter.includes("feat/abandoned"),
+      "la-08: the REAL branch delete also wrote an outcome/lesson section into the superseded note, naming the branch"
+    );
+    ok(
+      abandonedAfter.includes("work that will be abandoned"),
+      "la-08: the outcome captures the abandoned branch's actual last commit message (recovered via the prepared-state pre-resolution, not the delete's own reference-transaction data)"
     );
 
     // =======================================================================
