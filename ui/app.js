@@ -316,11 +316,18 @@ searchForm.addEventListener("submit", async (evt) => {
   }
 });
 
-// --- Graph panel (s-04): renders swarm-memory's real impact graph
+// --- Graph panel (s-04, extended for scale by the la-02-graphify-adapter
+// follow-on): renders the configured graph backend's real impact graph
 // (GET /graph/stats + GET /graph/edges) as a vanilla SVG node-link diagram —
 // no charting/graph-viz library (zero-dep guardrail). Clicking a node fetches
-// GET /graph/impact/:node + GET /graph/deps/:node and shows them in the side
-// inspector panel.
+// GET /graph/impact/:node + GET /graph/deps/:node (side inspector) AND
+// re-centers the on-canvas view on that node — a real graph can be
+// thousands of nodes (Graphify's own graph.json easily is), so the default
+// view is a bounded neighborhood around one focus node, not the whole
+// graph at once. Full edge data is still fetched ONCE per load and kept
+// client-side (`allNodeIds`/`allEdges` below) — every subsequent
+// focus/depth/search change is a pure in-memory recompute, no extra network
+// round-trip, so exploring stays instant even on a large graph.
 //
 // READ-ONLY: this panel (and this whole file) never calls `swarm-memory
 // graph add`/`graph remove` or any /graph/add or /graph/remove route — graph
@@ -336,10 +343,32 @@ const graphImpactListEl = document.getElementById("graph-impact-list");
 const graphImpactEmptyEl = document.getElementById("graph-impact-empty");
 const graphDepsListEl = document.getElementById("graph-deps-list");
 const graphDepsEmptyEl = document.getElementById("graph-deps-empty");
+const graphToolbarEl = document.getElementById("graph-toolbar");
+const graphSearchEl = document.getElementById("graph-search");
+const graphSearchGoEl = document.getElementById("graph-search-go");
+const graphSearchEmptyEl = document.getElementById("graph-search-empty");
+const graphDepthEl = document.getElementById("graph-depth");
+const graphZoomInEl = document.getElementById("graph-zoom-in");
+const graphZoomOutEl = document.getElementById("graph-zoom-out");
+const graphZoomResetEl = document.getElementById("graph-zoom-reset");
+const graphShowAllEl = document.getElementById("graph-show-all");
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const GRAPH_WIDTH = 640;
 const GRAPH_HEIGHT = 480;
+// A force layout past a few hundred nodes gets both visually unreadable
+// (the "packed circle" failure mode) and slow (this layout is O(n^2) per
+// iteration) — this is the line "Show whole graph" warns above, not a hard
+// block, since the operator may genuinely want it on a smaller repo's graph.
+const LARGE_GRAPH_WARNING_THRESHOLD = 300;
+const DEFAULT_NEIGHBORHOOD_MAX_NODES = 60;
+
+// Full graph fetched once per loadGraph() call, then reused for every
+// client-side neighborhood recompute below.
+let allNodeIds = [];
+let allEdges = [];
+let currentFocusNode = null;
+let currentDepth = 2;
 
 function svgEl(tag, attrs = {}) {
   const el = document.createElementNS(SVG_NS, tag);
@@ -353,6 +382,80 @@ function svgEl(tag, attrs = {}) {
 function shortLabel(nodeId) {
   const parts = String(nodeId).split("/");
   return parts[parts.length - 1] || String(nodeId);
+}
+
+// Undirected BFS out from `focusId` along `edges` (edges are directionally
+// labeled src->dst for the impact/deps inspector, but "what's near this
+// node" should walk both ways), stopping at `depth` hops or `maxNodes`
+// total nodes — whichever comes first. Closer nodes are always kept over
+// farther ones (BFS order), so capping at maxNodes never drops a node in
+// favor of a more-distant one. Returns { nodeIds, edges } — edges are the
+// subset of the input list with BOTH endpoints inside the returned nodeIds
+// (so every rendered edge has two real rendered endpoints).
+function computeNeighborhood(focusId, edges, { depth = 2, maxNodes = DEFAULT_NEIGHBORHOOD_MAX_NODES } = {}) {
+  const adjacency = new Map();
+  const addAdj = (a, b) => {
+    if (!adjacency.has(a)) adjacency.set(a, new Set());
+    adjacency.get(a).add(b);
+  };
+  for (const e of edges) {
+    addAdj(e.src, e.dst);
+    addAdj(e.dst, e.src);
+  }
+
+  const included = new Set([focusId]);
+  let frontier = [focusId];
+  for (let d = 0; d < depth && included.size < maxNodes; d++) {
+    const next = [];
+    for (const id of frontier) {
+      const neighbors = adjacency.get(id);
+      if (!neighbors) continue;
+      for (const n of neighbors) {
+        if (included.size >= maxNodes) break;
+        if (!included.has(n)) {
+          included.add(n);
+          next.push(n);
+        }
+      }
+    }
+    frontier = next;
+  }
+
+  const nodeIds = Array.from(included);
+  const subEdges = edges.filter((e) => included.has(e.src) && included.has(e.dst));
+  return { nodeIds, edges: subEdges };
+}
+
+// Highest-degree node (most edges touching it) — a reasonable, non-empty
+// default focus when nothing has been searched yet. Ties broken by id for
+// determinism (same graph -> same default view on reload).
+function highestDegreeNode(nodeIds, edges) {
+  const degree = new Map(nodeIds.map((id) => [id, 0]));
+  for (const e of edges) {
+    if (degree.has(e.src)) degree.set(e.src, degree.get(e.src) + 1);
+    if (degree.has(e.dst)) degree.set(e.dst, degree.get(e.dst) + 1);
+  }
+  let best = null;
+  let bestDegree = -1;
+  for (const id of nodeIds) {
+    const d = degree.get(id) || 0;
+    if (d > bestDegree || (d === bestDegree && best !== null && id < best)) {
+      best = id;
+      bestDegree = d;
+    }
+  }
+  return best;
+}
+
+// Case-insensitive: exact short-label match first (most useful for a
+// user typing a filename), then substring match anywhere in the full id.
+function findMatchingNode(query, nodeIds) {
+  if (!query) return null;
+  const q = query.trim().toLowerCase();
+  if (!q) return null;
+  const exact = nodeIds.find((id) => shortLabel(id).toLowerCase() === q);
+  if (exact) return exact;
+  return nodeIds.find((id) => id.toLowerCase().includes(q)) || null;
 }
 
 // Minimal force-directed layout (Fruchterman-Reingold style: repulsion
@@ -481,9 +584,114 @@ async function selectGraphNode(node) {
   }
 }
 
-function renderGraph(nodeIds, edges) {
+// --- Zoom / pan --------------------------------------------------------
+// Plain SVG viewBox manipulation, no library: zoom scales the viewBox
+// around the cursor (or the SVG center, for the +/- buttons), pan
+// translates it while dragging. `baseViewBox` is reset to fit whatever was
+// just rendered (see renderGraph below); zoom/pan act relative to it.
+let baseViewBox = { x: 0, y: 0, w: GRAPH_WIDTH, h: GRAPH_HEIGHT };
+let currentViewBox = { ...baseViewBox };
+
+function applyViewBox() {
+  graphSvgEl.setAttribute(
+    "viewBox",
+    `${currentViewBox.x} ${currentViewBox.y} ${currentViewBox.w} ${currentViewBox.h}`,
+  );
+}
+
+function zoomAt(factor, clientX, clientY) {
+  const rect = graphSvgEl.getBoundingClientRect();
+  // Fraction across the SVG's rendered box the cursor is at (0..1), used to
+  // keep that same graph-space point under the cursor after zooming.
+  const fx = rect.width > 0 ? (clientX - rect.left) / rect.width : 0.5;
+  const fy = rect.height > 0 ? (clientY - rect.top) / rect.height : 0.5;
+  const pointX = currentViewBox.x + fx * currentViewBox.w;
+  const pointY = currentViewBox.y + fy * currentViewBox.h;
+
+  const minW = baseViewBox.w * 0.05;
+  const maxW = baseViewBox.w * 4;
+  const newW = Math.min(maxW, Math.max(minW, currentViewBox.w * factor));
+  const newH = newW * (currentViewBox.h / currentViewBox.w);
+
+  currentViewBox = {
+    x: pointX - fx * newW,
+    y: pointY - fy * newH,
+    w: newW,
+    h: newH,
+  };
+  applyViewBox();
+}
+
+function resetView() {
+  currentViewBox = { ...baseViewBox };
+  applyViewBox();
+}
+
+function panBy(dxClient, dyClient) {
+  const rect = graphSvgEl.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return;
+  const scaleX = currentViewBox.w / rect.width;
+  const scaleY = currentViewBox.h / rect.height;
+  currentViewBox = {
+    ...currentViewBox,
+    x: currentViewBox.x - dxClient * scaleX,
+    y: currentViewBox.y - dyClient * scaleY,
+  };
+  applyViewBox();
+}
+
+let panState = null;
+// Ctrl/Cmd+wheel zooms (the same convention maps/graph tools generally use)
+// — a PLAIN wheel event is left completely alone (no preventDefault, no
+// zoom) so scrolling the page while the cursor happens to be over the graph
+// still scrolls the page normally instead of getting stuck zooming it.
+graphSvgEl.addEventListener("wheel", (evt) => {
+  if (!evt.ctrlKey && !evt.metaKey) return;
+  evt.preventDefault();
+  const factor = evt.deltaY > 0 ? 1.15 : 1 / 1.15;
+  zoomAt(factor, evt.clientX, evt.clientY);
+}, { passive: false });
+graphSvgEl.addEventListener("pointerdown", (evt) => {
+  // Only plain-left-button presses can become a drag. Deliberately does NOT
+  // call setPointerCapture here — capturing on pointerdown, before any
+  // actual movement, redirects the browser's synthesized click event to
+  // the capturing element (this SVG) instead of the node the pointer is
+  // actually over, which silently broke every node click. Capture is only
+  // taken once real movement is confirmed, in pointermove below — a plain
+  // click never captures, so it reaches its real target normally.
+  if (evt.button !== 0) return;
+  panState = { pointerId: evt.pointerId, lastX: evt.clientX, lastY: evt.clientY, moved: false };
+});
+graphSvgEl.addEventListener("pointermove", (evt) => {
+  if (!panState) return;
+  const dx = evt.clientX - panState.lastX;
+  const dy = evt.clientY - panState.lastY;
+  if (!panState.moved && (Math.abs(dx) > 2 || Math.abs(dy) > 2)) {
+    panState.moved = true;
+    graphSvgEl.setPointerCapture(panState.pointerId);
+  }
+  if (!panState.moved) return;
+  panState.lastX = evt.clientX;
+  panState.lastY = evt.clientY;
+  panBy(dx, dy);
+});
+graphSvgEl.addEventListener("pointerup", () => { panState = null; });
+graphSvgEl.addEventListener("pointercancel", () => { panState = null; });
+graphZoomInEl.addEventListener("click", () => {
+  const rect = graphSvgEl.getBoundingClientRect();
+  zoomAt(1 / 1.4, rect.left + rect.width / 2, rect.top + rect.height / 2);
+});
+graphZoomOutEl.addEventListener("click", () => {
+  const rect = graphSvgEl.getBoundingClientRect();
+  zoomAt(1.4, rect.left + rect.width / 2, rect.top + rect.height / 2);
+});
+graphZoomResetEl.addEventListener("click", resetView);
+
+// Draws nodes/edges at the given (already-laid-out) positions into
+// graphSvgEl. Pure DOM construction, no layout/sizing decisions — those
+// live in renderGraph below, which is the only caller.
+function drawGraphElements(nodeIds, edges, positions) {
   graphSvgEl.textContent = "";
-  const positions = forceLayout(nodeIds, edges);
 
   const edgesGroup = svgEl("g", { class: "graph-edges" });
   for (const e of edges) {
@@ -503,7 +711,8 @@ function renderGraph(nodeIds, edges) {
     const p = positions.get(id);
     const g = svgEl("g", { class: "graph-node", tabindex: "0", role: "button", "aria-label": `node ${id}` });
     g.dataset.node = id;
-    const circle = svgEl("circle", { cx: p.x, cy: p.y, r: 7 });
+    if (id === currentFocusNode) g.classList.add("focus");
+    const circle = svgEl("circle", { cx: p.x, cy: p.y, r: id === currentFocusNode ? 10 : 7 });
     const label = svgEl("text", { x: p.x + 10, y: p.y + 4, class: "graph-node-label" });
     label.textContent = shortLabel(id);
     const title = svgEl("title");
@@ -511,7 +720,14 @@ function renderGraph(nodeIds, edges) {
     g.appendChild(circle);
     g.appendChild(label);
     g.appendChild(title);
-    const activate = () => selectGraphNode(id);
+    // Click both inspects (impact/deps side panel) AND re-centers the
+    // rendered neighborhood on this node — "drill into" a graph this size
+    // means navigating through it node by node, not seeing it all at once.
+    const activate = () => {
+      if (panState && panState.moved) return; // a drag-release, not a click
+      selectGraphNode(id);
+      focusOnNode(id);
+    };
     g.addEventListener("click", activate);
     g.addEventListener("keydown", (evt) => {
       if (evt.key === "Enter" || evt.key === " ") {
@@ -524,12 +740,93 @@ function renderGraph(nodeIds, edges) {
   graphSvgEl.appendChild(nodesGroup);
 }
 
+// forceLayout's repulsion pass is O(n^2) per iteration -- at the default
+// neighborhood size (~60 nodes) 300 iterations is fast and produces a good
+// layout, but at "Show whole graph" scale (n in the thousands) 300
+// iterations measured ~40 SECONDS on this repo's own 1365-node graph,
+// long enough to hang the tab. Keep a fixed total pairwise-operation
+// budget (n^2 * iterations ~= budget) instead of a fixed iteration count,
+// so cost stays roughly bounded regardless of n -- large graphs get fewer,
+// cruder iterations (still fine, since "Show whole graph" already carries
+// its own "may be slow/hard to read" warning) rather than none at all.
+const LAYOUT_PAIRWISE_OP_BUDGET = 15_000_000;
+function layoutIterationsFor(n) {
+  if (n <= 1) return 1;
+  return Math.max(15, Math.min(300, Math.round(LAYOUT_PAIRWISE_OP_BUDGET / (n * n))));
+}
+
+function renderGraph(nodeIds, edges) {
+  // Size the layout/viewBox to the actual node count so a tiny neighborhood
+  // isn't stranded in a large empty canvas, and a "show whole graph" call
+  // still gets room to breathe.
+  const n = nodeIds.length;
+  const scale = n <= 20 ? 1 : Math.min(3, 1 + (n - 20) / 200);
+  const width = GRAPH_WIDTH * scale;
+  const height = GRAPH_HEIGHT * scale;
+
+  const positions = forceLayout(nodeIds, edges, { width, height, iterations: layoutIterationsFor(n) });
+  drawGraphElements(nodeIds, edges, positions);
+
+  baseViewBox = { x: 0, y: 0, w: width, h: height };
+  resetView();
+}
+
 function resetGraphInspector() {
   graphSelectedNodeEl.textContent = "";
   graphInspectorStatusEl.textContent = "Click a node to inspect it.";
   graphInspectorStatusEl.className = "panel-status";
   graphInspectorDetailEl.hidden = true;
 }
+
+// Re-centers the rendered graph on `nodeId`'s neighborhood (in-memory
+// recompute over the already-fetched allNodeIds/allEdges — no network
+// call). This is the "drill into" / navigate action, distinct from
+// selectGraphNode's side-inspector fetch, which still hits the real
+// /graph/impact and /graph/deps routes for full-precision data.
+function focusOnNode(nodeId) {
+  if (!allNodeIds.includes(nodeId)) return;
+  currentFocusNode = nodeId;
+  currentDepth = Number(graphDepthEl.value) || 2;
+  const { nodeIds, edges } = computeNeighborhood(nodeId, allEdges, { depth: currentDepth });
+  renderGraph(nodeIds, edges);
+  graphSearchEmptyEl.hidden = true;
+  setStatus(
+    graphStatusEl,
+    "pass",
+    `${allNodeIds.length} node(s) total — showing ${nodeIds.length} within ${currentDepth} hop(s) of "${shortLabel(nodeId)}"`,
+  );
+}
+
+function handleGraphSearch() {
+  const match = findMatchingNode(graphSearchEl.value, allNodeIds);
+  if (!match) {
+    graphSearchEmptyEl.hidden = false;
+    return;
+  }
+  focusOnNode(match);
+}
+graphSearchGoEl.addEventListener("click", handleGraphSearch);
+graphSearchEl.addEventListener("keydown", (evt) => {
+  if (evt.key === "Enter") {
+    evt.preventDefault();
+    handleGraphSearch();
+  }
+});
+graphDepthEl.addEventListener("change", () => {
+  if (currentFocusNode) focusOnNode(currentFocusNode);
+});
+graphShowAllEl.addEventListener("click", () => {
+  if (allNodeIds.length > LARGE_GRAPH_WARNING_THRESHOLD) {
+    const proceed = window.confirm(
+      `This graph has ${allNodeIds.length} nodes — rendering all of them at once can be slow and hard to read. Continue anyway?`,
+    );
+    if (!proceed) return;
+  }
+  currentFocusNode = null;
+  renderGraph(allNodeIds, allEdges);
+  graphSearchEmptyEl.hidden = true;
+  setStatus(graphStatusEl, "pass", `${allNodeIds.length} node(s), ${allEdges.length} edge(s) — showing all`);
+});
 
 async function loadGraph() {
   setStatus(graphStatusEl, "loading", "loading…");
@@ -569,10 +866,22 @@ async function loadGraph() {
       return;
     }
 
-    renderGraph(nodeIds, edges);
+    allNodeIds = nodeIds;
+    allEdges = edges;
     graphBodyEl.hidden = false;
     resetGraphInspector();
-    setStatus(graphStatusEl, "pass", `${stats.nodes} node(s), ${stats.edges} edge(s)`);
+    graphSearchEl.value = "";
+    graphSearchEmptyEl.hidden = true;
+
+    const defaultFocus = highestDegreeNode(nodeIds, edges);
+    if (nodeIds.length <= DEFAULT_NEIGHBORHOOD_MAX_NODES) {
+      // Small enough to just show the whole thing straightaway.
+      currentFocusNode = null;
+      renderGraph(nodeIds, edges);
+      setStatus(graphStatusEl, "pass", `${stats.nodes} node(s), ${stats.edges} edge(s)`);
+    } else {
+      focusOnNode(defaultFocus);
+    }
   } catch (err) {
     setStatus(graphStatusEl, "fail", "FAIL — could not reach GET /graph/stats or GET /graph/edges");
   }
