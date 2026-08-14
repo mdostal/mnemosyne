@@ -1,0 +1,72 @@
+id: la-11-memory-lifecycle-compliance-audit
+epic: mnemosyne-layer-architecture-v2
+title: Memory-lifecycle compliance audit
+status: pending
+complexity: high
+methodology: classic
+depends_on: [la-06-lifecycle-trigger-system, la-07-layer1-enforcement-mandate]
+
+description: |
+  Decided 2026-08-13: baking the mandate into Layer 1 (la-07) and building trigger adapters
+  (la-06) isn't sufficient on its own — per the operator, "it is another system that has to
+  ensure we actually call those correctly." This echoes the operator's original idea from
+  earlier in this session: "mnemosyne can have a deep dive, check, and we can let it sleep
+  where it goes through, cleans, and fixes."
+
+  Build a periodic/on-demand audit that checks, for real, whether the mandate is actually
+  being followed:
+    - Are agents/sessions actually calling recall on entry / remember on exit (la-07)?
+    - Are provisional entries getting promoted/superseded in reasonable time (la-06), or
+      accumulating stale (e.g. a merge happened on a machine without the git hook installed —
+      the exact gap la-06's own risk section flags)?
+    - Surface drift as a report, and where safe, auto-remediate (e.g. detect an actually-merged
+      branch with still-provisional entries and promote them after independently verifying the
+      merge against real git state — not blindly).
+
+  This is a detection/reporting system first; auto-remediation should be conservative and only
+  cover cases independently verifiable against real state (e.g. git log), never guessed.
+
+acceptance_criteria:
+  - "Given a session that never calls recall/remember despite la-07's mandate being active, when the audit runs, then it flags that session/repo as non-compliant with specific evidence, not a vague warning"
+  - "Given a branch that was actually merged (verifiable via real git state) but still has provisional entries (the git-hook-missed-it case), when the audit runs, then it detects the mismatch and either promotes the entries after independent verification or flags them for review — documented which, and why"
+  - "Given the audit's auto-remediation path, when it acts, then every action is logged with the evidence that justified it — no silent fixes"
+
+steps:
+  - id: research
+    description: Review la-06/la-07's shipped behavior and known gaps (esp. the git-hook-machine-coverage gap flagged in la-06's risks) to scope what compliance signals are actually detectable.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for drift detection (stale provisional entries with verifiably-merged branches) and for the audit's report output.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement the audit as a runnable command (on-demand first; scheduling/"sleep" cadence is a follow-on decision, not required for this story's completion).
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm auto-remediation only fires on independently-verified real state, confirm every action is logged with evidence.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-layer-architecture-v2 (based on dev).
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: docs/layer-architecture-v2-plan.md
+      purpose: "§2, §6 — this story's origin as the explicit compliance-verification counterpart to la-06/la-07"
+
+files_to_modify:
+  - file: lib/mnemosyne/audit/
+    change: "New: compliance-audit command, drift detection, conservative auto-remediation"
+
+design_decisions:
+  - decision: "Detection-and-report first, auto-remediation only on independently-verified state"
+    rationale: "A compliance system that silently 'fixes' things on guesses is worse than one that just reports — matches this session's own established practice of verifying agent self-reports before trusting them"
+
+risks:
+  - severity: medium
+    description: "Auto-remediation logic could itself become a new source of silent, hard-to-trace state changes"
+    mitigation: "Every remediation action logged with its justifying evidence; conservative scope (only independently git-verifiable cases) rather than broad heuristics"

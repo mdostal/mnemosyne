@@ -1,0 +1,58 @@
+id: la-03-graphify-doc-index
+epic: mnemosyne-layer-architecture-v2
+title: Graphify doc-index wiring into recall
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [la-02-graphify-adapter]
+
+description: |
+  la-02 adds Graphify as a code-graph layer. This story wires its confirmed doc-indexing
+  capability into recall as the "indexed docs" layer (CBA layer 3): Graphify's `graph.json`
+  markdown document nodes each carry a real `source_location` (e.g. "L17") via deterministic
+  AST-level parsing (`_origin: "ast"`), verified in the PoC with no LLM required.
+
+  Extend GraphifyLayerAdapter (or add a sibling adapter sharing its graph.json read path) so
+  recall() can return doc hits with line-number pointers, not just code-symbol hits — same
+  adapter, same underlying graph, a query-shape distinction (doc vs. code nodes) rather than
+  a second tool integration.
+
+acceptance_criteria:
+  - "Given a repo with markdown docs indexed by graphify, when recall() is queried with intent suited to documentation, then results include doc hits with real line-number source_location pointers, verified against the actual file content at that line"
+  - "Given a query that graphify's LLM-assisted path is not needed to answer (i.e. the deterministic AST path covers it), when recall() runs, then no LLM call is made — matches the PoC's proven no-LLM-required finding"
+
+steps:
+  - id: research
+    description: Confirm the exact graph.json schema for doc nodes (source_location format, _origin field) against a fresh graphify run in this repo, building on la-02's adapter.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for doc-hit recall with real line-number verification against fixture content.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Extend the adapter's recall() to surface doc nodes with source_location, defaulting to the no-LLM deterministic path.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Verify line numbers returned actually correspond to the real file content, not approximate/stale.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-layer-architecture-v2 (based on dev).
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: docs/cba-memory-layers.md
+      purpose: "PoC findings on graphify doc-node source_location format — read before implementing"
+
+files_to_modify:
+  - file: lib/mnemosyne/layers/GraphifyLayerAdapter.ts
+    change: "Extend recall() to surface doc nodes with line-number source_location"
+
+risks:
+  - severity: low
+    description: "Doc node source_location format could differ slightly between graphify versions"
+    mitigation: "Pin the graphify version used in CI/tests; fail loudly on schema mismatch rather than silently misreporting line numbers"
