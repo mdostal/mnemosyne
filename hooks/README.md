@@ -1,5 +1,14 @@
 # Mnemosyne memory hooks (v1) — pre-recall + post-remember
 
+> **Not to be confused with `hooks/git/`** (la-06-lifecycle-trigger-system):
+> this README covers Claude Code **agent lifecycle hooks** (`UserPromptSubmit`/
+> `Stop`/`SubagentStop`, installed via `bin/mnemosyne-install-hooks`).
+> `hooks/git/` holds **real `git` hooks** (`post-merge`/`reference-transaction`,
+> installed via `bin/mnemosyne-install-git-hooks`) that promote/supersede
+> flight-status memory on a real merge/branch-delete — a deliberately
+> unrelated "status" concept from the `in-progress`/`reviewed`/`full-send`
+> one below (see `interfaces.ts`'s `Status` doc comment).
+
 The **minimal, proven** memory loop for the Pantheon agent loop, built directly
 on the existing base:
 
