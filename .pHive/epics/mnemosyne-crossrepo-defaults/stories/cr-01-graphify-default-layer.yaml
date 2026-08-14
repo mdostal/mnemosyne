@@ -1,0 +1,106 @@
+id: cr-01-graphify-default-layer
+epic: mnemosyne-crossrepo-defaults
+title: Promote Graphify to the default code-graph layer (both TS client and JS server)
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: []
+
+description: |
+  la-10's real A/B benchmark (docs/layer-architecture-v2-plan.md §7) gave a clean "GO"
+  on Graphify over the in-house code-graph layer: the old layer's backing store had
+  ZERO nodes from this repo (22 nodes total, all from an unrelated repo), while
+  Graphify indexed 1758 real nodes. This story promotes Graphify to the DEFAULT,
+  while keeping the old layer fully available and registered (never removed) for
+  any consumer that explicitly configures it.
+
+  CRITICAL CONSTRAINT (operator's explicit instruction for this whole epic): this
+  must not compromise Mnemosyne's pluggability. A consumer must still be able to
+  run pure-vector-only, pure-file-only, or any other combination via the existing
+  MNEMOSYNE_LAYERS mechanism. This story changes what the UNCONFIGURED default is,
+  nothing about how configuration works.
+
+  Two separate places need this change, since Mnemosyne has two parallel
+  implementations (documented in project memory) -- read both before touching
+  anything:
+
+  1. **TS client** (`lib/mnemosyne/layers/config.ts`): `DEFAULT_LAYER_STACK_CONFIG`
+     currently hardcodes `[{name:'code-graph'}, {name:'vector'}, {name:'file'}]`.
+     Change the first entry to `{name:'graphify'}`. This is a real, intentional
+     behavior change for unconfigured TS consumers (pl-01's original comment said
+     "byte-for-byte identical" was the bar -- that was correct for pl-01's own
+     refactor, not a permanent constraint; la-10's evidence is the reason to break
+     it now, document this reasoning in the code).
+
+  2. **JS zero-dep server** (`bin/graphify-bridge.mjs`'s `isGraphifyConfigured()`,
+     wired into `src/server.mjs`'s GET /graph/* routes): today, graphify is used
+     ONLY when a consumer explicitly sets MNEMOSYNE_LAYERS to mention it -- there is
+     no generic "default stack" concept on this side, just an explicit opt-in check.
+     Change this to a SOFT default: when MNEMOSYNE_LAYERS is entirely unset (not
+     just "doesn't mention graphify" -- genuinely absent), attempt graphify first;
+     if the `graphify` binary is not on PATH, fall back to the existing
+     swarm-memory-backed code-graph path with a loud WARNING logged (not a hard
+     failure) -- this preserves the zero-required-external-binary promise for a
+     bare install. When a consumer EXPLICITLY configures MNEMOSYNE_LAYERS to
+     request graphify, keep the existing hard-fail-loud behavior unchanged (an
+     explicit request is an explicit requirement, no silent fallback).
+
+  Also update `SERVICE.md`/`README.md`'s setup instructions to mention graphify as
+  the new recommended default (with the fallback behavior explained honestly, not
+  glossed over) and that `uv tool install graphifyy` is now a recommended
+  (not required) install step.
+
+acceptance_criteria:
+  - "Given no MNEMOSYNE_LAYERS config anywhere, when the TS MnemosyneClient is constructed, then its default layer stack is [graphify, vector, file] and all existing pl-01 registry/config tests still pass except any that specifically asserted the OLD default -- those should be updated to assert the new default, not deleted"
+  - "Given no MNEMOSYNE_LAYERS env var at all and graphify installed, when GET /graph/stats is called on a fresh src/server.mjs process, then it returns graphify-backed real data (not swarm-memory's) without requiring any explicit config"
+  - "Given no MNEMOSYNE_LAYERS env var at all and graphify NOT on PATH (simulate via a broken PATH in the test), when GET /graph/stats is called, then it falls back to the swarm-memory-backed path with a logged warning, not a hard failure"
+  - "Given MNEMOSYNE_LAYERS explicitly requests graphify and the binary is missing, when a graph route is called, then it still fails loudly exactly as before this story -- explicit configuration is never silently downgraded"
+  - "Given MNEMOSYNE_LAYERS explicitly requests a single non-graphify layer (e.g. just 'vector'), when the client/server is used, then graphify is never invoked at all -- the soft-default only applies when nothing is configured"
+
+steps:
+  - id: research
+    description: Read lib/mnemosyne/layers/config.ts, registry.ts, bin/graphify-bridge.mjs's isGraphifyConfigured()/findGraphifyLayerEntry(), and src/server.mjs's graph route wiring in full before changing anything.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for the new TS default, the JS soft-default-with-fallback behavior (including the PATH-broken fallback case), and confirm existing explicit-config tests are unaffected.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement both changes per the description. Update SERVICE.md/README.md setup docs.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the fallback is genuinely soft (warning, not failure) only for the fully-unconfigured case, confirm explicit-config hard-failure is unchanged, confirm no pluggability regression (single-layer configs still work).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-crossrepo-defaults (based on dev).
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: lib/mnemosyne/layers/config.ts
+      purpose: "TS client's DEFAULT_LAYER_STACK_CONFIG"
+    - path: bin/graphify-bridge.mjs
+      purpose: "isGraphifyConfigured()/findGraphifyLayerEntry() -- the JS side's config check to make soft-default-aware"
+    - path: src/server.mjs
+      purpose: "GET /graph/* routes that currently call isGraphifyConfigured() as a hard boolean gate"
+    - path: docs/layer-architecture-v2-plan.md
+      purpose: "§7 -- la-10's real A/B benchmark numbers backing this promotion"
+
+files_to_modify:
+  - file: lib/mnemosyne/layers/config.ts
+    change: "DEFAULT_LAYER_STACK_CONFIG's first entry: code-graph -> graphify"
+  - file: bin/graphify-bridge.mjs
+    change: "isGraphifyConfigured() gains soft-default semantics for the fully-unconfigured case"
+  - file: src/server.mjs
+    change: "Graph routes handle the new soft-default fallback path"
+  - file: SERVICE.md
+    change: "Document graphify as the new recommended default + fallback behavior"
+
+risks:
+  - severity: medium
+    description: "A soft default that silently falls back could mask a real graphify installation problem the operator would want to know about"
+    mitigation: "The fallback logs a loud WARNING (not silent) -- visible in server output, just not a hard failure that blocks startup"
