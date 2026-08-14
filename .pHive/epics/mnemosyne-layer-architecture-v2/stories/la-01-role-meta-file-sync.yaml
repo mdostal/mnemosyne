@@ -4,9 +4,14 @@ title: Role-scoped meta-file sync (Layer 1)
 status: pending
 complexity: high
 methodology: tdd
-depends_on: []
+depends_on: [la-00-operator-global-rules]
 
 description: |
+  Added 2026-08-13: this story's sync mechanism MUST read ~/.mnemosyne/level0-rules.md
+  (la-00's deliverable) and prepend its content to every generated harness file, ahead of any
+  tier-specific block below. Level 0 is operator-authored and global (git workflow discipline,
+  etc.) — this story's own tier content composes AFTER it, never replaces or reorders it.
+
   New Layer 1 — a hard-locked, tier-scoped base-understanding file loaded at agent start,
   piggybacking on each harness's OWN native auto-load convention rather than inventing a new
   one: `CLAUDE.md` (Claude Code), `AGENTS.md` (Codex), `GEMINI.md` (Gemini CLI), and any
@@ -24,6 +29,7 @@ description: |
   that's la-07, which depends on this story's sync mechanism existing first.
 
 acceptance_criteria:
+  - "Given ~/.mnemosyne/level0-rules.md exists, when the sync command runs for any tier/harness, then the generated file's managed block starts with that file's content verbatim, followed by tier-specific content — Level 0 is never omitted, reordered after tier content, or silently stale-cached"
   - "Given a tier and a target harness, when the sync command runs, then it writes/updates that harness's native meta file (CLAUDE.md/AGENTS.md/GEMINI.md) with that tier's content block, clearly delimited so re-runs are idempotent and don't duplicate or clobber human-authored content outside the block"
   - "Given the same source content, when synced to two different harnesses, then both native files carry equivalent information in each harness's expected format — no harness-specific content divergence"
   - "Given no sync has ever run in a repo, when it runs for the first time, then it creates the target file if absent rather than requiring it to pre-exist"

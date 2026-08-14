@@ -1,0 +1,59 @@
+id: la-00-operator-global-rules
+epic: mnemosyne-layer-architecture-v2
+title: Level 0 — operator-global rules sync (sits above Layer 1)
+status: complete
+complexity: medium
+methodology: classic
+depends_on: []
+note: |
+  Added 2026-08-13 mid-epic, in direct response to a real incident: work in this
+  same epic got committed directly to `main` instead of `dev` because a stale
+  project-profile.yaml doc field said "off main" — the operator's exact framing
+  was "we need them to pull first, work off dev... make feature branches then
+  PR to dev, merge that in, then we merge to main for a release" and explicitly
+  wants this enforced "no matter what LLM starts and works with code" across
+  EVERY repo, not just this one — a rule that sits above the 4-tier
+  company/project hierarchy entirely, since it isn't scoped to any one company
+  or project.
+
+  Created the canonical source at ~/.mnemosyne/level0-rules.md (outside any
+  single repo, harness-agnostic path — not ~/.claude/, since this must apply to
+  Codex/Gemini/etc too) containing the git-workflow discipline rules verbatim.
+  la-01's per-harness sync (CLAUDE.md/AGENTS.md/GEMINI.md generation) must
+  prepend this file's content ahead of any tier-specific block — implemented as
+  a dependency (la-01 depends_on la-00) rather than folding the two together,
+  because Level 0 content is operator-authored and global while Layer 1 content
+  is Mnemosyne-generated and tier-scoped — different authorship, different
+  update cadence, shouldn't be conflated in one code path.
+
+  This story's own deliverable (the canonical file + the design note) is
+  complete. The actual SYNC MECHANISM that reads this file and injects it into
+  generated harness files is built as part of la-01 (which now depends on this
+  story) and la-07 (which extends the same sync path with the recall/remember
+  enforcement mandate) — la-00 itself ships no code, only the canonical source
+  of truth and the design decision.
+
+description: |
+  See note above for full context. Deliverable: ~/.mnemosyne/level0-rules.md
+  (canonical, operator-editable, outside any single repo) plus the epic-level
+  design decision that la-01's sync mechanism reads from this file first.
+
+acceptance_criteria:
+  - "Given ~/.mnemosyne/level0-rules.md exists and is human-readable, when an operator wants to change a global rule, then editing this one file is sufficient — no per-repo copy needs separate editing"
+  - "Given la-01's sync mechanism (built in la-01, not this story), when it generates a harness file, then it MUST read and prepend this file's content ahead of tier-specific content — captured here as a hard dependency, verified in la-01's own acceptance criteria"
+
+context:
+  codebase: .
+  key_files:
+    - path: docs/layer-architecture-v2-plan.md
+      purpose: "Level 0 design section — read before touching la-01's sync mechanism"
+
+files_to_modify:
+  - file: "~/.mnemosyne/level0-rules.md"
+    change: "New: canonical operator-global rules, outside this repo"
+
+design_decisions:
+  - decision: "Canonical file lives outside any single repo (~/.mnemosyne/), not inside the mnemosyne repo itself"
+    rationale: "Level 0 rules apply across every repo the operator touches, including repos with no Mnemosyne installation of their own — the source of truth can't live inside one consumer repo"
+  - decision: "Separate story/dependency from la-01, not merged into it"
+    rationale: "Different authorship (operator-authored, hand-edited) and update cadence (rare, deliberate edits) vs. Layer 1's tier content (Mnemosyne-generated, per-project). Conflating them would make it unclear which system owns a given line of a generated CLAUDE.md."

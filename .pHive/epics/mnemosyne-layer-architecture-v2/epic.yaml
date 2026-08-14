@@ -32,11 +32,22 @@ notes: |
   standalone compliance-audit system verifying the mandate is actually followed, not just that
   it exists.
 
+  Added 2026-08-13 (same day, mid-epic): la-00, Level 0 — operator-global rules, sitting ABOVE
+  Layer 1 and the 4-tier company/project hierarchy entirely. Direct response to a real incident
+  in this same epic (work committed to main instead of dev because a stale doc field said so).
+  Canonical source: ~/.mnemosyne/level0-rules.md, outside any single repo. la-01 now depends on
+  la-00 — every generated harness file must include Level 0 content first, tier content second.
+
 stories:
+  - id: la-00-operator-global-rules
+    title: "Level 0 — operator-global rules sync (sits above Layer 1)"
+    complexity: medium
+    depends_on: []
+
   - id: la-01-role-meta-file-sync
     title: Role-scoped meta-file sync (Layer 1)
     complexity: high
-    depends_on: []
+    depends_on: [la-00-operator-global-rules]
 
   - id: la-02-graphify-adapter
     title: Graphify adapter — replaces both in-house code-graph implementations
