@@ -153,6 +153,30 @@ describe('syncAllHarnesses', () => {
     expect(bodies[1]).toEqual(bodies[2]);
   });
 
+  it('la-07: every generated harness file carries the memory-lifecycle mandate (recall-on-entry/remember-on-exit/flight-status)', async () => {
+    const root = await makeTempRoot();
+    const level0Path = await makeLevel0(root, 'Shared level 0 rule.');
+    const repoRoot = path.join(root, 'repo-mandate');
+    await (await import('node:fs/promises')).mkdir(repoRoot, { recursive: true });
+
+    syncAllHarnesses(repoRoot, 'code-architect', { level0Path });
+
+    const fileNames = HARNESS_TARGETS.map((t) => t.fileName);
+    const contents = await Promise.all(
+      fileNames.map((name) => readFile(path.join(repoRoot, name), 'utf8')),
+    );
+
+    for (const content of contents) {
+      expect(content).toContain('Memory-lifecycle mandate');
+      const lower = content.toLowerCase();
+      expect(lower).toContain('recall');
+      expect(lower).toContain('remember');
+      expect(lower).toContain('provisional');
+      expect(lower).toContain('confirmed');
+      expect(lower).toContain('superseded');
+    }
+  });
+
   it('each sync run creates the file fresh when absent, per harness', async () => {
     const root = await makeTempRoot();
     const level0Path = await makeLevel0(root, 'Rule.');

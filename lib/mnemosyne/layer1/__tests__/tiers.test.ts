@@ -34,11 +34,43 @@ describe('tier content model', () => {
     expect(companyDirector).not.toEqual(projectOrchestrator);
   });
 
-  it('every tier has an explicit, currently-empty mandate extension point for la-07', () => {
+  it('every tier has the la-07 memory-lifecycle mandate populated in its mandate extension point', () => {
     for (const tier of TIERS) {
       expect(Array.isArray(TIER_CONTENT[tier].mandateSections)).toBe(true);
-      expect(TIER_CONTENT[tier].mandateSections).toHaveLength(0);
+      expect(TIER_CONTENT[tier].mandateSections.length).toBeGreaterThan(0);
     }
+  });
+
+  it('the mandate covers recall-on-entry, remember-on-exit, and flight-status awareness for every tier (la-07 acceptance criteria)', () => {
+    for (const tier of TIERS) {
+      const rendered = renderTierContentMarkdown(getTierContent(tier)).toLowerCase();
+      // (a) call recall on entry
+      expect(rendered).toContain('recall');
+      // (b) call remember on exit with outcome
+      expect(rendered).toContain('remember');
+      // (c) understand and respect flight-status
+      expect(rendered).toContain('provisional');
+      expect(rendered).toContain('confirmed');
+      expect(rendered).toContain('superseded');
+    }
+  });
+
+  it('mandate content is rendered under the "Memory-lifecycle mandate" heading for every tier', () => {
+    for (const tier of TIERS) {
+      const rendered = renderTierContentMarkdown(getTierContent(tier));
+      expect(rendered).toContain('Memory-lifecycle mandate');
+    }
+  });
+
+  it('mandate content is identical across every tier -- this is a universal policy, not a per-tier one', () => {
+    const mandates = TIERS.map((tier) => JSON.stringify(TIER_CONTENT[tier].mandateSections));
+    expect(new Set(mandates).size).toBe(1);
+  });
+
+  it('mandate content warns against treating another branch\'s provisional memory as confirmed ground truth', () => {
+    const rendered = renderTierContentMarkdown(getTierContent('code-architect')).toLowerCase();
+    expect(rendered).toMatch(/own (current )?branch|caller's own branch/);
+    expect(rendered).toContain('cross-branch');
   });
 
   it('renderTierContentMarkdown includes mandate sections when present (extension point works)', () => {
