@@ -12,6 +12,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { autoDetectWriteContext, GitContextDetectionError, STATUSES } from "./flight-status.mjs";
 
 const execFileP = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -277,9 +278,19 @@ export async function recall(query, scope, opts = {}) {
   return merged;
 }
 
-// remember(text, scope, {tag}) — write-back. Persists the note to a file, then
-// indexes (upserts, --no-prune) it into the scope's collection so it becomes
-// immediately recallable. Additive only: never prunes other files' chunks.
+// remember(text, scope, {tag, status, sourceRef, cwd, defaultBranch}) —
+// write-back. Persists the note to a file, then indexes (upserts,
+// --no-prune) it into the scope's collection so it becomes immediately
+// recallable. Additive only: never prunes other files' chunks.
+//
+// la-04-flight-status-schema: every write also carries a flight `status`
+// (provisional|confirmed|superseded) + `source_ref` ({branch, commit_sha,
+// pr_url}), auto-detected from real cwd git state unless the caller passes
+// both explicitly. Auto-detection failing on an ambiguous repo state
+// (detached HEAD, no repo, `git` missing) fails the whole write loudly —
+// same "never write with guessed data" contract as this function's existing
+// swarm-memory failure handling, and this story's explicit risk mitigation.
+// Recall-side filtering on `status` is la-05 — not implemented here.
 export async function remember(text, scope, opts = {}) {
   if (!text || !String(text).trim()) {
     const err = new Error("text is required");
@@ -296,11 +307,50 @@ export async function remember(text, scope, opts = {}) {
     err.status = 400;
     throw err;
   }
+
+  const explicitStatus = opts.status;
+  const explicitSourceRef = opts.sourceRef || opts.source_ref;
+  let status;
+  let sourceRef;
+  if (explicitStatus !== undefined || explicitSourceRef !== undefined) {
+    if (explicitStatus === undefined || explicitSourceRef === undefined) {
+      const err = new Error(
+        "opts.status and opts.sourceRef must both be provided together, or both omitted to auto-detect"
+      );
+      err.status = 400;
+      throw err;
+    }
+    if (!STATUSES.includes(explicitStatus)) {
+      const err = new Error(`invalid status '${explicitStatus}'. must be one of: ${STATUSES.join(", ")}`);
+      err.status = 400;
+      throw err;
+    }
+    status = explicitStatus;
+    sourceRef = explicitSourceRef;
+  } else {
+    try {
+      const detected = await autoDetectWriteContext({ cwd: opts.cwd, defaultBranch: opts.defaultBranch });
+      status = detected.status;
+      sourceRef = detected.source_ref;
+    } catch (e) {
+      if (e instanceof GitContextDetectionError) {
+        const err = new Error(
+          `write-through rejected: flight-status auto-detection failed: ${e.message}. Pass opts.status and opts.sourceRef explicitly to write anyway.`
+        );
+        err.status = 422;
+        throw err;
+      }
+      throw e;
+    }
+  }
+
   await mkdir(NOTES_DIR, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const tag = (opts.tag || "note").replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 40);
   const file = path.join(NOTES_DIR, `${stamp}-${tag}.md`);
-  const header = `<!-- remembered via Mnemosyne @ ${new Date().toISOString()} scope=${useScope} -->\n`;
+  const header =
+    `<!-- remembered via Mnemosyne @ ${new Date().toISOString()} scope=${useScope} ` +
+    `status=${status} branch=${sourceRef.branch} commit=${sourceRef.commit_sha} -->\n`;
   await writeFile(file, header + String(text) + "\n", "utf8");
 
   // Direct-mapped scope -> collection; index appends this one new file. The
@@ -346,6 +396,8 @@ export async function remember(text, scope, opts = {}) {
     file,
     chunks_upserted: chunksUpserted,
     engine_output: out,
+    status,
+    source_ref: sourceRef,
   };
 }
 

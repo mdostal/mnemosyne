@@ -178,6 +178,23 @@ const $defs = {
     additionalProperties: false,
   },
 
+  // la-04-flight-status-schema
+  Status: {
+    type: 'string',
+    enum: ['provisional', 'confirmed', 'superseded'],
+  },
+
+  SourceRef: {
+    type: 'object',
+    properties: {
+      branch: { type: 'string' },
+      commit_sha: { type: 'string' },
+      pr_url: { type: ['string', 'null'] },
+    },
+    required: ['branch', 'commit_sha', 'pr_url'],
+    additionalProperties: false,
+  },
+
   RememberError: {
     type: 'object',
     properties: {
@@ -193,11 +210,18 @@ const $defs = {
 
   RememberSuccess: {
     type: 'object',
+    description:
+      '`status`/`source_ref` (la-04-flight-status-schema) are optional at this ' +
+      'cross-layer schema level — not every writable layer has a git-context concept ' +
+      'to hang a flight status on — but a flight-status-aware layer (today: vector) ' +
+      'always populates both together, never one without the other.',
     properties: {
       ok: { const: true },
       layer: { $ref: '#/$defs/Layer' },
       provenance: { $ref: '#/$defs/Provenance' },
       degraded: { $ref: '#/$defs/DegradedWrite' },
+      status: { $ref: '#/$defs/Status' },
+      source_ref: { $ref: '#/$defs/SourceRef' },
     },
     required: ['ok', 'layer', 'provenance'],
     additionalProperties: false,

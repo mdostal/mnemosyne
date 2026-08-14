@@ -267,6 +267,79 @@ describe('AC4: Scope accepts project/enterprise/meta, rejects arbitrary strings'
 });
 
 // ---------------------------------------------------------------------------
+// la-04-flight-status-schema: RememberSuccess.status / .source_ref
+// ---------------------------------------------------------------------------
+
+describe('la-04: RememberSuccess status/source_ref', () => {
+  const fullSourceRef = {
+    branch: 'feat/mnemosyne-layer-architecture-v2',
+    commit_sha: 'a'.repeat(40),
+    pr_url: null,
+  };
+
+  it('validates without status/source_ref (optional at this cross-layer level)', () => {
+    const payload = { ok: true, layer: 'project', provenance: fullProvenance };
+    expect(validateRememberResult(payload)).toBe(true);
+  });
+
+  it.each(['provisional', 'confirmed', 'superseded'])('validates with status=%s + a full source_ref', (status) => {
+    const payload = {
+      ok: true,
+      layer: 'vector',
+      provenance: fullProvenance,
+      status,
+      source_ref: fullSourceRef,
+    };
+    expect(validateRememberResult(payload)).toBe(true);
+  });
+
+  it('validates a source_ref with a non-null pr_url', () => {
+    const payload = {
+      ok: true,
+      layer: 'vector',
+      provenance: fullProvenance,
+      status: 'provisional',
+      source_ref: { ...fullSourceRef, pr_url: 'https://github.com/example/repo/pull/42' },
+    };
+    expect(validateRememberResult(payload)).toBe(true);
+  });
+
+  it('rejects an arbitrary string outside the provisional/confirmed/superseded enum', () => {
+    const payload = {
+      ok: true,
+      layer: 'vector',
+      provenance: fullProvenance,
+      status: 'reviewed', // hooks/post-remember.mjs's unrelated workflow-status label, not a flight status
+      source_ref: fullSourceRef,
+    };
+    expect(validateRememberResult(payload)).toBe(false);
+  });
+
+  it.each(['branch', 'commit_sha', 'pr_url'])('rejects a source_ref with `%s` omitted entirely', (key) => {
+    const { [key]: _omitted, ...rest } = fullSourceRef as Record<string, unknown>;
+    const payload = {
+      ok: true,
+      layer: 'vector',
+      provenance: fullProvenance,
+      status: 'confirmed',
+      source_ref: rest,
+    };
+    expect(validateRememberResult(payload)).toBe(false);
+  });
+
+  it('rejects a source_ref with an undocumented extra property', () => {
+    const payload = {
+      ok: true,
+      layer: 'vector',
+      provenance: fullProvenance,
+      status: 'confirmed',
+      source_ref: { ...fullSourceRef, ticket: 'PAN-123' },
+    };
+    expect(validateRememberResult(payload)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Additional whole-result coverage: RecallResult discriminated union
 // ---------------------------------------------------------------------------
 
