@@ -1,0 +1,83 @@
+id: cr-04-single-layer-config-proof
+epic: mnemosyne-crossrepo-defaults
+title: Prove single-layer-only configs (pure vector, pure file) work end-to-end
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: []
+
+description: |
+  Mnemosyne's core selling point, stated explicitly by the operator across this
+  whole epic: it is a CUSTOMIZABLE layer tool -- a consumer could choose to run
+  with just a single layer (pure Qdrant semantic search, pure filesystem, or any
+  other single choice), not the full default stack. pl-01's LayerRegistry was
+  built to support this, and every story since has been careful not to break it --
+  but nothing has actually PROVEN it end-to-end with a real running single-layer
+  instance. This story closes that gap: real verification, not an assumption.
+
+  Build real subprocess-level tests (same rigor as this epic's other stories --
+  actually spawn real server/client instances with a real single-layer
+  MNEMOSYNE_LAYERS config, not a unit test mocking the registry):
+
+  1. **Pure vector-only**: `MNEMOSYNE_LAYERS={"layers":[{"name":"vector"}]}` --
+     confirm recall() only ever touches the vector layer (no code-graph/graphify/
+     file fallback attempted at all, verified via real network/process
+     inspection, not just "the response looked right"), and confirm remember()
+     writes only through the vector layer.
+  2. **Pure file-only**: `MNEMOSYNE_LAYERS={"layers":[{"name":"file"}]}` --
+     confirm recall() only greps the filesystem, no vector/graph layer touched.
+  3. **Cross-check with this epic's new layers**: confirm a config that includes
+     ONLY "graphify" (no vector, no file) also works standalone -- and confirm a
+     config that includes ONLY "crossref-linker" (cr-02) also works standalone,
+     each proving these new layers don't secretly depend on another layer being
+     present to function.
+
+acceptance_criteria:
+  - "Given MNEMOSYNE_LAYERS configured for vector-only, when recall() is called with a query the vector layer has zero hits for, then the result is a clean empty/degraded result -- it does NOT silently escalate to file or any other layer, since none is configured"
+  - "Given MNEMOSYNE_LAYERS configured for file-only, when recall() is called, then only grep/file-based results are ever returned, verified by confirming no vector/Qdrant network call is attempted at all during the test (not just that results look file-shaped)"
+  - "Given MNEMOSYNE_LAYERS configured for graphify-only or crossref-linker-only, when recall()/remember() are called, then each works standalone without requiring any other layer to be present"
+  - "Given any of these single-layer configs, when GET /layers is called, then it reports exactly the one configured layer -- confirms the introspection endpoint from pl-03 stays accurate for arbitrary single-layer setups, not just the default multi-layer stack"
+
+steps:
+  - id: research
+    description: Read pl-01's LayerRegistry/config.ts resolution logic and pl-03's GET /layers introspection endpoint in full to understand exactly what "single-layer" should mean at the API level before writing tests.
+    agent: researcher
+  - id: test-spec
+    description: Write failing real-subprocess tests for each single-layer scenario listed above, verifying no cross-layer leakage (not just correct-looking output).
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Fix anything the tests reveal is actually broken about single-layer configs (this story may be pure verification with nothing to fix, or may surface a real gap -- do not assume which going in).
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the tests genuinely verify NO cross-layer calls happen (e.g. via a network-call assertion or a spy on the unused layer's constructor), not just "the right-shaped data came back."
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-crossrepo-defaults (based on dev).
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: lib/mnemosyne/layers/config.ts
+      purpose: "Layer stack resolution -- confirm single-entry configs resolve correctly"
+    - path: lib/mnemosyne/layers/registry.ts
+      purpose: "LayerRegistry -- confirm only configured layers are ever constructed"
+    - path: lib/mnemosyne/server.ts
+      purpose: "GET /layers introspection endpoint from pl-03"
+
+files_to_modify:
+  - file: test/single-layer-config.mjs
+    change: "New: real subprocess tests proving pure vector-only and pure file-only configs work with zero cross-layer leakage"
+
+design_decisions:
+  - decision: "Verify NO cross-layer calls happen, not just that output looks correct"
+    rationale: "A layer that's silently still being constructed/queried even when unconfigured would look identical from the output alone in many cases -- the actual pluggability guarantee requires proving absence, not just presence of correct behavior"
+
+risks:
+  - severity: medium
+    description: "This story could surface a REAL pre-existing bug (e.g. a layer that assumes another layer is always present) rather than just confirming everything already works"
+    mitigation: "If found, fix it as part of this story -- this is exactly the kind of gap the operator asked to have proven, not assumed"
