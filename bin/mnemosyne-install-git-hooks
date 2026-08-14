@@ -1,0 +1,143 @@
+#!/usr/bin/env node
+// mnemosyne-install-git-hooks — auto-installs the lifecycle-trigger system's
+// git-hook adapter (la-06-lifecycle-trigger-system, epic:
+// mnemosyne-layer-architecture-v2) into a target repo's REAL git hooks
+// directory — post-merge (promote) + reference-transaction (supersede on
+// branch delete). Mirrors bin/mnemosyne-install-hooks's own shape
+// (absolutized-path shim, exported functions for testing, idempotent
+// re-run) but installs actual `.git/hooks/*` executables instead of
+// merging a Claude Code settings.json block.
+//
+// Usage:
+//   bin/mnemosyne-install-git-hooks [--repo <path>]
+//
+//   --repo PATH   target repo to install into (default: cwd). Must be
+//                 inside a real git working tree — resolved via
+//                 `git rev-parse --git-path hooks`, which correctly follows
+//                 worktrees / a custom core.hooksPath rather than assuming
+//                 a literal "<repo>/.git/hooks".
+//
+// Each installed hook is a tiny shell shim (`#!/bin/sh\nexec node "<ABS
+// PATH TO THIS CHECKOUT>/hooks/git/<name>.mjs" "$@"`) carrying a
+// `# mnemosyne-git-hook: <name>` marker line so re-running this command
+// (e.g. after the mnemosyne checkout moves) updates the path in place
+// instead of duplicating anything. If a repo already has a DIFFERENT,
+// non-mnemosyne hook installed for the same event, it is preserved as
+// `<name>.pre-mnemosyne` (never silently overwritten/lost) and a warning is
+// printed — this installer does not attempt to auto-chain an arbitrary
+// pre-existing hook script, since that's not generally safe to do blind.
+
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+export const REPO_ROOT = path.resolve(__dirname, "..");
+
+export const HOOK_NAMES = ["post-merge", "reference-transaction"];
+
+function markerFor(hookName) {
+  return `# mnemosyne-git-hook: ${hookName}`;
+}
+
+/** Resolves `repoPath`'s REAL hooks directory via `git rev-parse --git-path hooks` — follows worktrees / a custom `core.hooksPath` rather than assuming a literal `<repoPath>/.git/hooks`. Throws if `repoPath` is not inside a git working tree. */
+export function resolveHooksDir(repoPath) {
+  const out = execFileSync("git", ["rev-parse", "--git-path", "hooks"], {
+    cwd: repoPath,
+    encoding: "utf8",
+  }).trim();
+  return path.resolve(repoPath, out);
+}
+
+/** Builds the tiny shell shim installed at `<hooksDir>/<hookName>`. `mnemosyneRoot` is THIS mnemosyne checkout's absolute path — baked in, same absolutization idea as bin/mnemosyne-install-hooks's `absolutizeCommand`. */
+export function buildShim(hookName, mnemosyneRoot) {
+  const scriptPath = path.join(mnemosyneRoot, "hooks", "git", `${hookName}.mjs`);
+  return (
+    `#!/bin/sh\n` +
+    `${markerFor(hookName)} (auto-installed — re-run \`bin/mnemosyne-install-git-hooks\` after moving/re-cloning this checkout, do not hand-edit)\n` +
+    `exec node "${scriptPath}" "$@"\n`
+  );
+}
+
+function isOurs(content) {
+  return content.split("\n", 2)[1]?.trimStart().startsWith("# mnemosyne-git-hook:") ?? false;
+}
+
+/** Installs (or idempotently updates) all `HOOK_NAMES` into `repoPath`'s real hooks dir. Returns `{hooksDir, installed: [...], updated: [...], preserved: [...]}`. */
+export function install({ repoPath = process.cwd(), mnemosyneRoot = REPO_ROOT, log = console.log, warn = console.error } = {}) {
+  const hooksDir = resolveHooksDir(repoPath);
+  mkdirSync(hooksDir, { recursive: true });
+
+  const installed = [];
+  const updated = [];
+  const preserved = [];
+
+  for (const hookName of HOOK_NAMES) {
+    const target = path.join(hooksDir, hookName);
+    const shim = buildShim(hookName, mnemosyneRoot);
+
+    if (existsSync(target)) {
+      const existing = readFileSync(target, "utf8");
+      if (isOurs(existing)) {
+        if (existing !== shim) {
+          writeFileSync(target, shim, "utf8");
+          chmodSync(target, 0o755);
+          updated.push(hookName);
+        }
+        continue;
+      }
+      // Foreign hook — preserve it, never silently clobber.
+      const backup = `${target}.pre-mnemosyne`;
+      if (!existsSync(backup)) {
+        copyFileSync(target, backup);
+      }
+      warn(
+        `⚠ ${target} already exists and is not a mnemosyne-installed hook — backed up to ${backup} (not auto-chained). ` +
+          `Install this hook manually chained after your existing one if you need both.`
+      );
+      preserved.push(hookName);
+      continue;
+    }
+
+    writeFileSync(target, shim, "utf8");
+    chmodSync(target, 0o755);
+    installed.push(hookName);
+  }
+
+  if (installed.length === 0 && updated.length === 0) {
+    log(`git hooks already installed and up to date in ${hooksDir}`);
+  } else {
+    log(
+      `installed ${installed.length} git hook(s)${updated.length ? `, updated ${updated.length} existing` : ""} in ${hooksDir}` +
+        (preserved.length ? ` (${preserved.length} pre-existing foreign hook(s) preserved, see warnings above)` : "")
+    );
+  }
+
+  return { hooksDir, installed, updated, preserved };
+}
+
+// --- CLI ---------------------------------------------------------------
+function parseArgs(argv) {
+  const args = { repoPath: process.cwd() };
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--repo") args.repoPath = argv[++i];
+  }
+  return args;
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  try {
+    install({ repoPath: args.repoPath });
+    process.exit(0);
+  } catch (e) {
+    console.error(`mnemosyne-install-git-hooks: ${e.message || e}`);
+    process.exit(1);
+  }
+}
+
+const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isDirectRun) {
+  main();
+}
