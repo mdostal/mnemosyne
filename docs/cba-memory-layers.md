@@ -3,6 +3,7 @@
 **Status:** decision-ready research, not yet implemented. Nothing in this document has been built — this is the analysis the operator asked for before any layer-4/layer-3 work proceeds.
 **Date:** 2026-08-14
 **Method:** two independent research passes (a live-tool-verified pass using WebFetch/WebSearch/`gh api` against primary sources, and a Gemini 3.1 Pro synthesis pass), cross-checked against each other, with every disputed claim re-verified directly against primary sources before being trusted. See "Methodology note" below — this cross-checking caught a real, significant error.
+**Superseded/extended by:** `docs/memory-architecture-deep-research.md` (2026-08-14) — the larger 61-tool, 22-agent research pass covering the full architecture (not just code-graph/doc-index), industry lessons, internal prior art, and the final three-tier layer proposal. This document's Graphify recommendation still stands and isn't repeated there.
 
 ## The target architecture (operator's spec, verbatim intent)
 
