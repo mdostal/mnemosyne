@@ -12,7 +12,8 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { autoDetectWriteContext, GitContextDetectionError, STATUSES } from "./flight-status.mjs";
+import { autoDetectWriteContext, detectGitContext, GitContextDetectionError, STATUSES } from "./flight-status.mjs";
+import { filterHitsByStatus } from "./status-filter.mjs";
 
 const execFileP = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -194,8 +195,21 @@ export async function scopes() {
   return m;
 }
 
-// recall(query, scope, {hits, escalate, minScore}) — semantic recall with
-// surrounding context + full provenance, straight from the engine's --json.
+// recall(query, scope, {hits, escalate, minScore, cwd, includeCrossBranchProvisional}) —
+// semantic recall with surrounding context + full provenance, straight from
+// the engine's --json.
+//
+// la-05-recall-status-filtering: the merged result is filtered by flight
+// status (la-04) before being returned. Default: confirmed-only across
+// branches, EXCEPT the caller's own current branch's `provisional` writes,
+// which are always included (an agent sees its own in-flight work). The
+// caller's branch is resolved from `opts.cwd` (defaulting to process.cwd(),
+// same convention as remember()'s `opts.cwd`) via real git state — never
+// assumed. Pass `opts.includeCrossBranchProvisional: true` to explicitly
+// opt into seeing cross-branch provisional/superseded entries too (for
+// review/debugging use cases). See status-filter.mjs for the filtering
+// rules. Entries with no flight-status header (pre-la-04 legacy notes, or
+// hits from a layer with no git-context concept) are never filtered.
 export async function recall(query, scope, opts = {}) {
   if (!query || !String(query).trim()) {
     const err = new Error("query is required");
@@ -275,7 +289,41 @@ export async function recall(query, scope, opts = {}) {
   const graphHits = await graphLayer.recall(String(query));
   const merged = mergeLayerResults(recallResult, graphHits);
   merged.layers_attempted = [...recallResult.layers_attempted, "code-graph"];
-  return merged;
+  return applyStatusFilter(merged, opts);
+}
+
+// applyStatusFilter — la-05-recall-status-filtering. Resolves the caller's
+// own current git branch from opts.cwd (never fatal to recall() if
+// unresolvable — an ambiguous git context degrades to the safe default:
+// no branch to prove "this is my own provisional work" against, so
+// cross-branch provisional entries stay excluded, same as any other
+// caller whose branch can't be confirmed), then filters every scope's hits
+// and recomputes total_hits to match.
+async function applyStatusFilter(result, opts) {
+  let callerBranch = null;
+  try {
+    const ctx = await detectGitContext({ cwd: opts.cwd });
+    callerBranch = ctx.branch;
+  } catch (e) {
+    if (!(e instanceof GitContextDetectionError)) throw e;
+    // Fall through with callerBranch staying null.
+  }
+
+  const filterOptions = {
+    callerBranch,
+    includeCrossBranchProvisional: opts.includeCrossBranchProvisional === true,
+  };
+
+  if (Array.isArray(result.scopes)) {
+    for (const s of result.scopes) {
+      if (Array.isArray(s.hits)) {
+        s.hits = await filterHitsByStatus(s.hits, filterOptions);
+      }
+    }
+    result.total_hits = result.scopes.reduce((n, s) => n + (Array.isArray(s.hits) ? s.hits.length : 0), 0);
+  }
+
+  return result;
 }
 
 // remember(text, scope, {tag, status, sourceRef, cwd, defaultBranch}) —
