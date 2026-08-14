@@ -349,10 +349,75 @@ function buildHits(graph: GraphifyGraph, matchedNodes: GraphifyNode[], retrieval
   return hits.slice(0, limit);
 }
 
+// --- doc-node handling (la-03-graphify-doc-index) ---------------------------
+//
+// graphify's markdown doc nodes (`file_type: "document"`) carry a real,
+// line-addressable `source_location` (e.g. "L17") via its deterministic
+// AST-level markdown parser (`_origin: "ast"`) -- confirmed against actual
+// `graph.json` output in docs/cba-memory-layers.md's PoC and re-verified
+// directly against this repo's own graph.json for la-03 (see
+// GraphifyLayerAdapter.test.ts's real-fixture doc tests). No LLM path is
+// ever invoked to get this -- same `graphify update` call as la-02's code
+// path, no extra flags.
+//
+// The one thing NOT guaranteed by the schema alone is that every doc node's
+// source_location string actually matches the "L<n>" shape graphify's docs
+// describe. Per this story's risk/mitigation ("fail loudly on schema
+// mismatch rather than silently misreporting line numbers"), a document
+// node whose source_location doesn't parse as a real line pointer must
+// never be silently reported as if it were a valid one.
+const DOC_LINE_POINTER = /^L(\d+)$/;
+
+function isDocNode(node: GraphifyNode): boolean {
+  return node.file_type === 'document';
+}
+
+/** @throws when a document node's source_location doesn't match graphify's "L<n>" line-pointer format. */
+function assertValidDocSourceLocation(node: GraphifyNode): void {
+  if (!node.source_location || !DOC_LINE_POINTER.test(node.source_location)) {
+    throw new Error(
+      `graphify document node "${node.id}" (${node.source_file ?? 'unknown file'}) has a ` +
+        `malformed source_location (${JSON.stringify(node.source_location)}) -- expected an ` +
+        `"L<n>" line pointer. Refusing to report a possibly-stale/wrong line number; this ` +
+        'likely means the installed graphify version changed its doc-node schema.',
+    );
+  }
+}
+
 function nodeHit(node: GraphifyNode, retrievalTime: string): Hit {
+  if (isDocNode(node)) {
+    return docNodeHit(node, retrievalTime);
+  }
+  return codeNodeHit(node, retrievalTime);
+}
+
+function codeNodeHit(node: GraphifyNode, retrievalTime: string): Hit {
   const source = formatSource(node.source_file, node.source_location);
   return {
     content: `${node.label} (${node.file_type ?? 'unknown'}) -- ${source}`,
+    provenance: {
+      layer: 'graphify',
+      source,
+      chunk_span: null,
+      index_timestamp: null,
+      content_hash: null,
+      embedder: null,
+      retrieval_time: retrievalTime,
+    },
+  };
+}
+
+/**
+ * A doc hit is a query-shape distinction, not a second tool integration:
+ * same graph, same recall() path, same Hit contract -- just content worded
+ * for a markdown heading/section instead of a code symbol, and a loud
+ * failure (not silent misreporting) if the line pointer doesn't parse.
+ */
+function docNodeHit(node: GraphifyNode, retrievalTime: string): Hit {
+  assertValidDocSourceLocation(node);
+  const source = formatSource(node.source_file, node.source_location);
+  return {
+    content: `Doc: "${node.label}" -- ${source}`,
     provenance: {
       layer: 'graphify',
       source,
