@@ -4,6 +4,20 @@
 
 **Supersedes nothing** — extends `docs/cba-memory-layers.md` and `docs/memory-architecture-deep-research.md` (2026-08-14 CBA), and closes out the design questions raised in that session's live discussion (not previously written down anywhere but this doc and Mnemosyne's own Qdrant memory).
 
+## 0. Level 0 — operator-global rules (added 2026-08-13, mid-epic)
+
+Sits ABOVE Layer 1 and the entire 4-tier company/project hierarchy — not scoped to any repo,
+company, or project. Direct response to a real incident in this epic: work got committed
+directly to `main` instead of `dev` because a stale `project-profile.yaml` doc field said "off
+main" — the operator's framing: "we need them to pull first, work off dev... make feature
+branches then PR to dev, merge that in, then we merge to main for a release," enforced "no
+matter what LLM starts and works with code" across every repo.
+
+Canonical source: `~/.mnemosyne/level0-rules.md` — outside any single repo (not `~/.claude/`,
+since this must apply to Codex/Gemini/etc. too). `la-01`'s per-harness sync mechanism reads
+this file and prepends its content to every generated `CLAUDE.md`/`AGENTS.md`/`GEMINI.md`,
+ahead of any tier-specific content (`la-01` now depends on `la-00`). Story: `la-00`.
+
 ## 1. Reconciled architecture (agreed)
 
 The operator's 3-layer simplification and the CBA's 5-layer research map onto each other directly — not in tension, the 3-layer view is a correct collapse:
