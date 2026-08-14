@@ -1,0 +1,99 @@
+id: la-02-graphify-adapter
+epic: mnemosyne-layer-architecture-v2
+title: Graphify adapter — replaces both in-house code-graph implementations
+status: complete
+note: "Installed graphify for real (uv tool install graphifyy) and ran `graphify update` against both this repo (1327 nodes/2151 edges/98 communities, no LLM) and a committed-in-tests 2-language fixture (Python + TypeScript, 8 nodes/8 edges) to nail down the real graph.json shape (nodes: {id,label,file_type,source_file,source_location,norm_label,_origin}; links: {source,target,relation,source_file,source_location,confidence_score,_origin}) before writing a single line of the adapter. Built lib/mnemosyne/layers/GraphifyLayerAdapter.ts (LayerAdapter contract: recall() shells to `graphify update <repoRoot>` only when graph.json is missing, then reads graph.json directly and does its own node/edge BFS -- graphify's own query subcommands emit prose, not JSON) and registered it as a NEW 'graphify' layer name in registry.ts's registerBuiltinLayers(), alongside (not replacing) 'code-graph' -- confirmed both stay registered via registry.test.ts. Added 'graphify' to the Layer union in interfaces.ts (same pattern pl-02 used for 'hive-memory'). Loud failure is enforced at construction time: a synchronous PATH scan throws an actionable 'graphify is not installed... Install it with: uv tool install graphifyy' error immediately if the binary can't be resolved, before any recall() ever runs. 10 real vitest tests in GraphifyLayerAdapter.test.ts exercise the ACTUAL graphify binary (skipIf-gated so CI, which has no graphify installed, skips rather than fails) against a real temp-dir fixture repo with real Python + TypeScript source files and real cross-file/cross-language calls -- verified real Hit[] results (content + provenance.source referencing real greeter.py/main.ts lines) come back, not stubs. Also wired the graph_stats/graph_edges/graph_impact/graph_deps MCP tools in bin/mnemosyne-mcp.mjs: added bin/graphify-bridge.mjs (a separate, zero-dep JS module -- mnemosyne-mcp.mjs can't import GraphifyLayerAdapter.ts directly, this repo has no .ts-in-.mjs loader configured, tsconfig.json is noEmit:true) that reads graph.json directly and reproduces the exact same response envelopes src/server.mjs's real GET /graph/* routes return ({nodes,edges,edges_by_origin,db,took_ms} for stats; {node,count,edges/impact/deps,took_ms} for the other three -- confirmed against the live running HTTP service, not assumed). mnemosyne-mcp.mjs now checks MNEMOSYNE_LAYERS at startup and swaps all four graph_* tool handlers to the graphify-bridge functions when a 'graphify' layer is configured; unconfigured behavior is byte-for-byte unchanged (verified via the pre-existing test/mcp-server.mjs, still green). Real end-to-end verification: spawned the actual bin/mnemosyne-mcp.mjs subprocess with MNEMOSYNE_LAYERS set to graphify and a real MCP client called all four tools over stdio against a real fixture repo -- all returned real graphify-backed data in the right shape (test/mcp-server-graphify.mjs, new). While building that end-to-end test I found and fixed a real PRE-EXISTING bug in mnemosyne-mcp.mjs: graph_impact/graph_deps's tool handlers were single-parameter arrow functions `({node,depth}) => ...` passed into wrapAction(port, fn), which always calls `fn(port, args)` -- so `node`/`depth` were silently destructured off of `port` (a number) instead of the real MCP args, meaning both tools have always silently queried node=undefined regardless of what a caller passed. Fixed for both the swarm-memory and graphify code paths (now `(p, {node, depth}) => ...`); confirmed the fix via a manual live query against the real swarm-memory-backed graph_impact tool. Full verification: `npm run test:graphify-bridge`, `npm run test:mcp-server-graphify`, and `npm run test:mcp-server` all green against the real graphify + swarm-memory binaries; `npx tsc --noEmit` clean; `npx vitest run lib/mnemosyne lib/minerva benchmarks src/planning src/config src/runners` 203/206 passing (the 3 not counted are a pre-existing, unrelated better-sqlite3 worker-crash confirmed present on the base branch before this story's changes, not a regression); `npm test`'s combined script fails at the pre-existing (also confirmed present on the base branch) test/http-api.mjs socket-close flake, unrelated to graphify -- not something this story touches or introduces. Deviation from the story spec: files_to_modify listed only GraphifyLayerAdapter.ts + registry.ts, but the story's own acceptance criteria and description explicitly require the MCP tools to work when MNEMOSYNE_LAYERS selects graphify, which is unreachable without also touching bin/mnemosyne-mcp.mjs (+ the new bin/graphify-bridge.mjs) -- treated as an omission in files_to_modify, not a scope change; the JS-side graphify-bridge.mjs duplicates a small amount of the TS adapter's graph.json-reading logic, mirroring this repo's pre-existing CodeGraphLayerAdapter.ts / src/engine.mjs split (a zero-dep .mjs process cannot import a .ts module in this repo's current build setup), documented inline in both files."
+complexity: high
+methodology: tdd
+depends_on: []
+
+description: |
+  docs/cba-memory-layers.md (2026-08-14 CBA, primary-source verified) found that today's
+  code-graph layer is two thin access paths (lib/mnemosyne/layers/CodeGraphLayerAdapter.ts's
+  better-sqlite3 path, and the JS CLI wrapper) onto the SAME small dataset
+  (~/.local/share/swarm-memory/graph.sqlite, ~22 nodes/30 edges, markdown-link + Python-import
+  scanning only — no real AST parsing, no JS/TS/Go/Rust support). Neither has unique logic
+  worth preserving.
+
+  The CBA recommends Graphify (Graphify-Labs/graphify, PyPI `graphifyy`, CLI `graphify` +
+  `graphify-mcp`) as the replacement — confirmed via a real PoC this session, not just
+  research: deterministic tree-sitter AST parsing for code (Python/TS/JS/Go/Rust/Java/C/C++/
+  Ruby/C#/Kotlin/Scala), local `graph.json` output, zero telemetry, no LLM required for either
+  code or (per the PoC) markdown doc indexing.
+
+  Build a new `GraphifyLayerAdapter` implementing the existing `LayerAdapter` interface
+  (lib/mnemosyne/layers/LayerAdapter.ts) — same seam pl-01's registry already provides, no
+  client-side rework needed. It should shell out to the `graphify` CLI (already proven
+  installable via `uv tool install graphifyy` in the PoC) the same way CodeGraphLayerAdapter
+  shells out to `swarm-memory` today, and read the resulting `graph.json` for recall queries
+  (impact/deps/explain-style lookups, matching the existing graph_stats/graph_edges/
+  graph_impact/graph_deps MCP tool shapes already exposed in bin/mnemosyne-mcp.mjs so those
+  tools gain real multi-language coverage without an MCP-side API change).
+
+  This story does NOT retire CodeGraphLayerAdapter yet — that's la-10 (A/B comparison first,
+  then retire). This story adds Graphify as a new registerable layer name (e.g. "graphify")
+  alongside the existing "code-graph" name.
+
+acceptance_criteria:
+  - "Given a repo with real source files across at least 2 languages, when GraphifyLayerAdapter.recall() is called, then it returns real Hit[] results derived from graphify's actual graph.json — not a stub/mock"
+  - "Given graphify is not installed on PATH, when GraphifyLayerAdapter is constructed or recall() is called, then it fails loudly with an actionable error (install instructions), never a silent empty result"
+  - "Given the new adapter is registered under a distinct layer name (not overwriting 'code-graph'), when a consumer configures MNEMOSYNE_LAYERS to include it, then pl-01's registry resolves and uses it with zero changes to client.ts"
+  - "Given the existing graph_stats/graph_edges/graph_impact/graph_deps MCP tools, when pointed at a MNEMOSYNE_LAYERS config using graphify, then they return graphify-backed results in the same response shape consumers already expect"
+
+steps:
+  - id: research
+    description: Re-read the PoC findings in docs/cba-memory-layers.md, install graphify fresh in this repo (uv tool install graphifyy), run `graphify update .` and inspect the real graph.json shape (node/edge fields, source_location format) to design the adapter's query mapping precisely.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for GraphifyLayerAdapter — recall() against a fixture graph.json, loud-failure-on-missing-binary, and registry integration (registers under "graphify", resolvable via pl-01's LayerRegistry).
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement lib/mnemosyne/layers/GraphifyLayerAdapter.ts per LayerAdapter.ts's contract; register it in registry.ts's registerBuiltinLayers(). Wire graph_stats/graph_edges/graph_impact/graph_deps MCP tools to work against it when configured.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm loud failure on missing graphify binary, confirm no regression to the existing "code-graph" layer (still registered, still default), confirm real (not mocked) recall results against this repo's own graph.json.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-layer-architecture-v2 (based on dev).
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: lib/mnemosyne/layers/CodeGraphLayerAdapter.ts
+      purpose: "The pattern to follow (shell-out adapter, LayerAdapter contract) — not the implementation to reuse"
+    - path: lib/mnemosyne/layers/LayerAdapter.ts
+      purpose: "Contract every layer implements — recall() required, remember() optional"
+    - path: lib/mnemosyne/layers/registry.ts
+      purpose: "registerBuiltinLayers() — where the new adapter self-registers"
+    - path: docs/cba-memory-layers.md
+      purpose: "Primary-source-verified Graphify findings and PoC results — read before implementing, don't re-research"
+    - path: bin/mnemosyne-mcp.mjs
+      purpose: "graph_stats/graph_edges/graph_impact/graph_deps MCP tools that should gain real multi-language coverage from this adapter"
+
+files_to_modify:
+  - file: lib/mnemosyne/layers/GraphifyLayerAdapter.ts
+    change: "New: shells out to graphify CLI, reads graph.json for recall()"
+  - file: lib/mnemosyne/layers/registry.ts
+    change: "Register 'graphify' as a new builtin layer name"
+
+design_decisions:
+  - decision: "New layer name ('graphify'), not a replacement of 'code-graph' in this story"
+    rationale: "la-10 does the A/B comparison before retiring the old implementation — don't retire on unverified confidence"
+
+risks:
+  - severity: medium
+    description: "graphify's LLM-assisted doc/PDF/image path is optional but if a consumer's environment has GEMINI_API_KEY set, behavior could vary between environments"
+    mitigation: "Adapter should default to the no-LLM deterministic path (matches the PoC's proven line-addressability finding) and only use the LLM path if explicitly opted into via adapter options"
+
+references:
+  - path: docs/cba-memory-layers.md
+    relevant_excerpt: |
+      Real PoC: installed the actual PyPI package (uv tool install graphifyy), ran
+      `graphify update .` — 1297 nodes / 2123 edges / 94 communities in ~3.9s, no LLM required.
+      360 real markdown document nodes, each with a genuine source_location via deterministic
+      AST-level markdown parsing (_origin: "ast").

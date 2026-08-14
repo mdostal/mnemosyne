@@ -1,0 +1,76 @@
+id: la-01-role-meta-file-sync
+epic: mnemosyne-layer-architecture-v2
+title: Role-scoped meta-file sync (Layer 1)
+status: complete
+note: "Built lib/mnemosyne/layer1/ (tiers.ts, harness.ts, block.ts, level0.ts, sync.ts, index.ts). tiers.ts defines the 4-tier hierarchy (top-orchestrator/company-director/project-orchestrator/code-architect) with per-tier TierContent (displayName/scope/sections) that differs meaningfully by design -- verified by test that code-architect content excludes company-level language and top-orchestrator excludes 'graph-scoped' per-repo language. Each TierContent carries an explicit, currently-empty `mandateSections: []` extension point (documented for la-07) that renderTierContentMarkdown already renders under a 'Memory-lifecycle mandate' heading whenever populated -- la-07 needs no other change to this module. level0.ts's readLevel0Content() does a plain readFileSync on every call (no module-level caching) against ~/.mnemosyne/level0-rules.md by default, throwing a clear error if the file is missing rather than silently proceeding. sync.ts's buildManagedBody() always places level0Content.trim() first, verbatim, ahead of the tier markdown (separated by a '---' rule) -- verified by a test that changes the on-disk Level 0 file content between two sync calls and asserts the second sync reflects the new text with no trace of the old. block.ts implements the idempotent managed-block mechanism: HTML-comment markers (`<!-- mnemosyne:layer1:begin/end -->`) delimit the region Mnemosyne owns; spliceManagedBlock() creates the file when absent, appends the block after existing content on first sync of a file with prior human content, and replaces ONLY the text between markers on re-sync, leaving content before AND after the block (including human additions made between sync runs) byte-identical -- verified by tests. harness.ts maps tier syncs to each harness's native auto-load file (CLAUDE.md/AGENTS.md/GEMINI.md); syncAllHarnesses() writes all three from one call and a test confirms the three files' bodies (markers stripped) are byte-identical, i.e. no harness-specific content divergence. Research step: confirmed via web search (not assumed) that Codex auto-loads AGENTS.md as a repo-root+subdirectory chain capped at 32 KiB combined (project_doc_max_bytes default), and Gemini CLI concatenates GEMINI.md hierarchically (global/project/directory, most-specific-wins) with no client-side caching of its own (/memory reload rescans) -- both inform why this sync never caches and keeps generated content compact; documented as comments in harness.ts. 22 new tests (tiers.test.ts, block.test.ts, sync.test.ts) written FAILING first (confirmed via `npx vitest run lib/mnemosyne/layer1` erroring on missing modules before any implementation existed), all pass now. Also ran a live smoke test against the real ~/.mnemosyne/level0-rules.md (not a fixture) into a scratch repo dir and confirmed its exact content appears verbatim first in all three generated files, then deleted the scratch output. Full suite: `npm test` -- all vitest suites pass (213/216 in the full lib/mnemosyne+lib/minerva+benchmarks+src/planning+src/config+src/runners scope, 212/212 excluding CodeGraphLayerAdapter.test.ts); the 2 failures (one vitest worker crash in CodeGraphLayerAdapter.test.ts, one POST /recall assertion in test/http-api.mjs) are a pre-existing native better-sqlite3 binding crash on this machine, explicitly called out in test/http-api.mjs's own comments as 'known unrelated' -- reproduced identically with this story's lib/mnemosyne/layer1/ changes stashed out, confirming zero regression caused by this story. `npx tsc --noEmit` clean. Deviation from spec: none in scope/behavior; the mandate extension point is a plain empty array + doc comment rather than a runtime-pluggable registration API, since la-07 edits tiers.ts directly (same file, same repo) and a registration indirection would be unused complexity for that use case."
+complexity: high
+methodology: tdd
+depends_on: [la-00-operator-global-rules]
+
+description: |
+  Added 2026-08-13: this story's sync mechanism MUST read ~/.mnemosyne/level0-rules.md
+  (la-00's deliverable) and prepend its content to every generated harness file, ahead of any
+  tier-specific block below. Level 0 is operator-authored and global (git workflow discipline,
+  etc.) — this story's own tier content composes AFTER it, never replaces or reorders it.
+
+  New Layer 1 — a hard-locked, tier-scoped base-understanding file loaded at agent start,
+  piggybacking on each harness's OWN native auto-load convention rather than inventing a new
+  one: `CLAUDE.md` (Claude Code), `AGENTS.md` (Codex), `GEMINI.md` (Gemini CLI), and any
+  future harness's equivalent. Mnemosyne's role here is to be the single source of truth that
+  GENERATES/SYNCS the right content into each harness's native file per tier — not to replace
+  the harness convention or require a bespoke loader.
+
+  Tiers (per the reconciled 4-tier hierarchy in docs/layer-architecture-v2-plan.md §1):
+  top orchestrator (Auriga) → company director → project orchestrator → code/area architect.
+  Each tier's generated file carries a DIFFERENT slice of content — a code-tier agent should
+  not get the full company-level context, a top-tier agent should not get deep per-repo detail.
+
+  This story builds the generator/sync mechanism and the tier-content model. It does NOT yet
+  build the enforcement mandate content (recall/remember-on-entry, flight-status handling) —
+  that's la-07, which depends on this story's sync mechanism existing first.
+
+acceptance_criteria:
+  - "Given ~/.mnemosyne/level0-rules.md exists, when the sync command runs for any tier/harness, then the generated file's managed block starts with that file's content verbatim, followed by tier-specific content — Level 0 is never omitted, reordered after tier content, or silently stale-cached"
+  - "Given a tier and a target harness, when the sync command runs, then it writes/updates that harness's native meta file (CLAUDE.md/AGENTS.md/GEMINI.md) with that tier's content block, clearly delimited so re-runs are idempotent and don't duplicate or clobber human-authored content outside the block"
+  - "Given the same source content, when synced to two different harnesses, then both native files carry equivalent information in each harness's expected format — no harness-specific content divergence"
+  - "Given no sync has ever run in a repo, when it runs for the first time, then it creates the target file if absent rather than requiring it to pre-exist"
+
+steps:
+  - id: research
+    description: Survey how CLAUDE.md, AGENTS.md, and GEMINI.md are actually consumed by their respective harnesses (auto-load timing, any size/format constraints) before designing the generator.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for the tier-content model and the idempotent-block-sync mechanism (first write creates, second write updates only the managed block, human content outside the block survives).
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement the tier-content model and per-harness sync generator.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm idempotency, confirm no clobbering of human-authored content, confirm all three target harness formats produce equivalent information.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-layer-architecture-v2 (based on dev).
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: docs/layer-architecture-v2-plan.md
+      purpose: "Full architecture rationale for Layer 1 and the 4-tier hierarchy — read before designing content model"
+
+files_to_modify:
+  - file: lib/mnemosyne/layer1/
+    change: "New: tier-content model + per-harness sync generator"
+
+design_decisions:
+  - decision: "Piggyback on native harness files, don't invent a new loader convention"
+    rationale: "Harness-agnostic by construction — works with any agentic tool that already has a startup-context convention, no bespoke wiring per harness"
+
+risks:
+  - severity: medium
+    description: "Overwriting or duplicating human-authored content in CLAUDE.md/AGENTS.md on repeated syncs"
+    mitigation: "Managed content lives in a clearly delimited, idempotent block; everything outside it is never touched"

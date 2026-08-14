@@ -13,7 +13,10 @@ import type {
   RememberFailure,
   RememberResult,
   RememberSuccess,
+  SourceRef,
+  Status,
 } from '../interfaces.js';
+import { autoDetectWriteContext, GitContextDetectionError } from '../flight-status.js';
 import type { LayerAdapter, RecallOptions, RememberOptions } from './LayerAdapter.js';
 
 const execFileAsync = promisify(execFile);
@@ -160,6 +163,14 @@ export class VectorLayerAdapter implements LayerAdapter {
    * `.pHive/cross-cutting-concerns.yaml` and SERVICE.md's hard "never wipe
    * Qdrant collections" rule). Fails loudly (ok:false) on any CLI error or
    * on a report of zero chunks upserted — never a silent no-op success.
+   *
+   * la-04-flight-status-schema: also resolves `status`/`source_ref` for this
+   * write — from `options.status`/`options.sourceRef` when the caller passed
+   * them explicitly, otherwise auto-detected from real cwd git state. Git
+   * context auto-detection failing (detached HEAD, no repo, `git` missing)
+   * fails the whole write loudly rather than writing with guessed/absent
+   * flight status — same "fail loud, never silent" contract as the rest of
+   * this method, and this story's explicit risk mitigation.
    */
   async remember(content: string, options: RememberOptions = {}): Promise<RememberResult> {
     const text = content.trim();
@@ -167,6 +178,36 @@ export class VectorLayerAdapter implements LayerAdapter {
 
     if (!text) {
       return this.rememberFailure('invalid_content', 'content must not be empty');
+    }
+
+    let status: Status;
+    let sourceRef: SourceRef;
+    if (options.status !== undefined || options.sourceRef !== undefined) {
+      if (options.status === undefined || options.sourceRef === undefined) {
+        return this.rememberFailure(
+          'invalid_flight_status',
+          'options.status and options.sourceRef must both be provided together, or both omitted to auto-detect',
+        );
+      }
+      status = options.status;
+      sourceRef = options.sourceRef;
+    } else {
+      try {
+        const detected = await autoDetectWriteContext({
+          cwd: options.cwd,
+          defaultBranch: options.defaultBranch,
+        });
+        status = detected.status;
+        sourceRef = detected.source_ref;
+      } catch (error) {
+        if (error instanceof GitContextDetectionError) {
+          return this.rememberFailure(
+            'git_context_unresolvable',
+            `flight-status auto-detection failed: ${error.message}. Pass options.status and options.sourceRef explicitly to write anyway.`,
+          );
+        }
+        throw error;
+      }
     }
 
     let collection: string;
@@ -192,7 +233,9 @@ export class VectorLayerAdapter implements LayerAdapter {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const tag = (options.tag ?? 'note').replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 40);
     const file = path.join(this.notesDirectory, `${stamp}-${tag}.md`);
-    const header = `<!-- remembered via Mnemosyne (TS client) @ ${new Date().toISOString()} scope=${scope} -->\n`;
+    const header =
+      `<!-- remembered via Mnemosyne (TS client) @ ${new Date().toISOString()} scope=${scope} ` +
+      `status=${status} branch=${sourceRef.branch} commit=${sourceRef.commit_sha} -->\n`;
     await writeFile(file, header + text + '\n', 'utf8');
 
     let indexOutput: string;
@@ -234,6 +277,8 @@ export class VectorLayerAdapter implements LayerAdapter {
         embedder: null,
         retrieval_time: null,
       },
+      status,
+      source_ref: sourceRef,
     } satisfies RememberSuccess;
   }
 

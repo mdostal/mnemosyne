@@ -2,6 +2,15 @@ node_modules/
 .DS_Store
 *.log
 
+# Ephemeral git worktrees created for isolated agent work sessions — never
+# part of the repo itself, see vitest.config.ts for why this also matters
+# for test discovery, not just git status noise.
+.claude/worktrees/
+
+# Graphify's generated graph output (la-02-graphify-adapter) -- regenerated
+# by `graphify update .` / GraphifyLayerAdapter's autoUpdate, never committed.
+graphify-out/
+
 config/*.local.yaml
 config/minerva.local.yaml
 
@@ -25,3 +34,5 @@ config/minerva.local.yaml
 !.pHive/epics/mnemosyne-mcp-server/**
 !.pHive/epics/mnemosyne-pluggable-layers/
 !.pHive/epics/mnemosyne-pluggable-layers/**
+!.pHive/epics/mnemosyne-layer-architecture-v2/
+!.pHive/epics/mnemosyne-layer-architecture-v2/**

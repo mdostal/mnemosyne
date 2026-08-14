@@ -1,4 +1,5 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -14,6 +15,21 @@ async function makeTempRoot(): Promise<string> {
   tempRoots.push(root);
   return root;
 }
+
+// la-10: same real-binary gate as GraphifyLayerAdapter.test.ts — CI has no
+// graphify installed (Node-only setup), so the graphify-wiring test below is
+// skipped (not failed) when it's not on PATH; every other test here is
+// unconditional.
+function isGraphifyOnPath(): boolean {
+  try {
+    execFileSync('graphify', ['--help'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const GRAPHIFY_AVAILABLE = isGraphifyOnPath();
 
 describe('layer-ab-test — real comparison, well-formed output', () => {
   it('runConfig() produces real, well-formed per-query and aggregate numbers for the file-only layer', async () => {
@@ -77,4 +93,40 @@ describe('layer-ab-test — real comparison, well-formed output', () => {
     expect(report.perQuery[0]?.ok).toBe(true);
     expect(report.layers).toEqual(['hive-memory']);
   });
+
+  it.skipIf(!GRAPHIFY_AVAILABLE)(
+    'la-10: a graphify-configured stack runs the SAME query set as a code-graph-configured stack and returns real, comparable per-config reports',
+    async () => {
+      const root = await makeTempRoot();
+      await mkdir(path.join(root, 'src'), { recursive: true });
+      // Real cross-language source so graphify's graph.json has real nodes
+      // (matches GraphifyLayerAdapter.test.ts's fixture-repo pattern) —
+      // not a stub graph.
+      await writeFile(
+        path.join(root, 'src', 'greeter.py'),
+        ['def greet(name):', '    return f"Hello, {name}!"', ''].join('\n'),
+        'utf8',
+      );
+
+      const reports = await runAbTest(
+        [
+          { name: 'code-graph', config: { layers: [{ name: 'code-graph' }] } },
+          { name: 'graphify', config: { layers: [{ name: 'graphify', options: { timeoutMs: 60_000 } }] } },
+        ],
+        ['greet'],
+        'project',
+        root,
+      );
+
+      expect(reports).toHaveLength(2);
+      const [codeGraphReport, graphifyReport] = reports;
+      // apples-to-apples: same query set reached both configs for real.
+      expect(codeGraphReport?.perQuery.map((r) => r.query)).toEqual(['greet']);
+      expect(graphifyReport?.perQuery.map((r) => r.query)).toEqual(['greet']);
+      expect(graphifyReport?.perQuery[0]?.ok).toBe(true);
+      // Real graph.json really has a 'greet' node -> real hit, not a stub.
+      expect(graphifyReport?.perQuery[0]?.hitCount).toBeGreaterThan(0);
+      expect(graphifyReport?.perQuery[0]?.contributingLayers).toEqual(['graphify']);
+    },
+  );
 });

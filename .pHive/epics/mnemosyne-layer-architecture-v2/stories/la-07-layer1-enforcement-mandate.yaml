@@ -1,0 +1,77 @@
+id: la-07-layer1-enforcement-mandate
+epic: mnemosyne-layer-architecture-v2
+title: Layer-1 enforcement mandate — force recall/remember + flight-status handling across harnesses
+status: complete
+note: "Populated la-01's `mandateSections: []` extension point in lib/mnemosyne/layer1/tiers.ts with a new `MANDATE_SECTIONS` constant (3 sections: 'Recall on entry (mandatory)', 'Remember on exit (mandatory)', 'Flight-status awareness (mandatory)') assigned identically to all 4 tiers via `tier()`'s default param -- deliberately universal, not per-tier, since the mandate applies to 'every agent, regardless of harness' per the story description, not scoped to a role. Content is kept compact (Codex's 32 KiB combined AGENTS.md cap, per la-01's harness.ts research) and names real things: Claude Code's already-installed `hooks/pre-recall.mjs`/`hooks/post-remember.mjs` (wired to UserPromptSubmit/Stop/SubagentStop via `bin/mnemosyne-install-hooks`, see hooks/README.md) for the harness that has a real hook mechanism, and explicit manual-call instructions (`POST /recall`/`POST /remember` or the `swarm-memory` CLI) for Codex/Gemini CLI, which la-01's research confirmed have no equivalent startup-hook mechanism -- the meta-file text itself is the enforcement surface there, per AC3. Flight-status wording (confirmed/provisional/superseded, own-branch-provisional visible, cross-branch provisional+superseded hidden by default but never deleted, explicit includeCrossBranchProvisional opt-in) was written by re-reading la-05's status-filter.ts's `isEntryVisible` directly rather than from memory, and matches it exactly. sync.ts required NO changes -- confirmed before writing anything that `renderTierContentMarkdown` already renders `mandateSections` under a 'Memory-lifecycle mandate' heading whenever non-empty, exactly as la-01 documented. TDD: wrote 5 new failing tests first in tiers.test.ts (updated the one test la-01 explicitly flagged as la-07's to change, from asserting empty mandateSections to asserting populated content covering recall/remember/provisional/confirmed/superseded/cross-branch, plus a new heading-presence test and a cross-tier-identical-content test) and 1 new test in sync.test.ts (extended, not replaced -- confirms all 3 generated harness files (CLAUDE.md/AGENTS.md/GEMINI.md) carry the mandate after syncAllHarnesses) -- confirmed red (5 failures) against the pre-la-07 tree before implementing, green (27/27) after. REAL hook verification (AC2 -- 'invoke it and check', not just that a hook file exists): new test/layer1-mandate-hook.mjs spawns the actual `hooks/pre-recall.mjs` and `hooks/post-remember.mjs` scripts as real subprocesses via real stdin/stdout, exactly as Claude Code invokes them, forcing the CLI-fallback path (unreachable MNEMOSYNE_URL + SWARM_MEMORY_BIN=test/fixtures/fake-swarm-memory.mjs, the same fixture write-through.mjs/reindex.mjs/recall-status-filtering.mjs already use) so it runs deterministically offline in `npm test`'s aggregate chain rather than depending on a live Qdrant. Confirms: pre-recall.mjs's real recall() call actually executes end-to-end (fixture hit text 'test semantic query fixture hit' lands in hookSpecificOutput.additionalContext, stderr shows 'via=cli', mnemosyne.stats.total_hits>=1), a negative control that it stays silent when memory is genuinely unreachable (so the positive result isn't a hardcoded emission), post-remember.mjs's real remember() call actually writes a note file to disk with the STATUS header and unique marker text, and hooks/settings.hooks.json's template still wires UserPromptSubmit->pre-recall.mjs and Stop/SubagentStop->post-remember.mjs. Wired into package.json's `test` chain (after recall-status-filtering.mjs) and a standalone `test:layer1-mandate-hook` script. Did NOT modify hooks/pre-recall.mjs/post-remember.mjs/mnemo-client.mjs/settings.hooks.json themselves -- confirmed via this new test plus the pre-existing test/hooks.mjs (its testHighLevelFirstThroughHook, unmodified, still passes: installer wiring + a real recall call over an HTTP stub, both deterministic) that the hook mechanism la-01-era hooks work already fires automatically on UserPromptSubmit, which covers the very first prompt of a session -- i.e. 'on entry' -- with real task context to recall against; no separate SessionStart-only hook was added (deviation, with reasoning below). Full test suite: `npx tsc --noEmit` clean; `npm test`'s node test/*.mjs chain all pass through recall-status-filtering.mjs and the new layer1-mandate-hook.mjs, then fails at the pre-existing http-api.mjs POST /recall SocketError -- reproduced byte-for-byte identical on the unmodified pre-la-07 tree via `git stash`/`git stash pop` (same crash point, same error shape), confirming zero regression, consistent with la-01's and la-05's notes documenting this same native better-sqlite3/CodeGraphLayerAdapter binding crash on this machine; `vitest run lib/mnemosyne lib/minerva benchmarks src/planning src/config src/runners` -> 305/308 passing, the 3-test gap is the same CodeGraphLayerAdapter.test.ts worker crash, also reproduced identically pre-la-07. Note: this worktree's node_modules was empty on start (a fresh worktree checkout, not an la-07 artifact) -- ran `npm install` before any test could execute; package-lock.json was unchanged (deps already declared), so nothing new to commit there. Deviations from spec, with reasoning: (1) did not add a dedicated Claude Code `SessionStart` hook event -- pre-recall.mjs requires a query/prompt to recall against, and SessionStart's payload carries no task text (session_id/source/cwd only), so a bare SessionStart invocation would just silently no-op per pre-recall.mjs's own existing 'nothing to recall on; stay silent' behavior; the existing UserPromptSubmit wiring already fires on a session's first prompt with real context, which is the meaningful 'on entry' moment, so adding a second, effectively-inert hook path was judged unnecessary complexity rather than a missing requirement. (2) mandate content is identical across all 4 tiers rather than tier-customized -- the story text (\"every agent, regardless of harness, must...\") frames this as a universal policy, not a per-tier one, and tiers.test.ts's existing cross-tier differentiation checks are satisfied by `sections` alone (mandateSections doesn't affect them). Verifying agents actually COMPLY with this mandate is explicitly out of scope here per the story description -- that's la-11, not built or touched by this story."
+complexity: high
+methodology: tdd
+depends_on: [la-01-role-meta-file-sync, la-05-recall-status-filtering]
+
+description: |
+  Closes the previously-identified highest-leverage gap: recall works fine (real content, real
+  high similarity scores) but nothing forces an agent to call it at session start — this is
+  why "we've discussed this before" keeps recurring across sessions.
+
+  Decided 2026-08-13: the primary enforcement point is Layer 1 (la-01's role-scoped meta
+  files), not any single trigger mechanism — because it has to apply across every harness
+  (Claude/Codex/Gemini/whatever) and every team's workflow, not just git-based ones.
+
+  This story writes the actual mandate CONTENT into la-01's generated tier files: every agent,
+  regardless of harness, must (a) call recall on entry for its tier/task, (b) call remember on
+  exit with outcome, (c) understand and respect flight-status (provisional vs. confirmed) when
+  building on recalled memory. This is instruction content + whatever lightweight mechanism
+  (e.g. a startup check, a hook where the harness supports one) can realistically enforce it
+  within a given harness's capabilities — but the mandate text itself, consistent across every
+  harness's native file, is the core deliverable.
+
+  Verifying that agents actually COMPLY with this mandate (not just that it exists) is out of
+  scope here — that's la-11.
+
+acceptance_criteria:
+  - "Given la-01's sync mechanism, when a tier file is generated for any supported harness, then it includes the recall-on-entry/remember-on-exit/flight-status-awareness mandate as part of the managed content block"
+  - "Given a harness that supports a startup hook (e.g. Claude Code's hooks), when a session starts, then recall is actually invoked automatically where technically feasible — not just described in prose"
+  - "Given a harness with no hook mechanism, when the mandate is synced, then the meta-file content itself is the enforcement surface (clear, directive instruction text) — degraded but not absent"
+
+steps:
+  - id: research
+    description: Survey what startup-hook mechanisms each target harness (Claude Code, Codex, Gemini CLI) actually supports, to know where real enforcement is possible vs. where it's instruction-only.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests confirming the mandate content is present in every generated tier file, and that the Claude Code hook path (where supported) actually fires a recall call.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add the mandate content to la-01's tier-content model; wire the real startup-hook path for harnesses that support one.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the mandate is present and consistent across every harness's generated file, confirm the real hook actually fires (not just documented).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-layer-architecture-v2 (based on dev).
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: hooks/README.md
+      purpose: "Existing Claude Code hook wiring pattern to extend for the real enforcement path"
+    - path: docs/memory-architecture-deep-research.md
+      purpose: "Original diagnosis of the recall-enforcement gap this story closes"
+
+files_to_modify:
+  - file: lib/mnemosyne/layer1/
+    change: "Add the enforcement-mandate content block to the tier-content model from la-01"
+  - file: hooks/
+    change: "Extend/confirm the recall-on-entry hook actually fires automatically where the harness supports it"
+
+design_decisions:
+  - decision: "Mandate lives in Layer 1 content, not solely in a git-based trigger"
+    rationale: "Must work for every harness and every team's workflow, including non-git-centric ones"
+
+risks:
+  - severity: high
+    description: "Instruction-only enforcement (no real hook) is easy to ignore, silently reproducing the exact gap this story exists to close"
+    mitigation: "la-11's compliance audit exists specifically because a mandate alone isn't trusted to be sufficient — this story does its best within each harness's real capabilities, la-11 verifies the outcome"

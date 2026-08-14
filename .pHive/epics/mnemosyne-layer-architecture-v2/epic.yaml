@@ -1,0 +1,100 @@
+name: mnemosyne-layer-architecture-v2
+title: Flight-aware layers, hard-locked role files, and Graphify adoption
+target_codebase: .
+methodology: tdd
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: dev
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [architecture, integration]
+  roster: [researcher, technical-writer]
+  per_tag_reasoning:
+    architecture: "New flight-status memory model, pluggable lifecycle-trigger system, and role-scoped meta-file sync across harnesses"
+    integration: "Adopts Graphify (external tool) as the code-graph+doc-index layer, replacing two in-house implementations"
+  confidence: high
+  gate_decisions: {}
+
+notes: |
+  Formalized 2026-08-13 from a live design back-and-forth (see docs/layer-architecture-v2-plan.md
+  for full rationale — reconciled 3-layer/4-tier architecture, flight-status-aware memory design,
+  and the decisions log). Builds on the already-shipped mnemosyne-pluggable-layers epic
+  (pl-01 layer registry, pl-02 hive-memory adapter, pl-03 A/B harness).
+
+  Decided starting story: la-02 (Graphify adapter) — highest confidence, already PoC'd.
+  Trigger architecture decision: Layer 1 (la-01/la-07) is the primary enforcement point, not
+  any single trigger mechanism; local git hooks are the first concrete trigger adapter
+  (explicitly NOT GitHub Actions — operator preference); the trigger interface (la-06) stays
+  pluggable for future adapters (ticket-queue transitions, other lifecycle events); la-11 is a
+  standalone compliance-audit system verifying the mandate is actually followed, not just that
+  it exists.
+
+  Added 2026-08-13 (same day, mid-epic): la-00, Level 0 — operator-global rules, sitting ABOVE
+  Layer 1 and the 4-tier company/project hierarchy entirely. Direct response to a real incident
+  in this same epic (work committed to main instead of dev because a stale doc field said so).
+  Canonical source: ~/.mnemosyne/level0-rules.md, outside any single repo. la-01 now depends on
+  la-00 — every generated harness file must include Level 0 content first, tier content second.
+
+stories:
+  - id: la-00-operator-global-rules
+    title: "Level 0 — operator-global rules sync (sits above Layer 1)"
+    complexity: medium
+    depends_on: []
+
+  - id: la-01-role-meta-file-sync
+    title: Role-scoped meta-file sync (Layer 1)
+    complexity: high
+    depends_on: [la-00-operator-global-rules]
+
+  - id: la-02-graphify-adapter
+    title: Graphify adapter — replaces both in-house code-graph implementations
+    complexity: high
+    depends_on: []
+
+  - id: la-03-graphify-doc-index
+    title: Graphify doc-index wiring into recall
+    complexity: medium
+    depends_on: [la-02-graphify-adapter]
+
+  - id: la-04-flight-status-schema
+    title: Flight-status write schema (status + source_ref)
+    complexity: medium
+    depends_on: []
+
+  - id: la-05-recall-status-filtering
+    title: Recall status filtering (confirmed-default, provisional same-branch)
+    complexity: medium
+    depends_on: [la-04-flight-status-schema]
+
+  - id: la-06-lifecycle-trigger-system
+    title: Pluggable lifecycle-trigger system — local git hooks first
+    complexity: high
+    depends_on: [la-04-flight-status-schema]
+
+  - id: la-07-layer1-enforcement-mandate
+    title: Layer-1 enforcement mandate — force recall/remember + flight-status handling across harnesses
+    complexity: high
+    depends_on: [la-01-role-meta-file-sync, la-05-recall-status-filtering]
+
+  - id: la-08-lifecycle-outcome-feedback
+    title: Lifecycle-outcome to memory feedback loop
+    complexity: medium
+    depends_on: [la-06-lifecycle-trigger-system]
+
+  - id: la-09-graphify-cross-repo-eval
+    title: Graphify cross-repo eval (graphify global / merge-graphs) for company-director tier
+    complexity: medium
+    depends_on: [la-02-graphify-adapter]
+
+  - id: la-10-graphify-ab-benchmark
+    title: "A/B: Graphify vs. retired in-house code-graph"
+    complexity: medium
+    depends_on: [la-02-graphify-adapter]
+
+  - id: la-11-memory-lifecycle-compliance-audit
+    title: Memory-lifecycle compliance audit
+    complexity: high
+    depends_on: [la-06-lifecycle-trigger-system, la-07-layer1-enforcement-mandate]

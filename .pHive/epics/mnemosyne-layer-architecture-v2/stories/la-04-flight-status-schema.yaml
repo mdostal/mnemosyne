@@ -1,0 +1,76 @@
+id: la-04-flight-status-schema
+epic: mnemosyne-layer-architecture-v2
+title: Flight-status write schema (status + source_ref)
+status: complete
+note: "Built lib/mnemosyne/flight-status.ts (Status/SourceRef contract types live in interfaces.ts; this module holds the runtime logic) + src/flight-status.mjs (zero-dep JS mirror for engine.mjs, duplicated on purpose per this repo's existing precedent of parallel JS/TS remember() implementations). assertValidStatusTransition() enforces EXACTLY the two valid transitions from the acceptance criteria (provisional->confirmed, provisional->superseded) and throws InvalidStatusTransitionError on anything else, including confirmed->superseded and any no-op -- 12 transition-matrix unit tests cover every from/to pair. detectGitContext()/autoDetectWriteContext() shell out to REAL git (rev-parse --abbrev-ref HEAD, rev-parse HEAD, symbolic-ref refs/remotes/origin/HEAD), verified against real throwaway temp-dir git repos (git init/commit/checkout -b/clone), not mocked strings -- covers default-branch->confirmed, non-default-branch->provisional, a real second commit changing commit_sha, detached HEAD failing loudly (GitContextDetectionError, per this story's risk mitigation), non-git cwd failing loudly, and origin/HEAD resolution via a real clone. Wired into the two real write paths: VectorLayerAdapter.remember() (TS) and engine.mjs's remember() (JS) -- both auto-detect when the caller omits status/sourceRef, both accept an explicit status+sourceRef pair (rejecting a partial one), both fail the whole write loudly (RememberFailure / HTTP 422) rather than writing with guessed git context on an ambiguous repo state. 46 new unit tests total (flight-status.test.ts x38, VectorLayerAdapter.test.ts x5 new, schema.validation.test.ts x9 new); full lib/mnemosyne vitest suite (229 tests, incl. la-01's layer1 suite pulled in by a fast-forward before this commit) + npm run typecheck + the full node test/*.mjs chain (bundle/inject/write-through/health-drift/code-graph/reindex/vector/review-auto-merge) all pass on the modified tree. http-api.mjs and CodeGraphLayerAdapter.test.ts hit a pre-existing, machine-specific better-sqlite3 native-binding crash (already documented in http-api.mjs's own comments) -- confirmed byte-for-byte identical failure at the identical point on the unmodified tree via git stash, so not a regression from this story.
+
+  Deviations from the story spec, with reasoning: (1) files_to_modify named lib/mnemosyne/interfaces.ts for RememberOptions, but RememberOptions actually lives in lib/mnemosyne/layers/LayerAdapter.ts -- extended both: Status/SourceRef contract types + RememberSuccess in interfaces.ts, the status/sourceRef/cwd/defaultBranch override fields in LayerAdapter.ts's RememberOptions. (2) RememberSuccess.status/.source_ref are OPTIONAL, not required, at the cross-layer interfaces.ts/schema.ts contract level -- CodeGraphLayerAdapter and FileLayerAdapter don't implement remember() at all (recall-only, confirmed by grep) and making the fields required would have forced updating a dozen+ pre-existing RememberSuccess fixtures across interfaces.types.test.ts/client.test.ts/schema.validation.test.ts for layers that have no git-context concept to hang a flight status on; the one real writable layer today (vector) always populates both together, never one without the other, which is what the acceptance criteria actually care about. (3) Testing bar: this file's own description below (unedited) says all three of unit/subprocess-integration/live-dogfood for la-04/05/06 collectively, but the task that spawned this work explicitly overrode that to unit-tests-only for la-04 specifically, with the subprocess-integration and live-dogfood tiers deferred to la-05 -- followed that explicit instruction; did not run a live dogfood write against this repo's real Qdrant corpus. (4) Noted, not fixed: hooks/post-remember.mjs already has its own unrelated 'status' concept (in-progress/reviewed/full-send, a free-text workflow label embedded as literal text in a note body) -- confirmed via grep it never reaches engine.mjs's remember() opts (only {tag} is passed), so no runtime collision, but flagged in code comments (interfaces.ts's Status doc, engine.mjs) to prevent future confusion between the two 'status' concepts. Did NOT implement recall-side filtering on status (la-05) or the promote/supersede trigger mechanism (la-06) -- this story is write-path/schema only, per its own explicit description."
+complexity: medium
+methodology: tdd
+depends_on: []
+
+description: |
+  Foundation story for flight-aware memory (docs/layer-architecture-v2-plan.md §2). Work on a
+  non-default branch is true FOR THAT BRANCH only until merged — an agent must not treat
+  another branch's unmerged memory as confirmed ground truth.
+
+  Extends hive-memory's existing kg.sqlite pattern (valid_from/valid_until/source_epic/
+  source_agent) rather than building a second storage system. Every memory write gains:
+    - status: provisional | confirmed | superseded
+    - source_ref: { branch, commit_sha, pr_url }
+  auto-detected from cwd git context when not explicitly passed. Default status for a write
+  made on a non-default branch is "provisional". Nothing is ever deleted on supersede — a
+  rejected approach stays queryable ("we tried this, it didn't land"), it's marked superseded.
+
+  This story is schema + write-path only. Recall-side filtering is la-05; the promote/
+  supersede trigger mechanism is la-06. Testing bar (decided 2026-08-13): unit tests on status
+  transitions, a real subprocess integration test, and live dogfooding in this repo — all
+  three, not a subset.
+
+acceptance_criteria:
+  - "Given a memory write with no explicit git context, when the write happens from a non-default-branch working tree, then the stored entry has status=provisional and source_ref populated from real git state (branch, commit_sha)"
+  - "Given a memory write from the default branch, when it happens, then status=confirmed by default"
+  - "Given a status transition is attempted outside the valid set (provisional→confirmed, provisional→superseded), when it's attempted, then it's rejected — no invalid transition succeeds silently"
+  - "Given an entry is superseded, when it's queried directly (not via default recall filtering), then its content is still retrievable — supersede never deletes"
+
+steps:
+  - id: research
+    description: Read hive-memory's kg.sqlite schema (valid_from/valid_until/source_epic/source_agent) in full to model the new fields consistently with that existing pattern rather than inventing a divergent one.
+    agent: researcher
+  - id: test-spec
+    description: Write failing unit tests for status-transition validity and git-context auto-detection (branch/commit_sha resolution from cwd).
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add status + source_ref to the memory write schema and write path; implement git-context auto-detection.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm no invalid transitions succeed, confirm auto-detection is correct against real git state (not assumed), confirm superseded entries remain retrievable.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-layer-architecture-v2 (based on dev).
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: docs/layer-architecture-v2-plan.md
+      purpose: "§2 — full flight-status design rationale and the rejected ticket-keyed-storage alternative"
+
+files_to_modify:
+  - file: src/engine.mjs
+    change: "Add status/source_ref fields to the remember write path"
+  - file: lib/mnemosyne/interfaces.ts
+    change: "Extend RememberOptions/RememberResult types with status/source_ref"
+
+design_decisions:
+  - decision: "Extend hive-memory's existing valid_from/valid_until pattern, don't build a second storage system"
+    rationale: "One store, ticket/branch as provenance metadata, status as a recall-time filter — avoids fragmenting retrieval across two places for one fact"
+
+risks:
+  - severity: medium
+    description: "Git-context auto-detection could misfire in unusual repo states (detached HEAD, submodules, worktrees)"
+    mitigation: "Fail loudly and require explicit source_ref rather than guessing wrong in ambiguous states"

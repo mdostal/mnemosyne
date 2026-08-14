@@ -1,5 +1,5 @@
 /**
- * layer-ab-test — real A/B comparison of two layer-stack configs
+ * layer-ab-test — real A/B comparison of two-or-more layer-stack configs
  * (pl-03-layer-ab-testing). A REPORTING tool, not a pass/fail gate: layer
  * tradeoffs (coverage vs. noise vs. latency) are an operator judgment call,
  * this script's job is to surface real numbers, not decide a winner.
@@ -9,6 +9,16 @@
  * baseline — this one does not repeat that mistake): every number below
  * comes from an actual MnemosyneClient.recall() call against real
  * MnemosyneClientOptions.layerStack configs, never simulated/estimated.
+ *
+ * Extended by la-10-graphify-ab-benchmark to add a `graphify`-configured
+ * stack (swaps the 'code-graph' slot for 'graphify', keeping 'vector'/'file'
+ * identical to `baseline`, so the only variable between the two configs is
+ * the graph layer itself) run against the SAME real query set as `baseline`
+ * — a direct, apples-to-apples comparison of the two graph-layer
+ * implementations, feeding the go/no-go retirement call documented in
+ * docs/layer-architecture-v2-plan.md. This story does NOT remove
+ * 'code-graph' — both layer names stay registered (registry.ts) and both
+ * configs stay in this file's comparison regardless of the outcome.
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -124,6 +134,23 @@ function printReport(report: ConfigReport): void {
   );
 }
 
+/**
+ * la-10: prints a direct head-to-head between two named reports — the exact
+ * numbers a go/no-go retirement recommendation should be grounded in
+ * (docs/layer-architecture-v2-plan.md), not left implicit in the raw
+ * per-config listing above.
+ */
+function printHeadToHead(a: ConfigReport, b: ConfigReport): void {
+  const okCount = (r: ConfigReport) => r.perQuery.filter((q) => q.ok).length;
+  console.log(`\n=== head-to-head: ${a.name} vs ${b.name} ===`);
+  console.log(`  hits:           ${a.name}=${a.totalHits}  ${b.name}=${b.totalHits}`);
+  console.log(`  tokens:         ${a.name}=${a.totalTokens}  ${b.name}=${b.totalTokens}`);
+  console.log(`  avg_latency_ms: ${a.name}=${a.avgLatencyMs.toFixed(1)}  ${b.name}=${b.avgLatencyMs.toFixed(1)}`);
+  console.log(
+    `  ok_queries:     ${a.name}=${okCount(a)}/${a.perQuery.length}  ${b.name}=${okCount(b)}/${b.perQuery.length}`,
+  );
+}
+
 async function main(): Promise<void> {
   const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
   const scope: Scope = (process.argv[2] as Scope | undefined) ?? 'project';
@@ -132,7 +159,11 @@ async function main(): Promise<void> {
   const queryList = queries.length > 0 ? queries : ['mnemosyne', 'layer registry', 'secrets-adapter'];
 
   const configs: NamedLayerStackConfig[] = [
-    { name: 'baseline', config: { layers: [{ name: 'code-graph' }, { name: 'vector' }, { name: 'file' }] } },
+    { name: 'baseline (code-graph)', config: { layers: [{ name: 'code-graph' }, { name: 'vector' }, { name: 'file' }] } },
+    // la-10: 'vector'/'file' held identical to baseline — only the graph
+    // layer itself (code-graph -> graphify) varies, so any delta in
+    // hits/tokens/latency below is attributable to the graph layer swap.
+    { name: 'graphify', config: { layers: [{ name: 'graphify' }, { name: 'vector' }, { name: 'file' }] } },
     {
       name: 'with-hive-memory',
       config: { layers: [{ name: 'code-graph' }, { name: 'vector' }, { name: 'file' }, { name: 'hive-memory' }] },
@@ -143,6 +174,12 @@ async function main(): Promise<void> {
   const reports = await runAbTest(configs, queryList, scope, repoRoot);
   for (const report of reports) {
     printReport(report);
+  }
+
+  const baselineReport = reports.find((r) => r.name === 'baseline (code-graph)');
+  const graphifyReport = reports.find((r) => r.name === 'graphify');
+  if (baselineReport && graphifyReport) {
+    printHeadToHead(baselineReport, graphifyReport);
   }
 }
 
