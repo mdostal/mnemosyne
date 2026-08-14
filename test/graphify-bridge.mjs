@@ -173,15 +173,25 @@ async function main() {
       typeof e.src === "string" && typeof e.dst === "string" && typeof e.predicate === "string",
       `edge has src/predicate/dst (${JSON.stringify(e)})`,
     );
+    ok(
+      typeof e.src_label === "string" && typeof e.dst_label === "string",
+      `edge has src_label/dst_label for display (${JSON.stringify(e)})`,
+    );
     ok(e.origin === "ast", `edge origin is "ast" (real deterministic AST parsing, no LLM) (${e.origin})`);
     ok(e.created_at === null, "edge created_at is explicitly null (graphify has no per-edge timestamp)");
 
+    // src/dst are real graph.json node ids now (not labels) -- a genuine
+    // fix, not a relaxation: two distinct nodes sharing a short label used
+    // to collapse into one under the old label-based contract, verified to
+    // actually happen at scale on a real merged cross-repo graph (306 real
+    // connected components collapsed to 95). Assert against src_label/
+    // dst_label for the human-readable match instead of src/dst directly.
     const greeterEdgesResult = await graphifyEdgesAction(null, { node: "Greeter" }, env);
-    ok(greeterEdgesResult.node === "Greeter", "graphifyEdgesAction({node}) echoes the requested node");
+    ok(greeterEdgesResult.node === "Greeter", "graphifyEdgesAction({node}) echoes the requested node (search term, not id)");
     ok(greeterEdgesResult.edges.length > 0, `edges touching "Greeter" is non-empty (${greeterEdgesResult.edges.length})`);
     ok(
-      greeterEdgesResult.edges.every((edge) => edge.src === "Greeter" || edge.dst === "Greeter"),
-      "every filtered edge actually touches Greeter",
+      greeterEdgesResult.edges.every((edge) => edge.src_label === "Greeter" || edge.dst_label === "Greeter"),
+      `every filtered edge actually touches Greeter, by label (${JSON.stringify(greeterEdgesResult.edges.map((e) => [e.src_label, e.dst_label]))})`,
     );
   }
 

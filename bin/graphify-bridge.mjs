@@ -175,6 +175,67 @@ function fileTypeOf(graph, id) {
   return graph.nodes.find((node) => node.id === id)?.file_type ?? null;
 }
 
+// Matches a source_file path that's clearly test code -- directory segments
+// (test/, tests/, __tests__/, androidTest/, commonTest/, iosTest/, spec/)
+// or filename suffixes (Test.kt, Tests.swift, .test.ts, .spec.ts, etc.).
+// Deliberately conservative (only obvious conventions) -- a false negative
+// here just means an occasional test file stays eligible as a focus
+// candidate, which is harmless; a false positive would wrongly exclude
+// real production code.
+const TEST_FILE_RE =
+  /(^|\/)(__tests__|tests?|specs?|androidTest|commonTest|iosTest)(\/|$)|(Tests?|Specs?)\.(kt|swift|java|py)$|\.(test|spec)\.[jt]sx?$/i;
+
+function isTestFile(sourceFile) {
+  return Boolean(sourceFile && TEST_FILE_RE.test(sourceFile));
+}
+
+// A node's own degree (edges touching it, either direction) -- used to pick
+// a default focus candidate, same metric the UI would otherwise compute
+// client-side, but with the test-file exclusion below only possible here
+// (source_file per node isn't part of the /graph/edges response shape).
+function computeDegree(graph) {
+  const degree = new Map();
+  for (const link of graph.links) {
+    degree.set(link.source, (degree.get(link.source) ?? 0) + 1);
+    degree.set(link.target, (degree.get(link.target) ?? 0) + 1);
+  }
+  return degree;
+}
+
+// Highest-degree node whose OWN definition isn't in a test file -- the
+// naive "just pick the busiest node" heuristic reliably lands on a
+// test-framework assertion helper (e.g. `.assertEquals()`) instead of
+// anything architecturally meaningful, since every test file in a large
+// codebase calls it. Found via a real cross-repo experiment (event-api +
+// shindig merged graph): `.assertEquals()` had degree 844 -- 1.7x the next
+// candidate -- purely because it's the call target of hundreds of
+// unrelated test assertions, not because it's structurally important.
+function suggestedFocusNode(graph) {
+  const degree = computeDegree(graph);
+  let best = null;
+  let bestDegree = -1;
+  for (const node of graph.nodes) {
+    if (isTestFile(node.source_file)) continue;
+    const d = degree.get(node.id) ?? 0;
+    if (d > bestDegree || (d === bestDegree && best !== null && node.id < best)) {
+      best = node.id;
+      bestDegree = d;
+    }
+  }
+  // Every node lives in a test file (a pure-test repo) -- fall back to the
+  // real highest-degree node rather than returning nothing.
+  if (best === null) {
+    for (const node of graph.nodes) {
+      const d = degree.get(node.id) ?? 0;
+      if (d > bestDegree) {
+        best = node.id;
+        bestDegree = d;
+      }
+    }
+  }
+  return best;
+}
+
 // --- public actions -------------------------------------------------------
 //
 // Same (port, args) call shape as bin/mnemosyne-skill-helper.mjs's
@@ -205,6 +266,11 @@ export async function graphifyStatsAction(_port, _args = {}, env = process.env) 
     edges: graph.links.length,
     edges_by_origin: edgesByOrigin,
     db: opts.graphPath,
+    // A reasonable non-test default node for the UI's graph panel to focus
+    // on first -- computed here (not client-side) because excluding test
+    // files needs each node's source_file, which /graph/edges doesn't
+    // carry. `null` for an empty graph.
+    suggested_focus_node: graph.nodes.length > 0 ? suggestedFocusNode(graph) : null,
     took_ms: Date.now() - t0,
   };
 }
@@ -220,10 +286,21 @@ export async function graphifyEdgesAction(_port, { node } = {}, env = process.en
     links = links.filter((link) => ids.has(link.source) || ids.has(link.target));
   }
 
+  // src/dst are the real graph.json node ids (unique), NOT labels -- labels
+  // collapse distinct nodes that happen to share a short name, which is
+  // common at real scale (verified on a live merged cross-repo graph:
+  // using labels here collapsed 306 real connected components down to 95,
+  // with the largest absorbing nearly everything -- a genuine identity bug,
+  // not just a display concern). src_label/dst_label carry the human-
+  // readable name for display; consumers needing identity/uniqueness (this
+  // repo's own graph UI, in particular) must use src/dst, never the label
+  // fields, to key or compare nodes.
   const edges = links.map((link) => ({
-    src: labelOf(graph, link.source),
+    src: link.source,
+    src_label: labelOf(graph, link.source),
     predicate: link.relation,
-    dst: labelOf(graph, link.target),
+    dst: link.target,
+    dst_label: labelOf(graph, link.target),
     origin: link._origin ?? null,
     // graphify's graph.json carries no per-edge timestamp (unlike
     // swarm-memory's edges.created_at) -- explicit null, not a fabricated
