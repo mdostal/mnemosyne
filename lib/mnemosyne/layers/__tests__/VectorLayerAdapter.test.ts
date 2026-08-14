@@ -1,9 +1,13 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { VectorLayerAdapter } from '../VectorLayerAdapter.js';
+
+const execFileAsync = promisify(execFile);
 
 const FAKE_SWARM_MEMORY = fileURLToPath(
   new URL('./fixtures/fake-swarm-memory.mjs', import.meta.url),
@@ -236,6 +240,83 @@ describe('VectorLayerAdapter', () => {
         throw new Error('expected remember to fail');
       }
       expect(result.error.code).toBe('invalid_content');
+    });
+
+    // --- la-04-flight-status-schema: status + source_ref wiring -------------
+
+    it('auto-detects status + source_ref from real cwd git state when not passed explicitly', async () => {
+      const adapter = await makeWritableAdapter();
+      const result = await withMode('index-upserted', () =>
+        adapter.remember('a memory with auto-detected flight status', {
+          scope: 'project',
+          tag: 'flight-status-auto',
+        }),
+      );
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error(result.error.message);
+
+      // This test itself runs with cwd inside the real mnemosyne git repo —
+      // assert against REAL git state, not an assumed value.
+      const { stdout: branchOut } = await execFileAsync('git', [
+        'rev-parse',
+        '--abbrev-ref',
+        'HEAD',
+      ]);
+      const { stdout: shaOut } = await execFileAsync('git', ['rev-parse', 'HEAD']);
+      const realBranch = branchOut.trim();
+      const realSha = shaOut.trim();
+
+      expect(result.status).toBeDefined();
+      expect(['provisional', 'confirmed']).toContain(result.status);
+      expect(result.source_ref).toEqual({ branch: realBranch, commit_sha: realSha, pr_url: null });
+
+      const written = await readFile(result.provenance.source, 'utf8');
+      expect(written).toContain(`branch=${realBranch}`);
+      expect(written).toContain(`commit=${realSha}`);
+    });
+
+    it('uses an explicit status + sourceRef verbatim instead of auto-detecting', async () => {
+      const adapter = await makeWritableAdapter();
+      const sourceRef = { branch: 'feat/explicit-override', commit_sha: 'a'.repeat(40), pr_url: 'https://example.com/pr/1' };
+      const result = await withMode('index-upserted', () =>
+        adapter.remember('explicit flight status', { scope: 'project', status: 'provisional', sourceRef }),
+      );
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error(result.error.message);
+      expect(result.status).toBe('provisional');
+      expect(result.source_ref).toEqual(sourceRef);
+    });
+
+    it('rejects an explicit status without a matching explicit sourceRef (no partial override)', async () => {
+      const adapter = await makeWritableAdapter();
+      const result = await withMode('index-upserted', () =>
+        adapter.remember('half-specified flight status', { scope: 'project', status: 'confirmed' }),
+      );
+
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('expected remember to fail');
+      expect(result.error.code).toBe('invalid_flight_status');
+    });
+
+    it('fails loudly (RememberFailure, no write) when git-context auto-detection is ambiguous', async () => {
+      const nonGitCwd = await mkdtemp(path.join(tmpdir(), 'mnemosyne-vector-remember-nongit-'));
+      try {
+        const adapter = await makeWritableAdapter();
+        const result = await withMode('index-upserted', () =>
+          adapter.remember('should not write without resolvable git context', { scope: 'project', cwd: nonGitCwd }),
+        );
+
+        expect(result.ok).toBe(false);
+        if (result.ok) throw new Error('expected remember to fail');
+        expect(result.error.code).toBe('git_context_unresolvable');
+
+        const notesDirEntries = await readdir(notesDir);
+        expect(notesDirEntries).toEqual([]); // never even got to the write step
+      } finally {
+        await rm(nonGitCwd, { recursive: true, force: true });
+      }
     });
   });
 });

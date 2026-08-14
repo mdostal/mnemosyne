@@ -26,6 +26,8 @@ import { metrics as defaultMetrics, type Metrics } from '../../src/observability
 import type { LayerAdapter, RecallOptions } from './layers/LayerAdapter.js';
 import { defaultRegistry, LayerRegistry } from './layers/registry.js';
 import { resolveLayerStackConfig, type LayerStackConfig } from './layers/config.js';
+import { detectGitContext, GitContextDetectionError } from './flight-status.js';
+import { filterHitsByStatus } from './status-filter.js';
 // Side-effect import: registers "hive-memory" into defaultRegistry() (see
 // HiveMemoryLayerAdapter.ts's bottom). Not part of the default layer stack
 // (config.ts's DEFAULT_LAYER_STACK is still [code-graph, vector, file]) --
@@ -78,6 +80,28 @@ export interface ConfiguredLayerInfo {
   writable: boolean;
 }
 
+/**
+ * Recall-side flight-status filtering options (la-05-recall-status-filtering).
+ * Default recall is confirmed-only across branches — an entry a DIFFERENT
+ * branch wrote as `provisional` is excluded — except the caller's own
+ * current branch's `provisional` writes, which are always included. See
+ * `status-filter.ts` for the filtering rules themselves.
+ */
+export interface RecallStatusOptions {
+  /**
+   * Directory to resolve the caller's own current git branch from (for the
+   * same-branch-provisional-inclusive default). Defaults to
+   * `process.cwd()`. Mirrors `RememberOptions.cwd`'s role on the write side.
+   */
+  cwd?: string;
+  /**
+   * Explicit opt-in (off by default): also surface cross-branch
+   * `provisional`/`superseded` entries — for review/debugging use cases,
+   * never the default.
+   */
+  includeCrossBranchProvisional?: boolean;
+}
+
 export class MnemosyneClient {
   private readonly layers: LayerAdapter[];
   private readonly logger: Logger;
@@ -114,7 +138,20 @@ export class MnemosyneClient {
     return this.layers.map((layer) => ({ layer: layer.layer, writable: typeof layer.remember === 'function' }));
   }
 
-  async recall(query: string, scope: Scope, intent?: Intent): Promise<RecallResult> {
+  /**
+   * `statusOptions` (la-05-recall-status-filtering) is an additional,
+   * optional 4th parameter beyond `interfaces.ts`'s `RecallFn` contract
+   * (`query, scope, intent?`) — same accepted deviation as this class's
+   * sync-vs-async mismatch (see this file's top-of-module doc comment): a
+   * function with an extra optional parameter remains assignable to the
+   * narrower `RecallFn` type, so existing 3-arg call sites are unaffected.
+   */
+  async recall(
+    query: string,
+    scope: Scope,
+    intent?: Intent,
+    statusOptions?: RecallStatusOptions,
+  ): Promise<RecallResult> {
     const startedAt = Date.now();
     const resolvedIntent = intent ?? 'narrow';
     const normalizedQuery = query.trim();
@@ -223,12 +260,14 @@ export class MnemosyneClient {
       return lastResult;
     }
 
+    const filteredHits = await this.applyStatusFilter(mergeHits(finalHits), statusOptions);
+
     const result: RecallResult = {
       ok: true,
       query,
       scope,
       intent: resolvedIntent,
-      hits: mergeHits(finalHits),
+      hits: filteredHits,
       layers_queried: layersQueried,
       layers_skipped: layersSkipped,
       escalated,
@@ -237,6 +276,38 @@ export class MnemosyneClient {
 
     this.recordRecallEnd(result, startedAt);
     return result;
+  }
+
+  /**
+   * la-05-recall-status-filtering: resolves the caller's own current git
+   * branch (from `statusOptions.cwd`, defaulting to `process.cwd()`) and
+   * filters `hits` down to what default (or opted-in) recall should surface
+   * — see `status-filter.ts`'s `isEntryVisible` for the exact rules.
+   *
+   * An unresolvable git context (detached HEAD, no repo, no `git` binary) is
+   * NOT fatal here, unlike `remember()`'s loud-fail write contract — recall
+   * degrades to the safe default instead: with no caller branch to prove
+   * "this is my own provisional work" against, cross-branch provisional
+   * entries stay excluded, exactly as they would for any other caller whose
+   * branch can't be confirmed.
+   */
+  private async applyStatusFilter(hits: Hit[], statusOptions?: RecallStatusOptions): Promise<Hit[]> {
+    let callerBranch: string | null = null;
+    try {
+      const context = await detectGitContext({ cwd: statusOptions?.cwd });
+      callerBranch = context.branch;
+    } catch (error) {
+      if (!(error instanceof GitContextDetectionError)) {
+        throw error;
+      }
+      // Ambiguous/unresolvable git context — fall through with callerBranch
+      // staying null (safe default), not a recall failure.
+    }
+
+    return filterHitsByStatus(hits, {
+      callerBranch,
+      includeCrossBranchProvisional: statusOptions?.includeCrossBranchProvisional ?? false,
+    });
   }
 
   async remember(content: Content, scope: Scope, layer?: Layer): Promise<RememberResult> {

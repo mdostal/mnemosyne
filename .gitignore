@@ -2,6 +2,10 @@ node_modules/
 .DS_Store
 *.log
 
+# Graphify's generated graph output (la-02-graphify-adapter) -- regenerated
+# by `graphify update .` / GraphifyLayerAdapter's autoUpdate, never committed.
+graphify-out/
+
 config/*.local.yaml
 config/minerva.local.yaml
 

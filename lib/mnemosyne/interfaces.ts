@@ -5,9 +5,13 @@
  * logic. Subsequent stories (m-02..m-07) implement the layers and the
  * escalation/routing logic these types describe. Do not add executable code
  * here — see `schema.ts` for the runtime-validatable JSON Schema counterpart
- * of the wire-facing types (`Provenance`, `RecallResult`, `RememberResult`).
+ * of the wire-facing types (`Provenance`, `RecallResult`, `RememberResult`),
+ * and see `flight-status.ts` for the runtime logic (transition validation,
+ * git-context auto-detection) behind `Status`/`SourceRef` below.
  *
  * Story: m-01-core-recall-interface (epic: mnemosyne-foundation)
+ * Updated: la-04-flight-status-schema (epic: mnemosyne-layer-architecture-v2)
+ * adds `Status`/`SourceRef` and extends `RememberSuccess` with them.
  */
 
 // ---------------------------------------------------------------------------
@@ -23,7 +27,11 @@
  * live layers as of m-01..m-07. `hive-memory` (pl-02-hive-memory-layer) is
  * a fourth live, OPTIONAL layer — plugin-hive's own knowledge graph +
  * per-agent/team memory files, read-only, not part of the default stack
- * unless explicitly configured (see layers/config.ts).
+ * unless explicitly configured (see layers/config.ts). `graphify`
+ * (la-02-graphify-adapter) is a fifth live, OPTIONAL layer: a tree-sitter
+ * AST code/doc graph (Graphify-Labs/graphify, PyPI `graphifyy`), registered
+ * under a distinct name alongside `code-graph` rather than replacing it
+ * (see GraphifyLayerAdapter.ts; la-10 does the later A/B retirement).
  */
 export type Layer =
   | 'meta'
@@ -32,7 +40,8 @@ export type Layer =
   | 'code-graph'
   | 'vector'
   | 'file'
-  | 'hive-memory';
+  | 'hive-memory'
+  | 'graphify';
 
 /**
  * The caller-specified boundary for a recall/remember call. Deliberately a
@@ -246,6 +255,60 @@ export interface RecallFailure {
 export type RecallResult = RecallSuccess | RecallFailure;
 
 // ---------------------------------------------------------------------------
+// Flight status (la-04-flight-status-schema)
+// ---------------------------------------------------------------------------
+
+/**
+ * Lifecycle status of a memory write, tied to the branch/PR state it was
+ * written under — NOT to be confused with `hooks/post-remember.mjs`'s
+ * unrelated free-text workflow-status label (`in-progress`/`reviewed`/
+ * `full-send`, embedded as literal text in a note body); this is a
+ * structured, validated field with its own transition rules (see
+ * `flight-status.ts`'s `assertValidStatusTransition`).
+ *
+ * - `provisional` — written on a non-default branch; true FOR THAT BRANCH
+ *   only until it merges. The default for any write whose git context
+ *   resolves to a non-default branch.
+ * - `confirmed` — promoted from `provisional` (merge to the default
+ *   branch), or the default for a write made directly on the default
+ *   branch.
+ * - `superseded` — a `provisional` entry whose branch/PR did not land (e.g.
+ *   closed without merging). Never deleted — stays queryable directly as
+ *   "we tried this, it didn't land"; only excluded from *default* recall
+ *   filtering (la-05, not implemented by this contract).
+ *
+ * Valid transitions are exactly `provisional -> confirmed` and
+ * `provisional -> superseded` — see `flight-status.ts`. The trigger
+ * mechanism that flips status on real lifecycle events (merge, PR close) is
+ * la-06; this type only fixes the schema.
+ */
+export type Status = 'provisional' | 'confirmed' | 'superseded';
+
+/**
+ * Provenance of the branch/commit/PR a memory write happened under.
+ * Auto-detected from real cwd git state when not passed explicitly by the
+ * caller (see `flight-status.ts`'s `detectGitContext`/`autoDetectWriteContext`).
+ * Mirrors hive-memory's `source_epic`/`source_agent` provenance columns in
+ * spirit (kg.sqlite's `triples` table) — this is the git-flavored
+ * equivalent, not a replacement for those fields.
+ */
+export interface SourceRef {
+  /** Branch the write happened on, e.g. `"feat/mnemosyne-layer-architecture-v2"`. */
+  branch: string;
+  /** Full commit SHA at write time. */
+  commit_sha: string;
+  /**
+   * PR URL associated with this write, when known. `null` when no PR
+   * context is available — auto-detection can never populate this from
+   * local git state alone (that requires a lifecycle-trigger adapter, la-06),
+   * so it is explicitly `null` rather than omitted on an auto-detected
+   * `SourceRef`, matching `Provenance`'s "always a key, explicit null over
+   * omission" convention.
+   */
+  pr_url: string | null;
+}
+
+// ---------------------------------------------------------------------------
 // Remember
 // ---------------------------------------------------------------------------
 
@@ -291,6 +354,19 @@ export interface RememberSuccess {
   provenance: Provenance;
   /** Present only when the write partially degraded; absent on a fully healthy write. See `DegradedWrite`. */
   degraded?: DegradedWrite;
+  /**
+   * Flight status of this write (la-04-flight-status-schema) — see `Status`.
+   * Optional at this cross-layer contract level: not every layer has a
+   * branch/commit concept to hang a flight status on (e.g. a hypothetical
+   * future recall-only-turned-writable layer with no git-context source).
+   * Layers that DO support it (today: `vector`, via `VectorLayerAdapter`)
+   * always populate both `status` and `source_ref` together, auto-detected
+   * from real git state unless the caller passed them explicitly through
+   * `RememberOptions`.
+   */
+  status?: Status;
+  /** See `status` above — always populated together with `status`, never one without the other. */
+  source_ref?: SourceRef;
 }
 
 /** Structured error for a `remember()` call that did not write. */

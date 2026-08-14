@@ -11,6 +11,7 @@
  */
 import { CodeGraphLayerAdapter } from './CodeGraphLayerAdapter.js';
 import { FileLayerAdapter } from './FileLayerAdapter.js';
+import { GraphifyLayerAdapter } from './GraphifyLayerAdapter.js';
 import type { LayerAdapter } from './LayerAdapter.js';
 import { VectorLayerAdapter } from './VectorLayerAdapter.js';
 
@@ -69,4 +70,16 @@ export function registerBuiltinLayers(registry: LayerRegistry): void {
   registry.register('code-graph', () => new CodeGraphLayerAdapter());
   registry.register('vector', (options) => new VectorLayerAdapter(options as ConstructorParameters<typeof VectorLayerAdapter>[0]));
   registry.register('file', (_options, ctx) => new FileLayerAdapter(ctx.rootDirectory ?? process.cwd()));
+  // "graphify" (la-02-graphify-adapter): a NEW layer name, registered
+  // alongside "code-graph" rather than replacing it -- la-10 does the A/B
+  // comparison before any retirement. rootDirectory flows through as
+  // graphify's repoRoot (the directory it indexes) when the caller doesn't
+  // override it via per-layer options.
+  registry.register('graphify', (options, ctx) => {
+    const adapterOptions = options as ConstructorParameters<typeof GraphifyLayerAdapter>[0];
+    return new GraphifyLayerAdapter({
+      ...adapterOptions,
+      repoRoot: adapterOptions?.repoRoot ?? ctx.rootDirectory ?? process.cwd(),
+    });
+  });
 }

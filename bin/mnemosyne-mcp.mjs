@@ -17,6 +17,16 @@
 // reopen every guardrail already closed in engine.mjs (loud failure, full
 // provenance, no collection wipe) — see SERVICE.md.
 //
+// ONE deliberate, documented exception (la-02-graphify-adapter): the four
+// graph_* tools below are wired against bin/graphify-bridge.mjs instead of
+// the skill-helper's swarm-memory-backed graph*Action functions whenever
+// MNEMOSYNE_LAYERS configures a "graphify" layer (see wireGraphTools()) —
+// graphify-bridge.mjs is its own small, separately-tested module (not
+// business logic inlined here), the zero-dep-JS-side counterpart to
+// lib/mnemosyne/layers/GraphifyLayerAdapter.ts. Every other tool is
+// unaffected; the default (no MNEMOSYNE_LAYERS, or one that doesn't mention
+// "graphify") is byte-for-byte the pre-existing swarm-memory-backed behavior.
+//
 // No tool below maps to Qdrant collection deletion/wipe. There is no such
 // verb in the swarm-memory CLI, in engine.mjs, or in the skill-helper's
 // action set, and none is added here.
@@ -41,6 +51,13 @@ import {
   graphImpactAction,
   graphDepsAction,
 } from "./mnemosyne-skill-helper.mjs";
+import {
+  isGraphifyConfigured,
+  graphifyStatsAction,
+  graphifyEdgesAction,
+  graphifyImpactAction,
+  graphifyDepsAction,
+} from "./graphify-bridge.mjs";
 
 function textResult(data) {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
@@ -133,14 +150,27 @@ export function createServer({ port = DEFAULT_PORT } = {}) {
     wrapAction(port, reindexAction),
   );
 
+  // wireGraphTools — la-02-graphify-adapter: when MNEMOSYNE_LAYERS configures
+  // a "graphify" layer, the four graph_* tools below read graphify's
+  // graph.json (via bin/graphify-bridge.mjs) instead of proxying to the
+  // swarm-memory-backed GET /graph/* routes. Unconfigured (the default),
+  // behavior is unchanged — same skill-helper pass-throughs as before this
+  // story. Response *shape* is identical either way (nodes/edges/
+  // edges_by_origin/db for stats; src/predicate/dst/origin/created_at for
+  // edges; node/node_type/depth/via for impact/deps) so no MCP-side schema
+  // change was needed to add graphify coverage.
+  const useGraphify = isGraphifyConfigured();
+
   server.registerTool(
     "graph_stats",
     {
       title: "Graph stats",
-      description: "Impact graph size + origin breakdown (swarm-memory graph stats).",
+      description: useGraphify
+        ? "Graphify graph size + edge-origin breakdown (graphify graph.json)."
+        : "Impact graph size + origin breakdown (swarm-memory graph stats).",
       inputSchema: {},
     },
-    wrapAction(port, () => graphStatsAction(port)),
+    useGraphify ? wrapAction(port, () => graphifyStatsAction(port)) : wrapAction(port, () => graphStatsAction(port)),
   );
 
   server.registerTool(
@@ -152,7 +182,7 @@ export function createServer({ port = DEFAULT_PORT } = {}) {
         node: z.string().optional().describe("Restrict to edges touching this node"),
       },
     },
-    wrapAction(port, graphEdgesAction),
+    useGraphify ? wrapAction(port, graphifyEdgesAction) : wrapAction(port, graphEdgesAction),
   );
 
   server.registerTool(
@@ -165,7 +195,9 @@ export function createServer({ port = DEFAULT_PORT } = {}) {
         depth: z.number().optional().describe("Traversal depth"),
       },
     },
-    wrapAction(port, ({ node, depth }) => graphImpactAction(port, node, { depth })),
+    useGraphify
+      ? wrapAction(port, (p, { node, depth }) => graphifyImpactAction(p, node, { depth }))
+      : wrapAction(port, (p, { node, depth }) => graphImpactAction(p, node, { depth })),
   );
 
   server.registerTool(
@@ -178,7 +210,9 @@ export function createServer({ port = DEFAULT_PORT } = {}) {
         depth: z.number().optional().describe("Traversal depth"),
       },
     },
-    wrapAction(port, ({ node, depth }) => graphDepsAction(port, node, { depth })),
+    useGraphify
+      ? wrapAction(port, (p, { node, depth }) => graphifyDepsAction(p, node, { depth }))
+      : wrapAction(port, (p, { node, depth }) => graphDepsAction(p, node, { depth })),
   );
 
   return server;

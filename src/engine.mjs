@@ -12,6 +12,8 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { autoDetectWriteContext, detectGitContext, GitContextDetectionError, STATUSES } from "./flight-status.mjs";
+import { filterHitsByStatus } from "./status-filter.mjs";
 
 const execFileP = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -193,8 +195,21 @@ export async function scopes() {
   return m;
 }
 
-// recall(query, scope, {hits, escalate, minScore}) — semantic recall with
-// surrounding context + full provenance, straight from the engine's --json.
+// recall(query, scope, {hits, escalate, minScore, cwd, includeCrossBranchProvisional}) —
+// semantic recall with surrounding context + full provenance, straight from
+// the engine's --json.
+//
+// la-05-recall-status-filtering: the merged result is filtered by flight
+// status (la-04) before being returned. Default: confirmed-only across
+// branches, EXCEPT the caller's own current branch's `provisional` writes,
+// which are always included (an agent sees its own in-flight work). The
+// caller's branch is resolved from `opts.cwd` (defaulting to process.cwd(),
+// same convention as remember()'s `opts.cwd`) via real git state — never
+// assumed. Pass `opts.includeCrossBranchProvisional: true` to explicitly
+// opt into seeing cross-branch provisional/superseded entries too (for
+// review/debugging use cases). See status-filter.mjs for the filtering
+// rules. Entries with no flight-status header (pre-la-04 legacy notes, or
+// hits from a layer with no git-context concept) are never filtered.
 export async function recall(query, scope, opts = {}) {
   if (!query || !String(query).trim()) {
     const err = new Error("query is required");
@@ -274,12 +289,56 @@ export async function recall(query, scope, opts = {}) {
   const graphHits = await graphLayer.recall(String(query));
   const merged = mergeLayerResults(recallResult, graphHits);
   merged.layers_attempted = [...recallResult.layers_attempted, "code-graph"];
-  return merged;
+  return applyStatusFilter(merged, opts);
 }
 
-// remember(text, scope, {tag}) — write-back. Persists the note to a file, then
-// indexes (upserts, --no-prune) it into the scope's collection so it becomes
-// immediately recallable. Additive only: never prunes other files' chunks.
+// applyStatusFilter — la-05-recall-status-filtering. Resolves the caller's
+// own current git branch from opts.cwd (never fatal to recall() if
+// unresolvable — an ambiguous git context degrades to the safe default:
+// no branch to prove "this is my own provisional work" against, so
+// cross-branch provisional entries stay excluded, same as any other
+// caller whose branch can't be confirmed), then filters every scope's hits
+// and recomputes total_hits to match.
+async function applyStatusFilter(result, opts) {
+  let callerBranch = null;
+  try {
+    const ctx = await detectGitContext({ cwd: opts.cwd });
+    callerBranch = ctx.branch;
+  } catch (e) {
+    if (!(e instanceof GitContextDetectionError)) throw e;
+    // Fall through with callerBranch staying null.
+  }
+
+  const filterOptions = {
+    callerBranch,
+    includeCrossBranchProvisional: opts.includeCrossBranchProvisional === true,
+  };
+
+  if (Array.isArray(result.scopes)) {
+    for (const s of result.scopes) {
+      if (Array.isArray(s.hits)) {
+        s.hits = await filterHitsByStatus(s.hits, filterOptions);
+      }
+    }
+    result.total_hits = result.scopes.reduce((n, s) => n + (Array.isArray(s.hits) ? s.hits.length : 0), 0);
+  }
+
+  return result;
+}
+
+// remember(text, scope, {tag, status, sourceRef, cwd, defaultBranch}) —
+// write-back. Persists the note to a file, then indexes (upserts,
+// --no-prune) it into the scope's collection so it becomes immediately
+// recallable. Additive only: never prunes other files' chunks.
+//
+// la-04-flight-status-schema: every write also carries a flight `status`
+// (provisional|confirmed|superseded) + `source_ref` ({branch, commit_sha,
+// pr_url}), auto-detected from real cwd git state unless the caller passes
+// both explicitly. Auto-detection failing on an ambiguous repo state
+// (detached HEAD, no repo, `git` missing) fails the whole write loudly —
+// same "never write with guessed data" contract as this function's existing
+// swarm-memory failure handling, and this story's explicit risk mitigation.
+// Recall-side filtering on `status` is la-05 — not implemented here.
 export async function remember(text, scope, opts = {}) {
   if (!text || !String(text).trim()) {
     const err = new Error("text is required");
@@ -296,11 +355,50 @@ export async function remember(text, scope, opts = {}) {
     err.status = 400;
     throw err;
   }
+
+  const explicitStatus = opts.status;
+  const explicitSourceRef = opts.sourceRef || opts.source_ref;
+  let status;
+  let sourceRef;
+  if (explicitStatus !== undefined || explicitSourceRef !== undefined) {
+    if (explicitStatus === undefined || explicitSourceRef === undefined) {
+      const err = new Error(
+        "opts.status and opts.sourceRef must both be provided together, or both omitted to auto-detect"
+      );
+      err.status = 400;
+      throw err;
+    }
+    if (!STATUSES.includes(explicitStatus)) {
+      const err = new Error(`invalid status '${explicitStatus}'. must be one of: ${STATUSES.join(", ")}`);
+      err.status = 400;
+      throw err;
+    }
+    status = explicitStatus;
+    sourceRef = explicitSourceRef;
+  } else {
+    try {
+      const detected = await autoDetectWriteContext({ cwd: opts.cwd, defaultBranch: opts.defaultBranch });
+      status = detected.status;
+      sourceRef = detected.source_ref;
+    } catch (e) {
+      if (e instanceof GitContextDetectionError) {
+        const err = new Error(
+          `write-through rejected: flight-status auto-detection failed: ${e.message}. Pass opts.status and opts.sourceRef explicitly to write anyway.`
+        );
+        err.status = 422;
+        throw err;
+      }
+      throw e;
+    }
+  }
+
   await mkdir(NOTES_DIR, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const tag = (opts.tag || "note").replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 40);
   const file = path.join(NOTES_DIR, `${stamp}-${tag}.md`);
-  const header = `<!-- remembered via Mnemosyne @ ${new Date().toISOString()} scope=${useScope} -->\n`;
+  const header =
+    `<!-- remembered via Mnemosyne @ ${new Date().toISOString()} scope=${useScope} ` +
+    `status=${status} branch=${sourceRef.branch} commit=${sourceRef.commit_sha} -->\n`;
   await writeFile(file, header + String(text) + "\n", "utf8");
 
   // Direct-mapped scope -> collection; index appends this one new file. The
@@ -346,6 +444,8 @@ export async function remember(text, scope, opts = {}) {
     file,
     chunks_upserted: chunksUpserted,
     engine_output: out,
+    status,
+    source_ref: sourceRef,
   };
 }
 

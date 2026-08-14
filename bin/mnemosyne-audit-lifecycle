@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# mnemosyne-audit-lifecycle — run the memory-lifecycle compliance audit
+# (la-11-memory-lifecycle-compliance-audit, epic: mnemosyne-layer-architecture-v2).
+# Usage: bin/mnemosyne-audit-lifecycle [--repo <path>] [--notes-dir <path>]
+#          [--default-branch <name>] [--settings <path>] [--report-only] [--json]
+set -euo pipefail
+export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
+exec node "$HERE/node_modules/.bin/tsx" "$HERE/lib/mnemosyne/audit/cli.ts" "$@"
