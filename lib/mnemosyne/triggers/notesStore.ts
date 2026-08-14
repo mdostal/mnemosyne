@@ -24,7 +24,7 @@
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Status } from '../interfaces.js';
-import type { MemoryEntryRef, MemoryStatusStore } from './types.js';
+import type { LifecycleOutcome, MemoryEntryRef, MemoryStatusStore } from './types.js';
 
 /** Matches the header line's `status=<x> branch=<y> commit=<z>` fragment, tolerant of an optional `scope=` before it (JS write path) or not (TS write path). Anchored to a HTML-comment line so it only ever matches the header, never a note's body text. */
 const HEADER_LINE_RE =
@@ -88,5 +88,21 @@ export class NotesDirectoryStatusStore implements MemoryStatusStore {
 
     const rewritten = firstLine.replace(/\bstatus=(provisional|confirmed|superseded)\b/, `status=${to}`);
     await writeFile(entry.id, rewritten + rest, 'utf8');
+  }
+
+  /**
+   * (la-08-lifecycle-outcome-feedback) Appends `outcome.summary` to
+   * `entry.id`'s note as a new section — never rewrites the header line
+   * (`updateStatus`'s job) or any pre-existing body content, only adds to
+   * it, same "never lose what's already on disk" spirit as `updateStatus`'s
+   * own doc comment. Called multiple times over an entry's life (e.g. a
+   * future re-trigger) simply appends again, never overwrites a prior
+   * outcome — a memory entry can carry more than one lesson.
+   */
+  async recordOutcome(entry: MemoryEntryRef, outcome: LifecycleOutcome): Promise<void> {
+    const content = await readFile(entry.id, 'utf8');
+    const separator = content.endsWith('\n') ? '\n' : '\n\n';
+    const block = `${separator}## Lifecycle outcome\n${outcome.summary}\n`;
+    await writeFile(entry.id, content + block, 'utf8');
   }
 }
