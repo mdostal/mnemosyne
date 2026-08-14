@@ -218,6 +218,40 @@ await (async () => {
   }
 })();
 
+// --- graphify-configured: same routes, delegated to bin/graphify-bridge.mjs
+// (la-02-graphify-adapter's extension to this repo's own GET /graph/* — the
+// UI's graph panel, not just the MCP tools) -------------------------------
+await (async () => {
+  const graphifyPort = PORT + 2;
+  const graphifyBase = `http://127.0.0.1:${graphifyPort}`;
+  const graphifyChild = spawn(process.execPath, [SERVER_PATH], {
+    env: { ...process.env, PORT: String(graphifyPort), MNEMOSYNE_LAYERS: JSON.stringify({ layers: [{ name: "graphify" }] }) },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let graphifyOutput = "";
+  graphifyChild.stdout.on("data", (d) => { graphifyOutput += d.toString(); });
+  graphifyChild.stderr.on("data", (d) => { graphifyOutput += d.toString(); });
+  try {
+    const up = await waitForServer(graphifyBase + "/scopes");
+    ok(up, "graphify-configured test server came up");
+
+    const statsRes = await fetch(graphifyBase + "/graph/stats");
+    const statsBody = await statsRes.json();
+    ok(statsRes.status === 200 && typeof statsBody.nodes === "number" && statsBody.nodes > 0,
+      `GET /graph/stats (MNEMOSYNE_LAYERS=graphify) -> real graphify node count, not swarm-memory's (got ${JSON.stringify(statsBody)})`);
+    ok(statsBody.db && statsBody.db.includes("graph.json"),
+      `GET /graph/stats (graphify) -> db path points at graphify's graph.json, not swarm-memory's sqlite (got ${statsBody.db})`);
+
+    const edgesRes = await fetch(graphifyBase + "/graph/edges");
+    const edgesBody = await edgesRes.json();
+    ok(edgesRes.status === 200 && Array.isArray(edgesBody.edges) && edgesBody.edges.length > 0,
+      `GET /graph/edges (graphify) -> real edges from this repo's own graphify graph (got count=${edgesBody.count})`);
+  } finally {
+    if (fails) console.log("\n--- graphify-configured server output ---\n" + graphifyOutput);
+    graphifyChild.kill();
+  }
+})();
+
 if (fails) {
   console.log("\n--- server output (for debugging) ---");
   console.log(serverOutput);
