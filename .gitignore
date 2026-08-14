@@ -7,6 +7,12 @@ node_modules/
 # for test discovery, not just git status noise.
 .claude/worktrees/
 
+# Scratch clones of OTHER repos, pulled down locally to experiment with
+# cross-repo graph merging (company-director-tier design, see
+# docs/layer-architecture-v2-plan.md §1a). Not mnemosyne's own content,
+# never indexed into shared/production memory, disposable.
+.graph-test-repos/
+
 # Graphify's generated graph output (la-02-graphify-adapter) -- regenerated
 # by `graphify update .` / GraphifyLayerAdapter's autoUpdate, never committed.
 graphify-out/
