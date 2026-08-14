@@ -2,6 +2,11 @@ node_modules/
 .DS_Store
 *.log
 
+# Ephemeral git worktrees created for isolated agent work sessions — never
+# part of the repo itself, see vitest.config.ts for why this also matters
+# for test discovery, not just git status noise.
+.claude/worktrees/
+
 # Graphify's generated graph output (la-02-graphify-adapter) -- regenerated
 # by `graphify update .` / GraphifyLayerAdapter's autoUpdate, never committed.
 graphify-out/
