@@ -71,7 +71,7 @@ Epic: **`mnemosyne-layer-architecture-v2`** — "Flight-aware layers, hard-locke
 | `la-07` | Layer-1 enforcement mandate — bakes recall-on-entry/remember-on-exit + flight-status handling into every harness's native meta file | `la-01`, `la-05` | pending |
 | `la-08` | Lifecycle-outcome → memory feedback loop (generalized beyond CI — any lifecycle event via `la-06`'s adapters) | `la-06` | pending |
 | `la-09` | Graphify cross-repo eval (`graphify global`/`merge-graphs`) | `la-02` | pending |
-| `la-10` | A/B: Graphify vs. retired in-house code-graph | `la-02` | pending |
+| `la-10` | A/B: Graphify vs. retired in-house code-graph | `la-02` | **complete — see §7** |
 | `la-11` | Memory-lifecycle compliance audit — verifies agents/repos are actually calling recall/remember/promote correctly, not just that the mandate exists | `la-06`, `la-07` | pending |
 
 **Decided (2026-08-13):** start with `la-02`. Testing bar for the flight-status stories (`la-04`/`la-05`/`la-06`): all three of — unit tests on status transitions, a real subprocess integration test (branch → provisional write → merge → assert promotion, same rigor as the `pl-02` regression test), and live dogfooding in this repo before any other repo adopts it.
@@ -88,3 +88,58 @@ Original north star (`(.pHive/project-profile.yaml`): "Unify memory layers behin
 2. **Testing bar for `la-04`/`la-05`/`la-06`** — all three: unit tests on status transitions, a real subprocess integration test, and live dogfooding in this repo first.
 3. **Starting story: `la-02`** (Graphify adapter) — highest confidence, already PoC'd, immediately valuable standalone.
 4. **`la-06`/`la-08` scope note** — since the trigger system is pluggable and git-hook-first (not CI-webhook-first), there's no single "does it live in Mnemosyne or in each repo's CI" question anymore — the git-hook adapter installs per-repo by design; a future ticket-queue adapter would be a separate integration per queue system, evaluated when that need is concrete rather than speculated now.
+
+## 7. `la-10`: Graphify vs. code-graph A/B benchmark — go/no-go on retirement (2026-08-14)
+
+Extended the existing `pl-03` A/B harness (`benchmarks/layer-ab-test.ts`) with a `graphify`-configured
+stack (`graphify -> vector -> file`) run alongside the existing `code-graph`-configured baseline
+(`code-graph -> vector -> file`) — `vector`/`file` held identical on both sides so the only variable is
+the graph layer itself. Ran for real against this repo (`npm run benchmark:layer-ab`), using the
+harness's own existing default query set (`mnemosyne`, `layer registry`, `secrets-adapter` — no new
+query set invented, per the story's guidance). Both `code-graph` and `graphify` stay registered
+side by side (`registry.ts`) — this story does not remove either.
+
+**Root cause found (not assumed):** directly inspected `code-graph`'s actual backing store,
+`~/.local/share/swarm-memory/graph.sqlite` — 22 nodes total, and **zero of them are from this repo**
+(`mnemosyne`); all 22 are from two unrelated repos (`dostal-swarm/...`, `swarm-memory/...`). Confirmed
+in `CodeGraphLayerAdapter.ts` too: it takes no `repoRoot`/per-repo scoping at all — it always shells to
+one global `swarm-memory graph impact <query>` (or reads the one shared `graph.sqlite`), so it is
+architecturally unable to reflect this repo's own code structure, regardless of query. `graphify`, by
+contrast, is repo-scoped: a fresh `graphify update .` against this repo (steady state, cached
+`graph.json`) indexed **1470 nodes / 2484 links** from this repo's own source.
+
+**Benchmark numbers (steady state, `graph.json` cached — matches real operational use, not a
+cold-start number):**
+
+| Config | Total hits | Total tokens (`estimateTokens()`) | Avg latency | Queries ok |
+|---|---|---|---|---|
+| `baseline (code-graph)` [`code-graph -> vector -> file`] | 12 | 4808 | 2502.7ms | 3/3 |
+| `graphify` [`graphify -> vector -> file`] | 28 | 4797 | 1666.0ms | 3/3 |
+
+Per-query breakdown: for `"mnemosyne"`, `graphify` matched directly (20 hits, 174 tokens, 7ms — the
+graph layer alone, no fallback needed) while `code-graph` missed entirely and fell through to `vector`
+(4 hits, 185 tokens, 2483ms). For `"layer registry"` and `"secrets-adapter"`, neither graph layer had a
+direct match, so both configs fell through identically to `vector` (identical hit/token counts on those
+two queries — a tie, not a loss for either side). Net across all 3 queries: `graphify` hit-count is
+never worse than `code-graph`'s on any query, total tokens are within noise (-0.2%), and average latency
+is 33% lower (the short-circuit on `"mnemosyne"` avoids `vector`'s ~2.3-2.6s cost entirely).
+
+**Qualitative relevance spot-check** (not just counts — inspected actual hit content for `"mnemosyne"`):
+`code-graph`'s 4 fallback hits are generic changelog/memory-log entries that happen to mention the word
+"mnemosyne" in passing (`vector`-layer text search, not graph-structural). `graphify`'s 20 hits are real,
+line-addressable code/doc structure nodes and edges naming this repo directly — `.mcp.json:L1`,
+`README.md:L1`, `package.json:L11`, `bin/mnemosyne:L1`, `README.md --contains--> Mnemosyne` — i.e. actual
+"what references what" impact-graph answers, which is `code-graph`'s stated job and what it structurally
+cannot deliver against this repo today.
+
+**Recommendation: GO** — proceed toward retiring the in-house `code-graph` implementations
+(`CodeGraphLayerAdapter.ts`'s better-sqlite3 path + the JS CLI wrapper onto the same shared
+`graph.sqlite`), as a separate, later story (not bundled here, per this story's explicit scope).
+`graphify` matched or beat `code-graph` on every metric measured against this repo, and the root-cause
+finding above means this isn't a close call that might flip with more queries — `code-graph` cannot
+structurally produce a relevant hit for this repo's own code no matter what's asked, since this repo
+was never indexed into its shared dataset. One pre-removal check for that later story: confirm no other
+consumer depends on the shared `swarm-memory` `graph.sqlite` for a *different* repo's data before
+deleting the wiring — its 22 nodes span `dostal-swarm`/`swarm-memory` themselves, so removing
+`CodeGraphLayerAdapter.ts` from Mnemosyne is not the same decision as decommissioning `swarm-memory`
+itself, which may still serve other consumers.
