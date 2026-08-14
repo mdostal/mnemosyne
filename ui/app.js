@@ -370,6 +370,16 @@ let allEdges = [];
 let currentFocusNode = null;
 let currentDepth = 2;
 
+// id -> human-readable label, built from edges' src_label/dst_label (real
+// graph-backed responses -- see bin/graphify-bridge.mjs). `src`/`dst` are
+// real unique node ids, used for all identity/comparison/positioning;
+// idToLabel is ONLY for what gets drawn as visible text -- never use it to
+// key or compare nodes, two different nodes can share a label.
+let idToLabel = new Map();
+function displayLabel(id) {
+  return idToLabel.get(id) || shortLabel(id);
+}
+
 function svgEl(tag, attrs = {}) {
   const el = document.createElementNS(SVG_NS, tag);
   for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
@@ -447,14 +457,17 @@ function highestDegreeNode(nodeIds, edges) {
   return best;
 }
 
-// Case-insensitive: exact short-label match first (most useful for a
-// user typing a filename), then substring match anywhere in the full id.
+// Case-insensitive: exact display-label match first (most useful for a
+// user typing a filename/symbol), then substring match anywhere in the
+// display label, then substring match on the full id as a last resort.
 function findMatchingNode(query, nodeIds) {
   if (!query) return null;
   const q = query.trim().toLowerCase();
   if (!q) return null;
-  const exact = nodeIds.find((id) => shortLabel(id).toLowerCase() === q);
+  const exact = nodeIds.find((id) => displayLabel(id).toLowerCase() === q);
   if (exact) return exact;
+  const labelSubstring = nodeIds.find((id) => displayLabel(id).toLowerCase().includes(q));
+  if (labelSubstring) return labelSubstring;
   return nodeIds.find((id) => id.toLowerCase().includes(q)) || null;
 }
 
@@ -700,7 +713,7 @@ function drawGraphElements(nodeIds, edges, positions) {
     if (!p1 || !p2) continue;
     const line = svgEl("line", { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, class: "graph-edge" });
     const title = svgEl("title");
-    title.textContent = `${e.src} --${e.predicate}--> ${e.dst} [${e.origin}]`;
+    title.textContent = `${displayLabel(e.src)} --${e.predicate}--> ${displayLabel(e.dst)} [${e.origin}]`;
     line.appendChild(title);
     edgesGroup.appendChild(line);
   }
@@ -714,7 +727,7 @@ function drawGraphElements(nodeIds, edges, positions) {
     if (id === currentFocusNode) g.classList.add("focus");
     const circle = svgEl("circle", { cx: p.x, cy: p.y, r: id === currentFocusNode ? 10 : 7 });
     const label = svgEl("text", { x: p.x + 10, y: p.y + 4, class: "graph-node-label" });
-    label.textContent = shortLabel(id);
+    label.textContent = displayLabel(id);
     const title = svgEl("title");
     title.textContent = id;
     g.appendChild(circle);
@@ -755,19 +768,121 @@ function layoutIterationsFor(n) {
   return Math.max(15, Math.min(300, Math.round(LAYOUT_PAIRWISE_OP_BUDGET / (n * n))));
 }
 
+// Splits nodeIds/edges into connected components (plain BFS over an
+// adjacency list built from edges, O(n+e) -- cheap, exact, not an estimate)
+// and returns them sorted largest-first. Two nodes with zero path between
+// them (e.g. two different repos merged with no real dependency, per
+// docs/layer-architecture-v2-plan.md's la-09 finding) will never land in
+// the same component, no matter how the force layout's physics behaves --
+// this is what actually guarantees visual separation, not iteration count.
+function computeConnectedComponents(nodeIds, edges) {
+  const adjacency = new Map(nodeIds.map((id) => [id, new Set()]));
+  const edgesByNode = new Map(nodeIds.map((id) => [id, []]));
+  for (const e of edges) {
+    if (!adjacency.has(e.src) || !adjacency.has(e.dst)) continue;
+    adjacency.get(e.src).add(e.dst);
+    adjacency.get(e.dst).add(e.src);
+    edgesByNode.get(e.src).push(e);
+  }
+
+  const seen = new Set();
+  const components = [];
+  for (const start of nodeIds) {
+    if (seen.has(start)) continue;
+    const compNodes = [];
+    const stack = [start];
+    seen.add(start);
+    while (stack.length > 0) {
+      const cur = stack.pop();
+      compNodes.push(cur);
+      for (const nb of adjacency.get(cur)) {
+        if (!seen.has(nb)) {
+          seen.add(nb);
+          stack.push(nb);
+        }
+      }
+    }
+    const compNodeSet = new Set(compNodes);
+    const compEdges = edges.filter((e) => compNodeSet.has(e.src) && compNodeSet.has(e.dst));
+    components.push({ nodeIds: compNodes, edges: compEdges });
+  }
+  components.sort((a, b) => b.nodeIds.length - a.nodeIds.length);
+  return components;
+}
+
+// Simple shelf/row bin-packing: places each component's cell left-to-right,
+// wrapping to a new row once a row would get too wide relative to its
+// height (keeps the overall canvas roughly square rather than one long
+// strip). Cell area is proportional to node count (sqrt for side length),
+// with a floor so single-node components stay clickable.
+function packComponents(components, { targetAspect = 1.4 } = {}) {
+  const totalNodes = components.reduce((sum, c) => sum + c.nodeIds.length, 0) || 1;
+  const totalArea = GRAPH_WIDTH * GRAPH_HEIGHT * Math.max(1, totalNodes / 40);
+  const areaPerNode = totalArea / totalNodes;
+
+  const cells = components.map((c) => {
+    const side = Math.max(70, Math.sqrt(areaPerNode * c.nodeIds.length));
+    return { component: c, w: side, h: side };
+  });
+
+  const rowTargetWidth = Math.sqrt(totalArea * targetAspect);
+  const placed = [];
+  let rowX = 0;
+  let rowY = 0;
+  let rowHeight = 0;
+  for (const cell of cells) {
+    if (rowX > 0 && rowX + cell.w > rowTargetWidth) {
+      rowY += rowHeight;
+      rowX = 0;
+      rowHeight = 0;
+    }
+    placed.push({ ...cell, x: rowX, y: rowY });
+    rowX += cell.w;
+    rowHeight = Math.max(rowHeight, cell.h);
+  }
+  const totalWidth = Math.max(rowTargetWidth, ...placed.map((p) => p.x + p.w));
+  const totalHeight = rowY + rowHeight;
+  return { placed, totalWidth, totalHeight };
+}
+
 function renderGraph(nodeIds, edges) {
-  // Size the layout/viewBox to the actual node count so a tiny neighborhood
-  // isn't stranded in a large empty canvas, and a "show whole graph" call
-  // still gets room to breathe.
-  const n = nodeIds.length;
-  const scale = n <= 20 ? 1 : Math.min(3, 1 + (n - 20) / 200);
-  const width = GRAPH_WIDTH * scale;
-  const height = GRAPH_HEIGHT * scale;
+  const components = computeConnectedComponents(nodeIds, edges);
 
-  const positions = forceLayout(nodeIds, edges, { width, height, iterations: layoutIterationsFor(n) });
+  // The common case (a focus-node neighborhood, or any genuinely connected
+  // graph) is exactly one component -- lay it out directly in the fixed
+  // canvas, unchanged from before. Multiple components only arise from
+  // "Show whole graph" on data with real structural gaps, and get packed
+  // into separate regions instead of forced into one shared force layout.
+  if (components.length <= 1) {
+    const n = nodeIds.length;
+    const scale = n <= 20 ? 1 : Math.min(3, 1 + (n - 20) / 200);
+    const width = GRAPH_WIDTH * scale;
+    const height = GRAPH_HEIGHT * scale;
+    const positions = forceLayout(nodeIds, edges, { width, height, iterations: layoutIterationsFor(n) });
+    drawGraphElements(nodeIds, edges, positions);
+    baseViewBox = { x: 0, y: 0, w: width, h: height };
+    resetView();
+    return;
+  }
+
+  const { placed, totalWidth, totalHeight } = packComponents(components);
+  const positions = new Map();
+  const PAD = 6; // keeps a component's own layout from touching its cell's edge
+  for (const cell of placed) {
+    const cw = Math.max(1, cell.w - PAD * 2);
+    const ch = Math.max(1, cell.h - PAD * 2);
+    const compPositions = forceLayout(cell.component.nodeIds, cell.component.edges, {
+      width: cw,
+      height: ch,
+      iterations: layoutIterationsFor(cell.component.nodeIds.length),
+    });
+    for (const [id, p] of compPositions) {
+      positions.set(id, { x: cell.x + PAD + p.x, y: cell.y + PAD + p.y });
+    }
+  }
+
   drawGraphElements(nodeIds, edges, positions);
-
-  baseViewBox = { x: 0, y: 0, w: width, h: height };
+  baseViewBox = { x: 0, y: 0, w: totalWidth, h: totalHeight };
   resetView();
 }
 
@@ -793,7 +908,7 @@ function focusOnNode(nodeId) {
   setStatus(
     graphStatusEl,
     "pass",
-    `${allNodeIds.length} node(s) total — showing ${nodeIds.length} within ${currentDepth} hop(s) of "${shortLabel(nodeId)}"`,
+    `${allNodeIds.length} node(s) total — showing ${nodeIds.length} within ${currentDepth} hop(s) of "${displayLabel(nodeId)}"`,
   );
 }
 
@@ -854,9 +969,16 @@ async function loadGraph() {
     }
     const edges = Array.isArray(edgesBody.edges) ? edgesBody.edges : [];
     const nodeSet = new Set();
+    idToLabel = new Map();
     for (const e of edges) {
       nodeSet.add(e.src);
       nodeSet.add(e.dst);
+      // src_label/dst_label are only present on graphify-backed responses
+      // (see bin/graphify-bridge.mjs) -- absent on the default swarm-memory
+      // backend, where displayLabel() falls back to shortLabel(id), same as
+      // before this map existed.
+      if (e.src_label) idToLabel.set(e.src, e.src_label);
+      if (e.dst_label) idToLabel.set(e.dst, e.dst_label);
     }
     const nodeIds = Array.from(nodeSet).sort();
 
@@ -873,7 +995,18 @@ async function loadGraph() {
     graphSearchEl.value = "";
     graphSearchEmptyEl.hidden = true;
 
-    const defaultFocus = highestDegreeNode(nodeIds, edges);
+    // Prefer the backend's suggested_focus_node when present (graphify-
+    // backed graphs: computed server-side with real per-node source_file
+    // data, excluding test-file-defined nodes -- see bin/graphify-bridge.mjs.
+    // A naive highest-degree pick reliably lands on a test-framework
+    // assertion helper instead of anything architecturally meaningful, since
+    // every test file calls it). Falls back to the client-side heuristic
+    // for backends that don't provide it (e.g. the default swarm-memory
+    // path, which has no per-node file metadata in its response shape).
+    const defaultFocus =
+      stats.suggested_focus_node && nodeIds.includes(stats.suggested_focus_node)
+        ? stats.suggested_focus_node
+        : highestDegreeNode(nodeIds, edges);
     if (nodeIds.length <= DEFAULT_NEIGHBORHOOD_MAX_NODES) {
       // Small enough to just show the whole thing straightaway.
       currentFocusNode = null;
