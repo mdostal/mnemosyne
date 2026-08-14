@@ -34,6 +34,77 @@ The operator's 3-layer simplification and the CBA's 5-layer research map onto ea
 
 Cross-project impact is still answered by querying **up** to the company director, never held locally at the code tier — that part of the CBA's design holds regardless of 3 vs 4 tiers.
 
+## 1a. `la-09` finding: `graphify global`/`merge-graphs` evaluated for the company-director tier — **don't adopt as the tier's data source** (2026-08-14)
+
+`docs/cba-memory-layers.md`'s "New finding" flagged Graphify's cross-repo merge commands
+(`graphify global add/remove/list`, `graphify merge-graphs`, `~/.graphify/global-graph.json`)
+as possibly the right mechanism for the company-director tier's "light understanding of a
+company's resources/products/repos without holding full per-repo depth" need (§1 above). This
+was evaluated for real, not inferred from docs — verdict: **the merged graph itself is the
+wrong altitude for this tier; don't adopt it as company-director's data source.**
+
+**What was actually run** (real CLI, confirmed via `graphify --help` first — the CBA's
+paraphrase of the command surface was accurate): `graphify update .` against this repo
+(mnemosyne, at commit `a0e957a`) and against a second real Pantheon repo on this machine
+(`/Users/mdostal/Documents/work/pantheon/minerva`, branch `feat/fix-startrun-heimdall-routing`)
+to produce two real per-repo `graph.json` files (mnemosyne: 1467 nodes/2480 edges/104
+communities; minerva: 849 nodes/1526 edges/57 communities). Then both real cross-repo paths:
+`graphify global add <graph.json> --as <tag>` for each repo (writes/accumulates
+`~/.graphify/global-graph.json` + a `global-manifest.json`), and separately `graphify
+merge-graphs <g1> <g2> --out <path>` (a one-shot merge of two named files, no persistent
+store). Both commands produced numerically identical results (2316 nodes, 4006 edges) —
+confirmed to be the same underlying merge logic with two different persistence models.
+
+**Directly inspected content of the real merged output** (`~/.graphify/global-graph.json`,
+2.5MB for just these two modest repos):
+- It is a **structural union, not a synthesis**. `2316 = 1467 + 849` exactly — every function/
+  class/doc node from both repos' full-depth per-repo graphs is present verbatim, just
+  namespaced (`id: "mnemosyne::src_errors_..."` / `"minerva::src_driver_claudeadapter"`, new
+  `repo` field added per node).
+- **Zero cross-repo edges.** Of the 4006 merged edges, a direct check (`source`/`target` repo
+  comparison on every edge) found 0 edges connecting a mnemosyne node to a minerva node. The
+  merge does not discover or infer any real relationship between repos (shared dependencies,
+  API usage, imports) — it only avoids ID collisions. Running `graphify query "how does
+  mnemosyne relate to minerva" --graph ~/.graphify/global-graph.json` confirmed this live: the
+  BFS traversal it returned was entirely local to mnemosyne's own `package.json`/`docs/
+  architecture.md` nodes (lexical matches on the words "mnemosyne"/"minerva" within one repo's
+  own graph), not a real cross-repo path.
+- **Community IDs collide across repos** (both repos number communities `0..N` independently;
+  after merge, `community: 1` exists in both mnemosyne, `community_name: "metrics.ts"`, and
+  minerva, `community_name: "consus-resume.ts"`, as two unrelated things sharing one number).
+  Not fatal — every node still carries a distinct `id`/`repo` field — but a real footgun for
+  any naive consumer that groups by the bare `community` integer.
+- `god-nodes`/`query`/`explain`/`--json` all run fine against the merged file (same
+  `graph.json` shape reused, confirmed live) — the tooling itself is reusable, but what comes
+  back is full function/class-level detail from whichever repo the traversal happened to land
+  in, not a repo- or product-level rollup.
+- The one artifact from this whole workflow that actually is small and repo-scoped is
+  `~/.graphify/global-manifest.json`, written as a side effect of `global add`: `{repo tag,
+  added_at, source_path, node_count, edge_count, source_hash}` per repo — a few hundred bytes
+  per repo, and exactly the shape of "which repos exist and how big/fresh are they" that a
+  company-director tier could actually hold cheaply. `graphify global list` surfaces the same
+  thing as a one-line-per-repo summary.
+
+**Recommendation: don't adopt `graphify global add`/`merge-graphs`'s merged graph.json as the
+company-director tier's data source.** It fails the tier's own stated requirement two ways:
+(1) it is full per-repo AST-level depth for every company repo concatenated into one file with
+unbounded, linear growth per repo added (2.5MB for 2 modest repos — a real company's 10-30
+repo fleet would put tens of MB of raw code-graph nodes in a tier explicitly meant to avoid
+holding per-repo depth), and (2) its only real value-add over just concatenating files by hand
+— actual cross-repo relationship discovery — doesn't exist; 0 of 4006 edges cross a repo
+boundary.
+
+**Adopt-with-modification, narrowly:** the `global add`/`global list` side effect
+(`global-manifest.json` — repo tag, size, freshness, provenance) is a legitimate, already-free
+"which repos/products exist" inventory signal for company-director tier, cheap enough to hold
+directly. It should NOT be confused with or expanded into holding the merged graph itself.
+Real cross-repo/cross-project *impact* questions (already scoped in §1's tier design — "cross-
+project impact is still answered by querying up... never held locally at the code tier")
+should be answered by the company-director tier querying **down** into a specific project's
+own already-adopted (`la-02`) per-repo Graphify graph on demand, not by maintaining one
+permanently-fused blob. This is a sketch for a future story if/when company-director-tier work
+is actually scheduled — not built here; `la-09` is evaluation-only per its own spec.
+
 ## 2. New design element: flight-status-aware memory (agreed direction, mechanism proposed)
 
 **Problem the operator raised:** work in progress on a feature branch is true *for that branch*, not globally true, until a PR merges. An agent must not build on another branch's unmerged memory as if it were confirmed ground truth. This likely extends to the Layer 3 code graph too (built from whatever's checked out, not just main).
