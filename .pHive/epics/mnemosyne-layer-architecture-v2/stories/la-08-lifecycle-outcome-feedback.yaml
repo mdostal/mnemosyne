@@ -1,0 +1,58 @@
+id: la-08-lifecycle-outcome-feedback
+epic: mnemosyne-layer-architecture-v2
+title: Lifecycle-outcome to memory feedback loop
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [la-06-lifecycle-trigger-system]
+
+description: |
+  Not a new layer — a write-path event. Test/lessons-learned feedback (CI pass/fail, review
+  feedback, or any other lifecycle outcome reachable through la-06's adapter interface) becomes
+  an outcome-tagged memory write at the same merge/close moment as the flight-status
+  promote/supersede transition, reusing la-06's trigger rather than building a separate one.
+
+  Generalized beyond "CI" deliberately — the operator's git-hook-first, pluggable-adapter
+  decision in la-06 means this should consume whatever outcome data a given adapter can supply
+  (test results, review comments, ticket-close reason), not assume a GitHub-Actions-specific
+  shape.
+
+acceptance_criteria:
+  - "Given a real merge event through la-06's git-hook adapter, when it fires, then an outcome-tagged memory entry is written (e.g. status=confirmed with an outcome/lesson field), not just the status transition alone"
+  - "Given a branch abandoned/closed without merging, when la-06's supersede transition fires, then an outcome-tagged entry captures why it didn't land (where that information is available), not just a bare status flip"
+
+steps:
+  - id: research
+    description: Confirm what outcome data is realistically available at the moment la-06's git-hook adapter fires (commit messages, test result files if present, etc.).
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for outcome-tagged writes on both promote and supersede transitions.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Wire outcome-tagged memory writes into la-06's trigger firing path.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm outcome writes are genuinely informative (not empty/boilerplate) and reuse la-06's trigger rather than duplicating it.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-layer-architecture-v2 (based on dev).
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: docs/layer-architecture-v2-plan.md
+      purpose: "§3 — feedback-loop rationale"
+
+files_to_modify:
+  - file: lib/mnemosyne/triggers/
+    change: "Extend la-06's trigger firing path to also write an outcome-tagged memory entry"
+
+risks:
+  - severity: low
+    description: "Outcome data may be sparse or unavailable depending on the adapter/repo"
+    mitigation: "Write whatever outcome data is available rather than blocking the status transition on having rich data"

@@ -1,0 +1,75 @@
+id: la-06-lifecycle-trigger-system
+epic: mnemosyne-layer-architecture-v2
+title: Pluggable lifecycle-trigger system — local git hooks first
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [la-04-flight-status-schema]
+
+description: |
+  Decided 2026-08-13 (docs/layer-architecture-v2-plan.md §2, §6): NOT GitHub Actions —
+  explicit operator preference ("I hate github actions and it is already costing a fortune, I
+  prefer my own build boxes"). Not all teams use git the same way either, so the trigger
+  mechanism must be pluggable, not hardcoded to one source.
+
+  Build:
+    1. A trigger adapter interface — something that can fire promote (provisional→confirmed)
+       or supersede (provisional→superseded) given a repo/branch/PR-state change.
+    2. The FIRST real adapter: local git hooks (post-merge, etc.), auto-installed per
+       repo/agent setup, firing the promote/supersede transition for real merges/closes
+       happening on that machine.
+    3. The interface must genuinely support future adapters (ticket-queue transitions, other
+       lifecycle/process events) — not a git-only path with an unused interface around it.
+
+  This story does NOT build a ticket-queue adapter or any CI-based adapter — those are
+  evaluated later, when a concrete need exists (per the decision log, no speculative build-out
+  beyond the git-hook adapter and the interface it plugs into).
+
+acceptance_criteria:
+  - "Given a local repo with the hook installed, when a real merge to the default branch happens, then provisional entries with matching source_ref are promoted to confirmed — verified via a real git merge in a test repo, not a simulated call"
+  - "Given a local repo with the hook installed, when a branch is deleted/abandoned without merging (or a tracked PR-equivalent is closed), then matching provisional entries are marked superseded, never deleted"
+  - "Given the trigger adapter interface, when a new adapter type is implemented against it, then no changes to la-04/la-05's schema or recall filtering are required — the interface is the only integration point"
+
+steps:
+  - id: research
+    description: Design the adapter interface shape (what a trigger receives — repo, branch, resulting state — and what it's allowed to call) before implementing the git-hook adapter against it.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for the adapter interface contract and a real subprocess-level test that performs an actual git merge and asserts promotion (per the decided testing bar).
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement the trigger adapter interface and the local git-hook adapter (installable post-merge hook script + install command).
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the real-merge integration test actually exercises git, not a mock; confirm supersede-not-delete on close; confirm the interface is genuinely reusable for a hypothetical second adapter.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-layer-architecture-v2 (based on dev).
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: docs/layer-architecture-v2-plan.md
+      purpose: "§2/§6 — trigger architecture decision and rationale, read before designing the adapter interface"
+
+files_to_modify:
+  - file: lib/mnemosyne/triggers/
+    change: "New: trigger adapter interface + local git-hook adapter"
+  - file: hooks/
+    change: "New: installable post-merge hook script"
+
+design_decisions:
+  - decision: "Local git hooks as the first adapter, explicitly not GitHub Actions"
+    rationale: "Operator's direct instruction — cost and build-box-preference reasons, and not every team merges via GitHub PR"
+  - decision: "Pluggable interface even though only one adapter ships in this story"
+    rationale: "Ticket-queue and other lifecycle-event triggers are real anticipated future adapters per the operator's stated intent, not hypothetical scope creep"
+
+risks:
+  - severity: medium
+    description: "Git hooks only fire on the machine where the merge happens — a merge on a machine without the hook installed silently never promotes"
+    mitigation: "la-11's compliance audit is the backstop for exactly this gap — flagged explicitly in this epic's design, not assumed away"

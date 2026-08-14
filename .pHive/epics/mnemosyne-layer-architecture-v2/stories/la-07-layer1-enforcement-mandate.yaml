@@ -1,0 +1,76 @@
+id: la-07-layer1-enforcement-mandate
+epic: mnemosyne-layer-architecture-v2
+title: Layer-1 enforcement mandate — force recall/remember + flight-status handling across harnesses
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [la-01-role-meta-file-sync, la-05-recall-status-filtering]
+
+description: |
+  Closes the previously-identified highest-leverage gap: recall works fine (real content, real
+  high similarity scores) but nothing forces an agent to call it at session start — this is
+  why "we've discussed this before" keeps recurring across sessions.
+
+  Decided 2026-08-13: the primary enforcement point is Layer 1 (la-01's role-scoped meta
+  files), not any single trigger mechanism — because it has to apply across every harness
+  (Claude/Codex/Gemini/whatever) and every team's workflow, not just git-based ones.
+
+  This story writes the actual mandate CONTENT into la-01's generated tier files: every agent,
+  regardless of harness, must (a) call recall on entry for its tier/task, (b) call remember on
+  exit with outcome, (c) understand and respect flight-status (provisional vs. confirmed) when
+  building on recalled memory. This is instruction content + whatever lightweight mechanism
+  (e.g. a startup check, a hook where the harness supports one) can realistically enforce it
+  within a given harness's capabilities — but the mandate text itself, consistent across every
+  harness's native file, is the core deliverable.
+
+  Verifying that agents actually COMPLY with this mandate (not just that it exists) is out of
+  scope here — that's la-11.
+
+acceptance_criteria:
+  - "Given la-01's sync mechanism, when a tier file is generated for any supported harness, then it includes the recall-on-entry/remember-on-exit/flight-status-awareness mandate as part of the managed content block"
+  - "Given a harness that supports a startup hook (e.g. Claude Code's hooks), when a session starts, then recall is actually invoked automatically where technically feasible — not just described in prose"
+  - "Given a harness with no hook mechanism, when the mandate is synced, then the meta-file content itself is the enforcement surface (clear, directive instruction text) — degraded but not absent"
+
+steps:
+  - id: research
+    description: Survey what startup-hook mechanisms each target harness (Claude Code, Codex, Gemini CLI) actually supports, to know where real enforcement is possible vs. where it's instruction-only.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests confirming the mandate content is present in every generated tier file, and that the Claude Code hook path (where supported) actually fires a recall call.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add the mandate content to la-01's tier-content model; wire the real startup-hook path for harnesses that support one.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the mandate is present and consistent across every harness's generated file, confirm the real hook actually fires (not just documented).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-layer-architecture-v2 (based on dev).
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: hooks/README.md
+      purpose: "Existing Claude Code hook wiring pattern to extend for the real enforcement path"
+    - path: docs/memory-architecture-deep-research.md
+      purpose: "Original diagnosis of the recall-enforcement gap this story closes"
+
+files_to_modify:
+  - file: lib/mnemosyne/layer1/
+    change: "Add the enforcement-mandate content block to the tier-content model from la-01"
+  - file: hooks/
+    change: "Extend/confirm the recall-on-entry hook actually fires automatically where the harness supports it"
+
+design_decisions:
+  - decision: "Mandate lives in Layer 1 content, not solely in a git-based trigger"
+    rationale: "Must work for every harness and every team's workflow, including non-git-centric ones"
+
+risks:
+  - severity: high
+    description: "Instruction-only enforcement (no real hook) is easy to ignore, silently reproducing the exact gap this story exists to close"
+    mitigation: "la-11's compliance audit exists specifically because a mandate alone isn't trusted to be sufficient — this story does its best within each harness's real capabilities, la-11 verifies the outcome"

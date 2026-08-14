@@ -1,0 +1,73 @@
+id: la-04-flight-status-schema
+epic: mnemosyne-layer-architecture-v2
+title: Flight-status write schema (status + source_ref)
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: []
+
+description: |
+  Foundation story for flight-aware memory (docs/layer-architecture-v2-plan.md §2). Work on a
+  non-default branch is true FOR THAT BRANCH only until merged — an agent must not treat
+  another branch's unmerged memory as confirmed ground truth.
+
+  Extends hive-memory's existing kg.sqlite pattern (valid_from/valid_until/source_epic/
+  source_agent) rather than building a second storage system. Every memory write gains:
+    - status: provisional | confirmed | superseded
+    - source_ref: { branch, commit_sha, pr_url }
+  auto-detected from cwd git context when not explicitly passed. Default status for a write
+  made on a non-default branch is "provisional". Nothing is ever deleted on supersede — a
+  rejected approach stays queryable ("we tried this, it didn't land"), it's marked superseded.
+
+  This story is schema + write-path only. Recall-side filtering is la-05; the promote/
+  supersede trigger mechanism is la-06. Testing bar (decided 2026-08-13): unit tests on status
+  transitions, a real subprocess integration test, and live dogfooding in this repo — all
+  three, not a subset.
+
+acceptance_criteria:
+  - "Given a memory write with no explicit git context, when the write happens from a non-default-branch working tree, then the stored entry has status=provisional and source_ref populated from real git state (branch, commit_sha)"
+  - "Given a memory write from the default branch, when it happens, then status=confirmed by default"
+  - "Given a status transition is attempted outside the valid set (provisional→confirmed, provisional→superseded), when it's attempted, then it's rejected — no invalid transition succeeds silently"
+  - "Given an entry is superseded, when it's queried directly (not via default recall filtering), then its content is still retrievable — supersede never deletes"
+
+steps:
+  - id: research
+    description: Read hive-memory's kg.sqlite schema (valid_from/valid_until/source_epic/source_agent) in full to model the new fields consistently with that existing pattern rather than inventing a divergent one.
+    agent: researcher
+  - id: test-spec
+    description: Write failing unit tests for status-transition validity and git-context auto-detection (branch/commit_sha resolution from cwd).
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add status + source_ref to the memory write schema and write path; implement git-context auto-detection.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm no invalid transitions succeed, confirm auto-detection is correct against real git state (not assumed), confirm superseded entries remain retrievable.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-layer-architecture-v2 (based on dev).
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: docs/layer-architecture-v2-plan.md
+      purpose: "§2 — full flight-status design rationale and the rejected ticket-keyed-storage alternative"
+
+files_to_modify:
+  - file: src/engine.mjs
+    change: "Add status/source_ref fields to the remember write path"
+  - file: lib/mnemosyne/interfaces.ts
+    change: "Extend RememberOptions/RememberResult types with status/source_ref"
+
+design_decisions:
+  - decision: "Extend hive-memory's existing valid_from/valid_until pattern, don't build a second storage system"
+    rationale: "One store, ticket/branch as provenance metadata, status as a recall-time filter — avoids fragmenting retrieval across two places for one fact"
+
+risks:
+  - severity: medium
+    description: "Git-context auto-detection could misfire in unusual repo states (detached HEAD, submodules, worktrees)"
+    mitigation: "Fail loudly and require explicit source_ref rather than guessing wrong in ambiguous states"

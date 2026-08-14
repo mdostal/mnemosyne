@@ -1,0 +1,51 @@
+id: la-10-graphify-ab-benchmark
+epic: mnemosyne-layer-architecture-v2
+title: "A/B: Graphify vs. retired in-house code-graph"
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [la-02-graphify-adapter]
+
+description: |
+  Real comparison before fully retiring the two thin in-house code-graph implementations
+  (CodeGraphLayerAdapter's better-sqlite3 path + the JS CLI wrapper onto the same
+  swarm-memory graph.sqlite). Extends the EXISTING pl-03 A/B benchmark harness
+  (benchmarks/layer-ab-test.ts) — this is not a new harness.
+
+  Only after this story shows Graphify performing at least as well (recall quality, token
+  cost per benchmarks/recall-vs-find.ts's estimateTokens()) should the old implementations
+  actually be removed — that removal is explicitly NOT bundled into this story.
+
+acceptance_criteria:
+  - "Given benchmarks/layer-ab-test.ts, when extended to include a graphify-configured stack alongside the existing code-graph-configured stack, then it runs both against the same real query set and reports comparable metrics"
+  - "Given the results, when reviewed, then a clear go/no-go recommendation on retiring the in-house implementations is documented — not left implicit in raw benchmark output"
+
+steps:
+  - id: implement
+    description: Extend benchmarks/layer-ab-test.ts with a graphify-configured stack option; run against this repo's real recall queries.
+    agent: developer
+  - id: review
+    description: Confirm the comparison is apples-to-apples (same queries, same scoring) and the recommendation is grounded in the actual numbers.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-layer-architecture-v2 (based on dev). Document the recommendation in docs/layer-architecture-v2-plan.md.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: benchmarks/layer-ab-test.ts
+      purpose: "Existing A/B harness from pl-03 — extend, do not replace"
+    - path: benchmarks/recall-vs-find.ts
+      purpose: "Source of estimateTokens() reused for cost comparison"
+
+files_to_modify:
+  - file: benchmarks/layer-ab-test.ts
+    change: "Add a graphify-configured stack comparison option"
+
+risks:
+  - severity: low
+    description: "Retiring the in-house implementations prematurely, before this story's results are in"
+    mitigation: "This story explicitly does NOT bundle removal — removal is a separate, later decision gated on these results"

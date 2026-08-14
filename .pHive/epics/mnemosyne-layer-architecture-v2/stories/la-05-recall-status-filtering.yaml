@@ -1,0 +1,60 @@
+id: la-05-recall-status-filtering
+epic: mnemosyne-layer-architecture-v2
+title: Recall status filtering (confirmed-default, provisional same-branch)
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [la-04-flight-status-schema]
+
+description: |
+  Consumes la-04's status/source_ref schema on the recall side. Default recall behavior must
+  be confirmed-only across repos/company tier, so another agent on a different branch never
+  inherits unmerged work as ground truth. Same-branch/same-session recall may include the
+  caller's own provisional writes (an agent should see its own in-flight work).
+
+  Testing bar (decided 2026-08-13): unit tests on status transitions, a real subprocess
+  integration test, and live dogfooding in this repo — all three.
+
+acceptance_criteria:
+  - "Given entries with status=provisional written on branch X, when an agent on a different branch Y recalls, then those entries are excluded by default"
+  - "Given entries with status=provisional written on the CALLER's own current branch, when that same caller recalls, then those entries ARE included by default"
+  - "Given an explicit opt-in flag/param, when recall is called with it, then cross-branch provisional entries can be included on demand (for explicit review/debugging use cases)"
+  - "Given a real subprocess-level integration test (per the decided testing bar), when a provisional write happens on a real branch and a recall happens from a different real branch/process, then filtering behaves correctly end-to-end, not just at the unit level"
+
+steps:
+  - id: research
+    description: Review la-04's shipped schema and hive-memory's own existing valid_from/valid_until read-path filtering (if any) for a consistent filtering approach.
+    agent: researcher
+  - id: test-spec
+    description: Write failing unit tests for status-based filtering logic, plus a real subprocess integration test spawning two branch contexts.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement recall-side status filtering with the same-branch-provisional-inclusive default.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the subprocess integration test genuinely exercises two real branches, not a mocked shortcut (same rigor as pl-02's regression test).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-layer-architecture-v2 (based on dev).
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: docs/layer-architecture-v2-plan.md
+      purpose: "§2 — flight-status recall-filtering rationale"
+
+files_to_modify:
+  - file: src/engine.mjs
+    change: "Add status filtering to the recall read path"
+  - file: lib/mnemosyne/client.ts
+    change: "Thread status-filter options through recall()"
+
+risks:
+  - severity: high
+    description: "A filtering bug that leaks provisional/unmerged content across branches as if confirmed defeats the entire point of this feature"
+    mitigation: "Real subprocess integration test is mandatory, not optional, per the decided testing bar — no unit-test-only sign-off"
