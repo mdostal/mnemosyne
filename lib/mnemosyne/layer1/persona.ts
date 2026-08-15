@@ -12,8 +12,8 @@
  *
  * Personas are split across two storage levels by tier (design-discussion.md
  * §3a, operator-resolved): `top-orchestrator` / `company-director` /
- * `project-orchestrator` live in the GLOBAL store (not built in this story);
- * `code-architect` lives in the REPO-LOCAL store
+ * `project-orchestrator` live in the GLOBAL store (persona-store-global.ts,
+ * pf-06); `code-architect` lives in the REPO-LOCAL store
  * (persona-store-repo-local.ts). `PERSONA_STORE_BY_TIER` is the single
  * source of truth for that split — both store backends and any future
  * caller should consult it rather than hardcoding the mapping again.
@@ -27,18 +27,18 @@ import { readRepoLocalPersona, repoLocalPersonaPath } from './persona-store-repo
 
 /**
  * Which of the two storage levels (design-discussion.md §3a) a given tier's
- * personas live in. `global` = `~/.mnemosyne/personas/` (not built in this
- * story — see pf-01's later sibling story for the global store). `repo-local`
- * = `<repoRoot>/.mnemosyne/personas/` (persona-store-repo-local.ts, this
- * story).
+ * personas live in. `global` = `~/.mnemosyne/personas/<tier>/<scopeId>.yaml`
+ * (persona-store-global.ts, pf-06). `repo-local` =
+ * `<repoRoot>/.mnemosyne/personas/<scopeId>.yaml`
+ * (persona-store-repo-local.ts, pf-01).
  */
 export type PersonaStoreKind = 'global' | 'repo-local';
 
 /**
  * The two-store split, keyed by tier. `code-architect` is the only tier the
- * repo-local store accepts — everything else belongs in the (not-yet-built)
- * global store. Both store backends should guard writes against this map
- * rather than re-deriving the split independently.
+ * repo-local store accepts — everything else belongs in the global store
+ * (persona-store-global.ts). Both store backends should guard writes
+ * against this map rather than re-deriving the split independently.
  */
 export const PERSONA_STORE_BY_TIER: Record<Tier, PersonaStoreKind> = {
   'top-orchestrator': 'global',
@@ -193,10 +193,13 @@ function reinjectMandateSections(base: Omit<TierContent, 'mandateSections'>): Ti
  *     hardcoded `TIER_CONTENT['code-architect']` and logs/warns that the
  *     fallback fired -- NOT silent, so an empty repo-local store doesn't go
  *     unnoticed (also the safety net pf-08's seed script relies on later).
- *   - every other tier (global store, not built until pf-06/pf-07): returns
- *     `TIER_CONTENT[tier]` unchanged -- identical to today's
- *     `getTierContent` behavior. Zero regression risk for global tiers in
- *     this slice.
+ *   - every other tier (global store): returns `TIER_CONTENT[tier]`
+ *     unchanged -- identical to today's `getTierContent` behavior. The
+ *     global store's storage backend now exists (persona-store-global.ts,
+ *     pf-06), but wiring it into THIS dispatch function is deliberately
+ *     deferred to pf-07 -- pf-06 only builds and wires the storage backend
+ *     into `PERSONA_STORE_BY_TIER`, it does not change how content gets
+ *     resolved. Zero regression risk for global tiers in this slice.
  *
  * `getTierContent(tier)`'s old bare-tier signature is fully removed by this
  * story (tiers.ts no longer exports it) -- this is the one and only
@@ -208,8 +211,9 @@ export function getPersonaContent(tier: Tier, scopeId: string, ctx: PersonaConte
   }
 
   if (PERSONA_STORE_BY_TIER[tier] !== 'repo-local') {
-    // Global tiers -- the global store doesn't exist until pf-06/pf-07.
-    // Unchanged path, identical to today's getTierContent(tier).
+    // Global tiers -- the global store's backend exists (persona-store-global.ts, pf-06), but
+    // wiring it into dispatch here is pf-07's job, not this story's. Unchanged path, identical
+    // to today's getTierContent(tier).
     return TIER_CONTENT[tier];
   }
 
