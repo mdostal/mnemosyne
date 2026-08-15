@@ -75,6 +75,13 @@ import {
   reindex,
   resetScopeMapCache,
 } from "./engine.mjs";
+import {
+  isGraphifyConfigured,
+  graphifyStatsAction,
+  graphifyEdgesAction,
+  graphifyImpactAction,
+  graphifyDepsAction,
+} from "../bin/graphify-bridge.mjs";
 
 const PORT = Number(process.env.PORT || 8477);
 const SERVICE = { god: "mnemosyne", role: "memory", version: "0.1.0" };
@@ -352,19 +359,39 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ...SERVICE, ...result, took_ms: Date.now() - t0 });
     }
 
-    // --- Graph (s-04): READ-ONLY impact-graph exploration ------------------
-    // Wraps only swarm-memory's graph QUERY verbs (stats/edges/impact/deps).
-    // `graph add`/`graph remove` (the graph's mutation verbs) are never
-    // wrapped by engine.mjs and no route below reaches them — graph mutation
-    // is out of scope for this story (see s-04-graph-view.yaml).
+    // --- Graph (s-04, extended by la-02-graphify-adapter, soft-defaulted by
+    // cr-01-graphify-default-layer): READ-ONLY impact-graph exploration.
+    // isGraphifyConfigured() (bin/graphify-bridge.mjs) decides the backend
+    // per request, not a plain "did MNEMOSYNE_LAYERS mention graphify"
+    // check:
+    //   - MNEMOSYNE_LAYERS explicitly names "graphify" -> graphify, always;
+    //     a missing binary fails loudly (500), never silently downgraded.
+    //   - MNEMOSYNE_LAYERS explicitly names something else (e.g. just
+    //     "vector") -> swarm-memory's graph QUERY verbs via engine.mjs,
+    //     always -- graphify is never even attempted (pluggability).
+    //   - MNEMOSYNE_LAYERS entirely unset (bare install) -> SOFT default:
+    //     graphify if its binary is on PATH, else the swarm-memory-backed
+    //     path below with a loud console.warn() (not a hard failure) --
+    //     preserves the zero-required-external-binary promise for a bare
+    //     install (see SERVICE.md's "Graph" section, and
+    //     bin/mnemosyne-mcp.mjs's identical wireGraphTools() pattern — this
+    //     mirrors it for the browser UI, not just MCP). `graph add`/`graph
+    //     remove` (mutation verbs) are never wrapped by either backend and
+    //     no route below reaches them — mutation is out of scope.
 
     if (route === "GET /graph/stats") {
+      if (isGraphifyConfigured()) {
+        return send(res, 200, await graphifyStatsAction());
+      }
       const stats = await graphStats();
       return send(res, 200, { ...stats, took_ms: Date.now() - t0 });
     }
 
     if (req.method === "GET" && url.pathname === "/graph/edges") {
       const node = url.searchParams.get("node") || undefined;
+      if (isGraphifyConfigured()) {
+        return send(res, 200, await graphifyEdgesAction(PORT, { node }));
+      }
       const edges = await graphEdges(node);
       return send(res, 200, { node: node || null, count: edges.length, edges, took_ms: Date.now() - t0 });
     }
@@ -372,14 +399,22 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname.startsWith("/graph/impact/")) {
       const node = decodeURIComponent(url.pathname.slice("/graph/impact/".length));
       const depthParam = url.searchParams.get("depth");
-      const impact = await graphImpact(node, { depth: depthParam != null ? Number(depthParam) : undefined });
+      const depth = depthParam != null ? Number(depthParam) : undefined;
+      if (isGraphifyConfigured()) {
+        return send(res, 200, await graphifyImpactAction(PORT, node, { depth }));
+      }
+      const impact = await graphImpact(node, { depth });
       return send(res, 200, { node, count: impact.length, impact, took_ms: Date.now() - t0 });
     }
 
     if (req.method === "GET" && url.pathname.startsWith("/graph/deps/")) {
       const node = decodeURIComponent(url.pathname.slice("/graph/deps/".length));
       const depthParam = url.searchParams.get("depth");
-      const deps = await graphDeps(node, { depth: depthParam != null ? Number(depthParam) : undefined });
+      const depth = depthParam != null ? Number(depthParam) : undefined;
+      if (isGraphifyConfigured()) {
+        return send(res, 200, await graphifyDepsAction(PORT, node, { depth }));
+      }
+      const deps = await graphDeps(node, { depth });
       return send(res, 200, { node, count: deps.length, deps, took_ms: Date.now() - t0 });
     }
 

@@ -1,0 +1,71 @@
+id: cr-03-crossrepo-linker-regression-tests
+epic: mnemosyne-crossrepo-defaults
+title: Cross-repo linker regression tests against realistic synthetic fixtures
+status: complete
+note: "Built lib/mnemosyne/layers/__tests__/CrossRepoLinkerAdapter.regression.test.ts -- a SEPARATE fixture-repo suite from cr-02's own unit tests, exercising the real (not mocked) CrossRepoLinkerAdapter against busier/more realistic hermetic mkdtemp() repos (decoy schemas/queries sharing no identifiers with the case under test, a tool.ts whose `fields` array -- itself full of nested `type: 'string'`-shaped keys -- precedes its own `type: 'document'` key, forcing the adapter's lazy [\\s\\S]{0,400}? window to skip past several false type: matches, exactly the shape its header comment documents). AC1 (definer/consumer/unrelated): recall('tool') returns exactly 2 hits (1 Definition + 1 cross-repo usage), zero touching the unrelated repo; a companion test confirms the unrelated repo's own 'recipe' identifier stays fully confined to itself. AC2 (fork/duplicate-definition case): built forkA+forkB repos with IDENTICAL tool.ts content and NO query files in either (reproducing the real personal-site/me-mdostal-com finding exactly). Traced cr-02's recall() precisely: matchingDefs finds both repos' definitions; for each def, usagesForIdentifier is empty (scanAllRepos found zero usage sites anywhere), so the per-definition loop's usage-hit-emission branch never executes. VERIFIED (not assumed) real behavior: recall('tool') returns exactly 2 hits, both 'Definition:' hits (one per repo), and NO hit of any kind (cross-repo or same-repo) ever mentions 'usage' -- confirmed by mutation-testing the adapter (temporarily forcing a spurious usage-hit emission on zero-usage definitions) and watching this exact test fail, then reverting. So: the linker's actual behavior on a duplicate-definition fork is to report it as two independent Definition hits (a duplicate-definition signal, via 2 separate Definition provenance records) and NEVER frame it as cross-repo usage -- exactly the 'sane' behavior the story asked to confirm, with zero adapter changes needed. AC3 (determinism): a test literally deletes and regenerates all 3 fixture repos between two full scenario runs, normalizes away the (necessarily different) mkdtemp absolute paths, and asserts the two runs' hit sets are deep-equal. Full suite run: all vitest suites pass (397 tests, 31/32 files) plus every test/*.mjs script; the sole failure is the pre-existing CodeGraphLayerAdapter.test.ts better-sqlite3 worker-fork crash, confirmed byte-identical (same file, same error) on a clean cr-02 HEAD with this story's changes fully stashed -- not worsened."
+complexity: medium
+methodology: tdd
+depends_on: [cr-02-crossrepo-identifier-linker]
+
+description: |
+  cr-02 ships with its own test-spec-driven unit tests (written first, per TDD).
+  This story adds a SEPARATE, higher-rigor regression layer: realistic synthetic
+  fixture repos that reproduce the actual shape of the real-world case this whole
+  feature is based on (mdostal/personal-site defining a Sanity 'tool' schema type,
+  mdostal/mdostal-tools-hub querying it via GROQ) -- close enough in structure that
+  a future regression in the matching logic would be caught, without depending on
+  cloning real external repos in CI (hermetic, fast, deterministic).
+
+  Build at least 3 small fixture repos (temp directories, not real git clones):
+    1. A "schema-definer" repo with a realistic Sanity schema file (same shape as
+       personal-site/sanity/schemas/tool.ts -- name/title/type:'document' fields).
+    2. A "consumer" repo with a realistic GROQ query file referencing that type
+       (same shape as mdostal-tools-hub/src/lib/sanity.ts's allToolsQuery).
+    3. An "unrelated" repo with its own schema/query pair that shares NO
+       identifiers with the other two -- the negative control, proves the linker
+       doesn't produce false positives by matching everything to everything.
+
+  Also add at least one edge case the real prototype run actually surfaced:
+  the "fork" scenario (two repos with near-identical/duplicated schema
+  definitions, like personal-site vs. its own fork me-mdostal-com) -- confirm the
+  linker's behavior here is sane (it found IDENTICAL schema type names in both,
+  which is a duplicate-definition case, not a cross-repo USAGE case -- decide and
+  test what the layer should report: likely nothing/a distinct signal, not a false
+  "cross-repo usage" claim, since neither queries the other).
+
+acceptance_criteria:
+  - "Given the 3-fixture-repo setup (definer, consumer, unrelated), when the linker runs, then it finds exactly the definer->consumer link and reports zero links involving the unrelated repo"
+  - "Given the fork-scenario fixture (two repos with identical schema definitions, neither querying the other), when the linker runs, then it does not report a false cross-repo usage link between them"
+  - "Given the fixtures are deleted/regenerated between test runs, when the suite runs twice, then results are identical (deterministic, no ordering flakiness)"
+
+steps:
+  - id: research
+    description: Read cr-02's shipped adapter and its own unit tests in full before adding this regression layer, to avoid duplicating coverage that already exists at the unit level.
+    agent: researcher
+  - id: implement
+    description: Build the fixture repos and the regression test file exercising them against the real cr-02 adapter (not mocked).
+    agent: developer
+    depends_on: [research]
+  - id: review
+    description: Confirm the fixtures are realistic (same shape as the real personal-site/tools-hub case, not a trivial toy example), confirm the negative control and fork-scenario cases are both genuinely tested.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-crossrepo-defaults (based on dev).
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: lib/mnemosyne/layers/CrossRepoLinkerAdapter.ts
+      purpose: "The adapter under test, shipped by cr-02 -- read its actual shipped shape, not the story spec, before writing fixtures"
+
+files_to_modify:
+  - file: lib/mnemosyne/layers/__tests__/CrossRepoLinkerAdapter.regression.test.ts
+    change: "New: realistic fixture-repo regression suite"
+
+risks:
+  - severity: low
+    description: "Fixtures drifting from the real Sanity schema/GROQ shape over time as the actual repos evolve, becoming a stale reproduction"
+    mitigation: "Fixtures are a deliberately minimal reproduction of the STRUCTURAL pattern (name+type:document, _type== query), not a copy of real file content -- durable to the real repos changing"

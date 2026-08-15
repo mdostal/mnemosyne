@@ -1,0 +1,111 @@
+id: cr-02-crossrepo-identifier-linker
+epic: mnemosyne-crossrepo-defaults
+title: Cross-repo shared-identifier linker layer (generalized Sanity-type-crossref prototype)
+status: complete
+complexity: high
+methodology: tdd
+depends_on: []
+note: "Built lib/mnemosyne/layers/CrossRepoLinkerAdapter.ts (layer name \"crossref-linker\", registered in registry.ts alongside every other layer, added to the `Layer` union in interfaces.ts) + a TDD unit suite in __tests__/CrossRepoLinkerAdapter.test.ts (14 tests, written first against the real module path before it existed -- confirmed red, then green). Multi-repo config is its own shape (`repos: Array<string | { path, name? }>`, 2+ required), not the single-repoRoot pattern every other layer uses. \"Scheme\" seam is CrossRefScheme (findDefinitions/findUsages over one file's content); exactly one built-in scheme ships (\"sanity\"): a `name: 'X', ..., type: 'document'` definition regex (lazy window + literal \"document\" requirement so a nested field's `type: 'string'` can't falsely terminate the search) and two usage regexes covering both real GROQ forms (`_type == \"X\"` and `_type in [...]`). Loud failure at construction: throws on zero repos, throws on exactly 1 repo (cross-repo linking is structurally impossible with fewer than 2 -- a deliberate extension beyond the AC's literal \"zero repos\" wording, same ethos), throws on a nonexistent repo path, throws on a repo path that isn't a directory, throws on an unknown scheme name. Verified for real: 'finds the definer->consumer cross-repo link with real file:line provenance on both sides' reproduces the exact validated prototype shape (Sanity 'tool' document type defined in a personal-site-shaped fixture, queried via a GROQ template string in a mdostal-tools-hub-shaped fixture) and asserts the literal file:line provenance strings on both the definition and cross-repo usage hits. Negative-control tests ('an identifier used only WITHIN one repo is reported as NOT cross-repo' and 'the unrelated repo never appears in tool results') prove no false positives. Pluggability (AC4) verified two ways: registry.test.ts confirms `defaultRegistry().has('crossref-linker')` while `DEFAULT_LAYER_STACK_CONFIG` (config.ts, untouched by this story) still resolves to exactly ['code-graph','vector','file']; client.ts/config.ts were not modified at all, since pl-01's registry+config resolution is already fully generic -- registering a new factory has zero effect on any consumer that doesn't name it in MNEMOSYNE_LAYERS. Full suite run: `npm run typecheck` clean; `npm test` passes (all shell-script suites green) plus vitest 30/31 files, 393/396 tests -- the 1 remaining error is the pre-existing better-sqlite3/CodeGraphLayerAdapter worker crash, confirmed present and byte-identical (29/30 files, 1 error) on the unmodified branch via `git stash`, i.e. not introduced or worsened by this story. cr-03 (separate story) adds a deeper fixture-repo regression suite, including the fork/duplicate-definition scenario, on top of this adapter."
+
+description: |
+  A real, validated finding from this epic's own research: Graphify's AST-based
+  cross-repo merge finds ZERO cross-repo edges whenever the real relationship
+  between repos is a network API or shared external SaaS backend rather than a
+  shared imported package -- confirmed on THREE separate real repo pairings
+  (mnemosyne+minerva, event-api+shindig, personal-site+mdostal-tools-hub+
+  me-mdostal-com). A working alternative was prototyped by hand (a Python script,
+  not committed) and validated against real code: cross-referencing schema/type
+  DEFINITION sites against QUERY/USAGE sites by shared string identifier correctly
+  found the real link Graphify's merge missed (Sanity's `tool` document type,
+  defined in mdostal/personal-site, queried from mdostal/mdostal-tools-hub).
+
+  This story builds that prototype into a real, first-class Mnemosyne layer.
+
+  CRITICAL ARCHITECTURAL CONSTRAINT (operator's explicit instruction): this is an
+  OPTIONAL, OPT-IN layer like every other one -- register it under a new layer
+  name (e.g. "crossref-linker") via the existing pl-01 LayerRegistry, resolvable
+  via MNEMOSYNE_LAYERS exactly like "graphify"/"vector"/"file". A consumer running
+  pure-vector-only or pure-file-only must be completely unaffected by this layer
+  existing in the registry -- it is never invoked unless explicitly configured.
+
+  Genuinely new architectural shape, unlike every existing layer: every current
+  LayerAdapter (vector, file, code-graph, graphify) operates on ONE repoRoot. This
+  layer is inherently MULTI-repo -- its config must accept a LIST of repo roots to
+  scan (not a single one), since the whole point is finding relationships BETWEEN
+  repos. Design this config shape deliberately, don't bolt it onto the single-root
+  pattern.
+
+  Design (generalize the validated prototype, don't just port the Sanity-specific
+  script verbatim):
+  1. A "scheme" concept -- a pluggable pattern-pair (a regex/matcher for where an
+     identifier is DEFINED, a regex/matcher for where it's USED/QUERIED) so this
+     isn't hardcoded to Sanity's specific syntax. Ship ONE real built-in scheme
+     ("sanity": schema files matching `name: 'X', ... type: 'document'` as
+     definitions, `_type == "X"` / `_type in [...]` as usages) -- proven against
+     real code already. Leave the scheme mechanism generic enough that a future
+     story could add an "api-routes" or "graphql-types" scheme without redesigning
+     the adapter, but do NOT build speculative extra schemes now -- one real,
+     validated scheme is the deliverable.
+  2. `recall(query, options)`: given a query term, search across all configured
+     repos for identifiers matching it, and return Hits describing BOTH the
+     definition site(s) and cross-repo usage site(s) with real file:line
+     provenance -- this is the payoff, the whole point is surfacing "repo A
+     defines this, repo B uses it" in one answer.
+  3. Loud failure per this repo's whole ethos: a configured repo path that doesn't
+     exist, or zero repos configured, must fail loudly at construction time, not
+     silently return empty results.
+
+acceptance_criteria:
+  - "Given a config listing 2+ real repo paths, when recall() is queried for an identifier defined in one repo and used in another, then the result includes both the definition site and the cross-repo usage site with real file:line provenance"
+  - "Given the exact real-world case this story is based on (a schema type defined in one repo, queried via GROQ in another), when tested against realistic fixture repos reproducing that shape, then the layer finds it -- this is the regression test for the validated finding, not a synthetic unrelated example"
+  - "Given an identifier only used WITHIN one repo (no other repo references it), when queried, then it is correctly reported as NOT cross-repo (no false positives)"
+  - "Given the layer is registered but not included in a consumer's MNEMOSYNE_LAYERS config, when that consumer runs recall()/remember() normally, then this layer is never invoked and has zero effect on behavior -- pluggability is not compromised"
+  - "Given a configured repo path that does not exist on disk, when the layer is constructed, then it fails loudly with an actionable error, never a silent empty layer"
+
+steps:
+  - id: research
+    description: Read la-02's GraphifyLayerAdapter.ts in full as the adapter-shape reference (loud failure pattern, LayerAdapter contract, options resolution). Re-derive the real Sanity scheme's regex patterns from the actual validated prototype findings in this epic's notes -- don't guess at the pattern shape from scratch.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for the scheme-matching core logic, the multi-repo config shape, and recall() against realistic fixture repos (small, synthetic, hermetic -- do NOT depend on cloning real external repos in tests).
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement lib/mnemosyne/layers/CrossRepoLinkerAdapter.ts (or equivalent), register it in registry.ts under a new layer name, wire the "sanity" scheme.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the multi-repo config shape is clean (not a bolted-on single-repo pattern), confirm zero effect when not configured, confirm loud failure on bad config.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-crossrepo-defaults (based on dev).
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: lib/mnemosyne/layers/GraphifyLayerAdapter.ts
+      purpose: "Reference adapter shape (loud failure, LayerAdapter contract) -- but note this new layer's config is multi-repo, genuinely different from every existing single-repoRoot layer"
+    - path: lib/mnemosyne/layers/registry.ts
+      purpose: "Where the new layer self-registers, following pl-01's explicit-registration convention"
+    - path: docs/layer-architecture-v2-plan.md
+      purpose: "The cross-repo findings this story is built on -- read the relevant sections before designing"
+
+files_to_modify:
+  - file: lib/mnemosyne/layers/CrossRepoLinkerAdapter.ts
+    change: "New: multi-repo identifier-scheme cross-referencer, first scheme is 'sanity'"
+  - file: lib/mnemosyne/layers/registry.ts
+    change: "Register the new layer name"
+
+design_decisions:
+  - decision: "Multi-repo config (list of repo roots), not the single-repoRoot pattern every other layer uses"
+    rationale: "The layer's entire purpose is finding relationships BETWEEN repos -- a single-root config would make that structurally impossible"
+  - decision: "One real, validated scheme (sanity) shipped now; scheme mechanism left generic but no speculative extra schemes built"
+    rationale: "Avoid over-building on unvalidated assumptions about what a future 'api-routes' or 'graphql-types' scheme would need -- ship what's proven, leave the seam open"
+
+risks:
+  - severity: medium
+    description: "A generic 'scheme' abstraction designed for exactly one real use case (Sanity) risks being either too narrow (doesn't generalize) or over-engineered (abstracts things that don't need it yet)"
+    mitigation: "Keep the scheme interface to the minimum two regex/matcher functions the Sanity case actually needs -- resist adding configuration knobs with no second real use case to validate them against"

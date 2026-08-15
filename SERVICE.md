@@ -84,6 +84,11 @@ PORT=8477 bin/mnemosyne            # foreground
 nohup env PORT=8477 node src/server.mjs > ~/.local/share/mnemosyne/mnemosyne.log 2>&1 &
 ```
 
+**Recommended, not required:** `uv tool install graphifyy` installs the
+`graphify` CLI that now backs `GET /graph/*` by default (see "Graph" below)
+— a bare install with no `graphify` on PATH still runs the service exactly
+as before, no extra setup needed.
+
 Smoke test (health + scopes + recall + remember round-trip):
 
 ```bash
@@ -159,32 +164,63 @@ recall in disguise.
 
 ## Graph (GET /graph/*)
 
-The `/ui` Graph panel renders swarm-memory's real impact graph — backed by
-`~/.local/share/swarm-memory/graph.sqlite` (populated by `swarm-memory graph
-scan` from markdown-link + python-import scans) — as a vanilla SVG node-link
+The `/ui` Graph panel renders an impact graph as a vanilla SVG node-link
 diagram. No charting/graph-viz library is used (zero-dep guardrail); layout
 is a small in-browser force-directed simulation (`ui/app.js`'s
 `forceLayout()`), fine at the tens-of-nodes scale this graph runs at today.
 
-- `GET /graph/stats` wraps `swarm-memory graph stats` directly — the panel's
-  header node/edge counts always match what that CLI command reports.
-- `GET /graph/edges` (optionally `?node=`) wraps `swarm-memory graph edges
-  [node]`; the diagram's node set is the union of every edge's `src`/`dst`.
-- Clicking a node fires `GET /graph/impact/:node` and `GET /graph/deps/:node`
-  (URL-encoded; node ids containing `/` round-trip correctly) in parallel and
-  renders both lists in a side inspector panel — each matches
-  `swarm-memory graph impact NODE` / `graph deps NODE` run directly. An
-  unknown node returns `[]` (not an error) from both, matching the CLI's own
-  behavior.
-- Zero edges (fresh install, empty `graph.sqlite`) renders an explicit empty
-  state ("Graph is empty…"), never a broken/blank render.
+**Backend: [Graphify](https://github.com/Graphify-Labs/graphify) by default,
+soft-falling-back to `swarm-memory graph *` (cr-01-graphify-default-layer,
+2026-08-14).** A real A/B benchmark against this repo
+(`docs/layer-architecture-v2-plan.md` §7) found `swarm-memory`'s backing
+`graph.sqlite` had **zero** nodes from this repo (22 nodes total, all from
+two unrelated repos — it has no per-repo scoping at all), while Graphify
+indexed **1470 real nodes / 2484 links** from this repo's own source, at 33%
+lower average latency. That's the reason Graphify is now the default graph
+backend, not an equal alternative:
 
-**Read-only, hard constraint:** this is graph *exploration* only.
-`swarm-memory graph add` / `graph remove` (the graph's mutation verbs) are
-never wrapped by `engine.mjs`, never routed by `server.mjs`, and never called
-by `ui/app.js` — no UI action can reach them. See `test/graph-route.mjs`'s
-"hard constraint" block, which greps the actual source for reachable
-fetch()/route/CLI-argv patterns (not just prose) to prove this.
+- `uv tool install graphifyy` is **recommended, not required.** `GET
+  /graph/*` (`bin/graphify-bridge.mjs`) tries Graphify first ONLY when
+  `MNEMOSYNE_LAYERS` is entirely unset (a bare, unconfigured install). If the
+  `graphify` binary isn't on PATH, it falls back to the `swarm-memory`-backed
+  path below with a **loud `console.warn()`** (never a silent downgrade, and
+  never a hard failure) — a fresh install with no `graphify` binary keeps
+  working exactly as it always did.
+- If `MNEMOSYNE_LAYERS` **explicitly** configures a `"graphify"` layer, a
+  missing binary fails loudly (500, actionable error naming the install
+  command) instead of silently falling back — an explicit request is an
+  explicit requirement.
+- If `MNEMOSYNE_LAYERS` explicitly configures something else (e.g. a single
+  `"vector"` layer), Graphify is **never invoked at all**, PATH or no PATH —
+  Mnemosyne's pluggability guarantee: an explicit config is always
+  authoritative, never second-guessed.
+- `GET /graph/stats` reports `db` pointing at Graphify's own `graph.json`
+  when Graphify backs the response (vs. `swarm-memory`'s `graph.sqlite` path
+  otherwise) — that's the reliable way to tell which backend actually served
+  a given response.
+- `GET /graph/edges` (optionally `?node=`), `GET /graph/impact/:node`, and
+  `GET /graph/deps/:node` mirror the same `{node, count, edges/impact/deps,
+  took_ms}` envelope regardless of backend — an unknown node returns `[]`
+  (not an error) from both.
+- Zero edges (fresh install, empty graph) renders an explicit empty state
+  ("Graph is empty…"), never a broken/blank render.
+
+The pre-Graphify path (`swarm-memory graph *`, still the explicit-opt-in and
+fallback backend) is backed by `~/.local/share/swarm-memory/graph.sqlite`
+(populated by `swarm-memory graph scan` from markdown-link + python-import
+scans) — see `bin/graphify-bridge.mjs`'s `isGraphifyConfigured()` for the
+exact gating logic, and `test/graph-route.mjs` for real-subprocess coverage
+of every branch above (soft default available, soft default unavailable,
+explicit-config hard-fail, explicit-non-graphify-config never-invoked).
+
+**Read-only, hard constraint:** this is graph *exploration* only, on either
+backend. `swarm-memory graph add` / `graph remove` (the graph's mutation
+verbs) are never wrapped by `engine.mjs`, never routed by `server.mjs`, and
+never called by `ui/app.js` — no UI action can reach them, and Graphify's
+bridge (`bin/graphify-bridge.mjs`) only ever reads `graph.json`, never
+writes it. See `test/graph-route.mjs`'s "hard constraint" block, which greps
+the actual source for reachable fetch()/route/CLI-argv patterns (not just
+prose) to prove this.
 
 ## Operations (Reindex / Refresh config cache)
 

@@ -105,7 +105,27 @@ own already-adopted (`la-02`) per-repo Graphify graph on demand, not by maintain
 permanently-fused blob. This is a sketch for a future story if/when company-director-tier work
 is actually scheduled — not built here; `la-09` is evaluation-only per its own spec.
 
-## 2. New design element: flight-status-aware memory (agreed direction, mechanism proposed)
+**Follow-up finding, stronger evidence (2026-08-14, post-shipment, live UI feedback session):**
+`la-09`'s zero-cross-repo-edges result used two repos (mnemosyne + minerva) with no known real
+relationship, leaving open whether the merge tool just hadn't been tested on a genuine case.
+Re-ran the exact same `merge-graphs` test on `firefly-events/event-api` + `firefly-events/shindig`
+— a pair with a CONFIRMED real dependency (shindig's `ShindigConfig.ios.kt` hardcodes
+`"https://ff-events-api.fly.dev"` as its API base URL; event-api has real route handlers,
+`eventRoutes()` etc.). Result: still **zero** cross-repo edges (0 of 25,906 merged links connect
+the two repos). Root cause confirmed, not assumed: the dependency is a runtime HTTP call captured
+by Graphify only as a string literal inside shindig's own AST — there is no import/reference
+edge for a static AST parser to find, because the two repos communicate over the network, not
+via a shared imported package.
+
+**Sharper conclusion:** Graphify's cross-repo merge can only surface *shared-package*
+dependencies (a real `import`), not *network-API* dependencies (a URL string resolved at
+runtime) — which is probably how most of a real multi-service company's ~50 codebases actually
+relate to each other. Company-director-tier cross-repo impact needs a mechanism this merge
+doesn't provide: candidates for a future story, not designed yet — matching known API
+base-URL strings against other repos' route definitions, an explicit
+service-dependency manifest (human- or LLM-authored), or OpenAPI-spec cross-referencing.
+Local experiment (fresh clones, gitignored, disposable, never indexed into production memory):
+`.graph-test-repos/` in this repo.
 
 **Problem the operator raised:** work in progress on a feature branch is true *for that branch*, not globally true, until a PR merges. An agent must not build on another branch's unmerged memory as if it were confirmed ground truth. This likely extends to the Layer 3 code graph too (built from whatever's checked out, not just main).
 

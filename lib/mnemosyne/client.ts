@@ -6,7 +6,10 @@
  *
  * Story: s2-02-client-library (epic: mnemosyne-operational-slice-2)
  * Updated: s2-07-code-graph-layer-adapter adds structural impact recall
- * ahead of vector/file.
+ * ahead of vector/file. Updated again: cr-01-graphify-default-layer changes
+ * the unconfigured default's structural-graph slot from 'code-graph' to
+ * 'graphify' (see layers/config.ts's doc comment for why, and its soft
+ * PATH-availability fallback back to 'code-graph' for bare installs).
  *
  * NOTE on sync vs. async: `interfaces.ts` declares `RecallFn`/`RememberFn`
  * as synchronous for contract-literalism reasons (see that file's docs on
@@ -14,10 +17,11 @@
  * `Promise<...>` instead, per the story's accepted async/sync mismatch —
  * every layer adapter does real I/O and cannot be synchronous.
  *
- * Layer selection: code-graph is queried first for structural impact recall.
- * If it has no hits, Mnemosyne falls through to vector recall, then the file
- * layer as the final floor. Layer failures are recorded as skipped layers and
- * surfaced through `degraded: true` — never silently dropped.
+ * Layer selection: the structural-graph layer (graphify by default, or
+ * code-graph — see layers/config.ts) is queried first for structural impact
+ * recall. If it has no hits, Mnemosyne falls through to vector recall, then
+ * the file layer as the final floor. Layer failures are recorded as skipped
+ * layers and surfaced through `degraded: true` — never silently dropped.
  */
 
 import { createHash } from 'node:crypto';
@@ -30,11 +34,13 @@ import { detectGitContext, GitContextDetectionError } from './flight-status.js';
 import { filterHitsByStatus } from './status-filter.js';
 // Side-effect import: registers "hive-memory" into defaultRegistry() (see
 // HiveMemoryLayerAdapter.ts's bottom). Not part of the default layer stack
-// (config.ts's DEFAULT_LAYER_STACK is still [code-graph, vector, file]) --
-// this only makes the name resolvable so MNEMOSYNE_LAYERS / a config file
-// can actually opt into it. Without this import, defaultRegistry() never
-// learns about "hive-memory" in a real running process (only test files and
-// benchmarks/layer-ab-test.ts imported it directly, which masked this gap).
+// (config.ts's DEFAULT_LAYER_STACK_CONFIG is [graphify, vector, file] as of
+// cr-01-graphify-default-layer, soft-falling-back to [code-graph, vector,
+// file] only when graphify isn't on PATH) -- this only makes the name
+// resolvable so MNEMOSYNE_LAYERS / a config file can actually opt into it.
+// Without this import, defaultRegistry() never learns about "hive-memory"
+// in a real running process (only test files and benchmarks/layer-ab-test.ts
+// imported it directly, which masked this gap).
 import './layers/HiveMemoryLayerAdapter.js';
 import type {
   Content,
@@ -52,9 +58,15 @@ export interface MnemosyneClientOptions {
   /** Directory the file layer searches. Defaults to `process.cwd()`. */
   rootDirectory?: string;
   /**
-   * Override the code-graph adapter slot (mainly for tests). Takes priority
-   * over whatever the resolved layer stack would otherwise construct for
-   * the 'code-graph' name.
+   * Override the structural-graph adapter slot (mainly for tests). Takes
+   * priority over whatever the resolved layer stack would otherwise
+   * construct for that slot. cr-01-graphify-default-layer: the
+   * unconfigured default's first slot is now named 'graphify', not
+   * 'code-graph' — this override applies to BOTH names (see
+   * legacyOverrideByName below) so every existing caller that passes
+   * `codeGraphLayer` to stub out "whichever adapter fills the first/
+   * structural-graph cascade slot" keeps working unchanged, regardless of
+   * which name the resolved stack currently uses for that slot.
    */
   codeGraphLayer?: LayerAdapter;
   /** Override the vector adapter slot (mainly for tests). See codeGraphLayer. */
@@ -122,6 +134,12 @@ export class MnemosyneClient {
     // without requiring them to learn the new registry/config API.
     const legacyOverrideByName: Partial<Record<string, LayerAdapter>> = {
       'code-graph': options.codeGraphLayer,
+      // graphify (cr-01-graphify-default-layer): see MnemosyneClientOptions.codeGraphLayer's
+      // doc comment above — the SAME override now also applies when the resolved
+      // stack names the structural-graph slot 'graphify' (the new unconfigured
+      // default's first entry), so existing callers never need to learn a new
+      // option name just because the default's slot name changed.
+      graphify: options.codeGraphLayer,
       vector: options.vectorLayer,
       file: options.layerAdapter,
     };

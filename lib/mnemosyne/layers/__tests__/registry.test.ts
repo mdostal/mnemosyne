@@ -64,4 +64,29 @@ describe('LayerRegistry', () => {
   it('defaultRegistry() is a stable singleton across calls', () => {
     expect(defaultRegistry()).toBe(defaultRegistry());
   });
+
+  it('defaultRegistry() also has "crossref-linker" (cr-02) registered', () => {
+    const registry = defaultRegistry();
+    expect(registry.has('crossref-linker')).toBe(true);
+  });
+
+  it('creates a real CrossRepoLinkerAdapter from the registry, resolvable purely by name', () => {
+    const registry = defaultRegistry();
+    // /tmp and process.cwd() are always real directories -- 2 real repo
+    // roots, satisfying CrossRepoLinkerAdapter's own construction-time
+    // loud-failure checks without depending on any external fixture.
+    const adapter = registry.create('crossref-linker', { repos: ['/tmp', process.cwd()] });
+    expect(adapter.layer).toBe('crossref-linker');
+  });
+
+  it('"crossref-linker" being registered has zero effect on the unconfigured default layer stack', async () => {
+    const { DEFAULT_LAYER_STACK_CONFIG } = await import('../config.js');
+    // cr-01-graphify-default-layer: the unconfigured default's first entry
+    // is 'graphify' now (was 'code-graph') -- see config.ts's doc comment.
+    // This test's actual point (registering a new, unrelated layer name
+    // has zero effect on the hardcoded default) is unaffected by that
+    // change, so only the asserted layer name itself needs updating.
+    expect(DEFAULT_LAYER_STACK_CONFIG.layers.map((l) => l.name)).toEqual(['graphify', 'vector', 'file']);
+    expect(DEFAULT_LAYER_STACK_CONFIG.layers.map((l) => l.name)).not.toContain('crossref-linker');
+  });
 });

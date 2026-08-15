@@ -105,9 +105,25 @@
     <section id="graph" class="panel panel-wide">
       <h2>Graph</h2>
       <p class="panel-status" id="graph-status">loading…</p>
-      <p class="panel-hint">Read-only impact graph (swarm-memory's <code>graph.sqlite</code>) — click a node to inspect its impact / deps. Viewing only; this panel never adds or removes graph edges.</p>
+      <p class="panel-hint">Read-only impact graph — click a node to inspect its impact / deps and re-center the view on it. Drag to pan, Ctrl/Cmd+scroll (or the +/− buttons) to zoom. Viewing only; this panel never adds or removes graph edges.</p>
 
       <div id="graph-body" hidden>
+        <div id="graph-toolbar">
+          <label for="graph-search" class="graph-toolbar-label">Focus node</label>
+          <input id="graph-search" type="text" placeholder="search a node…" autocomplete="off" />
+          <button id="graph-search-go" type="button">Go</button>
+          <label for="graph-depth" class="graph-toolbar-label">Depth</label>
+          <select id="graph-depth">
+            <option value="1">1</option>
+            <option value="2" selected>2</option>
+            <option value="3">3</option>
+          </select>
+          <button id="graph-zoom-in" type="button" title="Zoom in" aria-label="Zoom in">+</button>
+          <button id="graph-zoom-out" type="button" title="Zoom out" aria-label="Zoom out">−</button>
+          <button id="graph-zoom-reset" type="button" title="Reset view">Reset view</button>
+          <button id="graph-show-all" type="button" title="Render every node — can be slow on a large graph">Show whole graph</button>
+        </div>
+        <p id="graph-search-empty" class="panel-status" hidden>No node matches that search.</p>
         <div id="graph-view">
           <svg id="graph-svg" viewBox="0 0 640 480" role="img" aria-label="impact graph node-link diagram"></svg>
         </div>

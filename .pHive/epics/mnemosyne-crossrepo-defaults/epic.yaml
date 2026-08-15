@@ -1,0 +1,67 @@
+name: mnemosyne-crossrepo-defaults
+title: Graphify as default code-graph layer + pluggable cross-repo identifier linker
+target_codebase: .
+methodology: tdd
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: dev
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [architecture, integration]
+  roster: [researcher, technical-writer]
+  per_tag_reasoning:
+    architecture: "New multi-repo-aware layer type (existing layers are all single-repoRoot); default-layer promotion touches both the TS client and the JS zero-dep server's independent default-resolution paths"
+    integration: "Builds on already-shipped la-02 (GraphifyLayerAdapter) and la-09/follow-up findings (Graphify's AST merge cannot see network/SaaS-tied cross-repo dependencies)"
+  confidence: high
+  gate_decisions: {}
+
+notes: |
+  Formalized 2026-08-14 from a live cross-repo graph deep-dive (event-api+shindig,
+  then personal-site+mdostal-tools-hub+me-mdostal-com). Confirmed 3-for-3: Graphify's
+  AST-based cross-repo merge finds zero cross-repo edges whenever the real tie is a
+  network API or shared external SaaS backend (not a shared imported package) --
+  matches and strengthens the la-09 finding.
+
+  A real, working alternative was prototyped and validated against real code: for
+  mdostal/personal-site + mdostal/mdostal-tools-hub (tied via a shared Sanity
+  project), a schema-definition-vs-GROQ-query string cross-reference correctly found
+  the real link ('tool' type, defined in personal-site/sanity/schemas/tool.ts,
+  queried from mdostal-tools-hub/src/lib/sanity.ts:39) that Graphify's merge missed
+  entirely. This epic generalizes that prototype into a real, pluggable layer.
+
+  Operator's explicit architectural constraint for this epic (do not violate):
+  Mnemosyne is a customizable layer tool -- a consumer must be able to run pure
+  Qdrant-only, pure file-only, or any other single-layer/combination config. Nothing
+  in this epic may assume or require the full default stack; every new capability is
+  opt-in via the existing pl-01 LayerRegistry/MNEMOSYNE_LAYERS mechanism.
+
+  Test-file/dependency-graph pollution question (raised by the operator, resolved by
+  investigation before this epic started, not a story here): node_modules is never
+  scanned (git-clone-only workflow naturally excludes it); test-file pollution is
+  real but small and stack-dependent (0-1.2% on the Next.js repos tested, more
+  severe on shindig's Kotlin mobile test suite) and already handled by la-11-era
+  suggested_focus_node exclusion, not worth a bigger structural split.
+
+stories:
+  - id: cr-01-graphify-default-layer
+    title: Promote Graphify to the default code-graph layer (both TS client and JS server)
+    complexity: medium
+    depends_on: []
+
+  - id: cr-02-crossrepo-identifier-linker
+    title: Cross-repo shared-identifier linker layer (generalized Sanity-type-crossref prototype)
+    complexity: high
+    depends_on: []
+
+  - id: cr-03-crossrepo-linker-regression-tests
+    title: Cross-repo linker regression tests against realistic synthetic fixtures
+    complexity: medium
+    depends_on: [cr-02-crossrepo-identifier-linker]
+
+  - id: cr-04-single-layer-config-proof
+    title: Prove single-layer-only configs (pure vector, pure file) work end-to-end
+    complexity: medium
+    depends_on: []

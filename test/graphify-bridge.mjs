@@ -16,14 +16,20 @@
 
 import assert from "node:assert";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const BRIDGE_PATH = path.join(__dirname, "..", "bin", "graphify-bridge.mjs");
 
 import {
   readLayersConfig,
   findGraphifyLayerEntry,
   isGraphifyConfigured,
+  isGraphifyExplicitlyConfigured,
+  isGraphifyOnPath as isGraphifyOnPathEnv,
   graphifyStatsAction,
   graphifyEdgesAction,
   graphifyImpactAction,
@@ -87,10 +93,18 @@ async function main() {
   {
     ok(readLayersConfig({}) === null, "readLayersConfig() is null when MNEMOSYNE_LAYERS is unset");
     ok(findGraphifyLayerEntry({}) === null, "findGraphifyLayerEntry() is null when unset");
-    ok(isGraphifyConfigured({}) === false, "isGraphifyConfigured() is false when unset");
+    // env={} has no PATH at all -> isGraphifyOnPath({}) is false -> the
+    // soft-default fallback applies -> isGraphifyConfigured({}) stays
+    // false, same observable result as before cr-01, just via a different
+    // (PATH-aware) code path now.
+    ok(isGraphifyConfigured({}) === false, "isGraphifyConfigured() is false when unset and graphify isn't resolvable (no PATH in env)");
 
     const withVector = { MNEMOSYNE_LAYERS: JSON.stringify({ layers: [{ name: "vector" }] }) };
-    ok(isGraphifyConfigured(withVector) === false, "isGraphifyConfigured() is false when layers omit graphify (code-graph stays default)");
+    ok(isGraphifyExplicitlyConfigured(withVector) === false, "isGraphifyExplicitlyConfigured() is false when layers omit graphify");
+    ok(
+      isGraphifyConfigured({ ...withVector, PATH: process.env.PATH }) === false,
+      "isGraphifyConfigured() is false when layers explicitly omit graphify, even with graphify ON PATH -- pluggability: explicit config is authoritative, graphify is never invoked",
+    );
 
     const withGraphify = {
       MNEMOSYNE_LAYERS: JSON.stringify({ layers: [{ name: "graphify", options: { repoRoot: "/tmp/x" } }] }),
@@ -106,6 +120,60 @@ async function main() {
       threw = /not valid JSON/.test(error.message);
     }
     ok(threw, "invalid MNEMOSYNE_LAYERS JSON throws loudly, never silently ignored");
+  }
+
+  // --- soft-default gating (cr-01-graphify-default-layer) -------------------
+  // Deterministic PATH simulation via a throwaway PATH directory (with or
+  // without a fake "graphify" executable in it) -- doesn't depend on
+  // whether the real graphify CLI happens to be installed on the machine
+  // running this suite.
+  console.log("SECTION: soft-default gating (MNEMOSYNE_LAYERS entirely unset)");
+  {
+    const fakePathWithGraphify = await mkdtemp(path.join(os.tmpdir(), "mnemosyne-graphify-bridge-fakepath-"));
+    const fakeBin = path.join(fakePathWithGraphify, "graphify");
+    await writeFile(fakeBin, "#!/bin/sh\necho fake-graphify\n", "utf8");
+    await chmod(fakeBin, 0o755);
+
+    ok(isGraphifyOnPathEnv({ PATH: fakePathWithGraphify }) === true, "isGraphifyOnPath() finds a fake graphify executable on a fake PATH");
+    ok(
+      isGraphifyConfigured({ PATH: fakePathWithGraphify }) === true,
+      "isGraphifyConfigured() is true when MNEMOSYNE_LAYERS is unset AND graphify IS on PATH -- soft default picks graphify",
+    );
+
+    const emptyPathDir = await mkdtemp(path.join(os.tmpdir(), "mnemosyne-graphify-bridge-emptypath-"));
+    ok(isGraphifyOnPathEnv({ PATH: emptyPathDir }) === false, "isGraphifyOnPath() is false when the PATH dir has no graphify executable");
+
+    // Real subprocess: PATH-broken fallback case, per the epic's TDD
+    // guidance -- confirms the WARNING (not a thrown error) really is what
+    // happens when a bare, unconfigured install's PATH genuinely lacks
+    // graphify. Spawns a fresh node process so this file's own real PATH
+    // (which has graphify installed, per this suite's later sections)
+    // can't leak in and mask the fallback.
+    const probeScript = `
+      const { isGraphifyConfigured } = await import(${JSON.stringify(BRIDGE_PATH)});
+      const configured = isGraphifyConfigured();
+      console.log(JSON.stringify({ configured }));
+    `;
+    const { spawnSync } = await import("node:child_process");
+    const subprocessResult = spawnSync(process.execPath, ["--input-type=module", "-e", probeScript], {
+      env: { ...process.env, PATH: emptyPathDir, MNEMOSYNE_LAYERS: "" },
+      encoding: "utf8",
+    });
+    ok(
+      subprocessResult.status === 0,
+      `a real subprocess with a graphify-less PATH and no MNEMOSYNE_LAYERS exits 0 (soft fallback, not a hard failure) -- status: ${subprocessResult.status}, stderr: ${subprocessResult.stderr}`,
+    );
+    ok(
+      /"configured":false/.test(subprocessResult.stdout),
+      `subprocess reports isGraphifyConfigured()===false when graphify is missing from PATH (stdout: ${subprocessResult.stdout})`,
+    );
+    ok(
+      /WARNING: graphify is not installed or not found on PATH/.test(subprocessResult.stderr),
+      `subprocess logs a loud WARNING (not silent) about the missing binary on stderr (stderr: ${subprocessResult.stderr})`,
+    );
+
+    await rm(fakePathWithGraphify, { recursive: true, force: true });
+    await rm(emptyPathDir, { recursive: true, force: true });
   }
 
   // --- loud failure: no graph.json, autoUpdate disabled ----------------------
@@ -173,15 +241,25 @@ async function main() {
       typeof e.src === "string" && typeof e.dst === "string" && typeof e.predicate === "string",
       `edge has src/predicate/dst (${JSON.stringify(e)})`,
     );
+    ok(
+      typeof e.src_label === "string" && typeof e.dst_label === "string",
+      `edge has src_label/dst_label for display (${JSON.stringify(e)})`,
+    );
     ok(e.origin === "ast", `edge origin is "ast" (real deterministic AST parsing, no LLM) (${e.origin})`);
     ok(e.created_at === null, "edge created_at is explicitly null (graphify has no per-edge timestamp)");
 
+    // src/dst are real graph.json node ids now (not labels) -- a genuine
+    // fix, not a relaxation: two distinct nodes sharing a short label used
+    // to collapse into one under the old label-based contract, verified to
+    // actually happen at scale on a real merged cross-repo graph (306 real
+    // connected components collapsed to 95). Assert against src_label/
+    // dst_label for the human-readable match instead of src/dst directly.
     const greeterEdgesResult = await graphifyEdgesAction(null, { node: "Greeter" }, env);
-    ok(greeterEdgesResult.node === "Greeter", "graphifyEdgesAction({node}) echoes the requested node");
+    ok(greeterEdgesResult.node === "Greeter", "graphifyEdgesAction({node}) echoes the requested node (search term, not id)");
     ok(greeterEdgesResult.edges.length > 0, `edges touching "Greeter" is non-empty (${greeterEdgesResult.edges.length})`);
     ok(
-      greeterEdgesResult.edges.every((edge) => edge.src === "Greeter" || edge.dst === "Greeter"),
-      "every filtered edge actually touches Greeter",
+      greeterEdgesResult.edges.every((edge) => edge.src_label === "Greeter" || edge.dst_label === "Greeter"),
+      `every filtered edge actually touches Greeter, by label (${JSON.stringify(greeterEdgesResult.edges.map((e) => [e.src_label, e.dst_label]))})`,
     );
   }
 

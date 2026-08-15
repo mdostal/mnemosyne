@@ -17,15 +17,21 @@
 // reopen every guardrail already closed in engine.mjs (loud failure, full
 // provenance, no collection wipe) — see SERVICE.md.
 //
-// ONE deliberate, documented exception (la-02-graphify-adapter): the four
-// graph_* tools below are wired against bin/graphify-bridge.mjs instead of
-// the skill-helper's swarm-memory-backed graph*Action functions whenever
-// MNEMOSYNE_LAYERS configures a "graphify" layer (see wireGraphTools()) —
-// graphify-bridge.mjs is its own small, separately-tested module (not
-// business logic inlined here), the zero-dep-JS-side counterpart to
-// lib/mnemosyne/layers/GraphifyLayerAdapter.ts. Every other tool is
-// unaffected; the default (no MNEMOSYNE_LAYERS, or one that doesn't mention
-// "graphify") is byte-for-byte the pre-existing swarm-memory-backed behavior.
+// ONE deliberate, documented exception (la-02-graphify-adapter, extended by
+// cr-01-graphify-default-layer): the four graph_* tools below are wired
+// against bin/graphify-bridge.mjs instead of the skill-helper's
+// swarm-memory-backed graph*Action functions whenever isGraphifyConfigured()
+// says so (see wireGraphTools()) — graphify-bridge.mjs is its own small,
+// separately-tested module (not business logic inlined here), the
+// zero-dep-JS-side counterpart to lib/mnemosyne/layers/GraphifyLayerAdapter.ts.
+// Every other tool is unaffected. isGraphifyConfigured() is a SOFT default,
+// not a plain "did MNEMOSYNE_LAYERS mention graphify" check: MNEMOSYNE_LAYERS
+// entirely unset now tries graphify first (if its binary is on PATH), only
+// falling back to the swarm-memory-backed behavior (with a logged warning)
+// when it isn't. An explicit MNEMOSYNE_LAYERS that names a different single
+// layer (e.g. just "vector") still gets byte-for-byte the pre-existing
+// swarm-memory-backed behavior, unaffected — see bin/graphify-bridge.mjs's
+// isGraphifyConfigured() doc comment for the exact three-case gating.
 //
 // No tool below maps to Qdrant collection deletion/wipe. There is no such
 // verb in the swarm-memory CLI, in engine.mjs, or in the skill-helper's
@@ -150,15 +156,20 @@ export function createServer({ port = DEFAULT_PORT } = {}) {
     wrapAction(port, reindexAction),
   );
 
-  // wireGraphTools — la-02-graphify-adapter: when MNEMOSYNE_LAYERS configures
-  // a "graphify" layer, the four graph_* tools below read graphify's
-  // graph.json (via bin/graphify-bridge.mjs) instead of proxying to the
-  // swarm-memory-backed GET /graph/* routes. Unconfigured (the default),
-  // behavior is unchanged — same skill-helper pass-throughs as before this
-  // story. Response *shape* is identical either way (nodes/edges/
-  // edges_by_origin/db for stats; src/predicate/dst/origin/created_at for
-  // edges; node/node_type/depth/via for impact/deps) so no MCP-side schema
-  // change was needed to add graphify coverage.
+  // wireGraphTools — la-02-graphify-adapter, soft-defaulted by
+  // cr-01-graphify-default-layer: the four graph_* tools below read
+  // graphify's graph.json (via bin/graphify-bridge.mjs) instead of proxying
+  // to the swarm-memory-backed GET /graph/* routes whenever
+  // isGraphifyConfigured() says so -- true when MNEMOSYNE_LAYERS explicitly
+  // names "graphify", OR when MNEMOSYNE_LAYERS is entirely unset AND the
+  // `graphify` binary is on PATH (soft default; a logged warning + the
+  // pre-existing swarm-memory-backed pass-throughs otherwise, never a hard
+  // failure). An explicit MNEMOSYNE_LAYERS naming a different single layer
+  // keeps today's exact skill-helper pass-through behavior, unaffected.
+  // Response *shape* is identical either way (nodes/edges/edges_by_origin/db
+  // for stats; src/predicate/dst/origin/created_at for edges;
+  // node/node_type/depth/via for impact/deps) so no MCP-side schema change
+  // was needed to add graphify coverage.
   const useGraphify = isGraphifyConfigured();
 
   server.registerTool(

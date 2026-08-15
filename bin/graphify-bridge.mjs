@@ -18,9 +18,28 @@
 // exactly mirroring the pre-existing duality this story's CBA describes
 // between CodeGraphLayerAdapter.ts and src/engine.mjs's own graph* functions
 // (two thin access paths onto swarm-memory; this is the same architectural
-// split applied to graphify instead). bin/mnemosyne-mcp.mjs selects between
-// the two implementations per graph_* tool, gated on whether MNEMOSYNE_LAYERS
-// configures a "graphify" layer — see wireGraphTools() there.
+// split applied to graphify instead). bin/mnemosyne-mcp.mjs and
+// src/server.mjs's GET /graph/* routes both select between the two
+// implementations via isGraphifyConfigured() below.
+//
+// isGraphifyConfigured() gating (cr-01-graphify-default-layer, soft
+// default): three cases, not a plain boolean anymore --
+//   1. MNEMOSYNE_LAYERS explicitly names "graphify" -> always use graphify;
+//      a missing binary fails loudly (unchanged pre-cr-01 behavior, never
+//      silently downgraded -- an explicit request is an explicit
+//      requirement).
+//   2. MNEMOSYNE_LAYERS is set but does NOT mention "graphify" (e.g. just
+//      "vector") -> graphify is NEVER invoked, no PATH check even happens.
+//      Pluggability guarantee: an explicit config is always authoritative.
+//   3. MNEMOSYNE_LAYERS is genuinely unset (bare install) -> SOFT default:
+//      use graphify if its binary is resolvable on PATH, else fall back to
+//      the swarm-memory-backed path with a loud console.warn() (not a hard
+//      failure) -- preserves the zero-required-external-binary promise for
+//      an install that hasn't run `uv tool install graphifyy` yet (now
+//      recommended, not required -- see README.md/SERVICE.md). Mirrors
+//      lib/mnemosyne/layers/config.ts's resolveUnconfiguredDefault() on the
+//      TS client side (same story, same reasoning, independently
+//      implemented since the two sides share no code).
 //
 // Never wraps `graphify`'s mutation paths (there are none read-only tools
 // need to avoid here beyond graph.json itself, which this module only
@@ -71,8 +90,79 @@ export function findGraphifyLayerEntry(env = process.env) {
   return config.layers.find((entry) => entry && entry.name === "graphify") ?? null;
 }
 
-export function isGraphifyConfigured(env = process.env) {
+// isGraphifyExplicitlyConfigured — true only when MNEMOSYNE_LAYERS is SET
+// and its layers[] names "graphify". Distinct from isGraphifyConfigured()
+// below: this never looks at PATH, so it's the "did the consumer actually
+// ask for this" signal the soft-default's hard-fail-loud branch needs.
+export function isGraphifyExplicitlyConfigured(env = process.env) {
   return findGraphifyLayerEntry(env) !== null;
+}
+
+// isMnemosyneLayersUnset — true only when MNEMOSYNE_LAYERS is genuinely
+// absent/empty, as opposed to "set, but doesn't mention graphify" (e.g.
+// `{"layers":[{"name":"vector"}]}`). The soft default below applies ONLY
+// in the former case -- an explicit, non-graphify config is authoritative
+// and must never have graphify invoked at all (Mnemosyne's pluggability
+// guarantee, cr-01-graphify-default-layer's critical constraint).
+function isMnemosyneLayersUnset(env = process.env) {
+  const raw = env.MNEMOSYNE_LAYERS;
+  return !raw || !raw.trim();
+}
+
+// isGraphifyOnPath — non-throwing PATH probe, mirrors
+// lib/mnemosyne/layers/GraphifyLayerAdapter.ts's isCommandOnPath() (kept as
+// a separate, small implementation here rather than imported -- this file
+// is the zero-dep-JS-side counterpart with no reachable dependency on the
+// TypeScript layer registry, same reasoning as this file's top-of-module
+// comment explains for the rest of its duplication).
+export function isGraphifyOnPath(env = process.env) {
+  const command = env.GRAPHIFY_BIN || "graphify";
+  if (command.includes(path.sep) || (path.sep !== "/" && command.includes("/"))) {
+    return existsSync(command);
+  }
+  const pathEnv = env.PATH ?? "";
+  const dirs = pathEnv.split(path.delimiter).filter((dir) => dir.length > 0);
+  const extensions = process.platform === "win32" ? (env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";") : [""];
+  for (const dir of dirs) {
+    for (const ext of extensions) {
+      if (existsSync(path.join(dir, command + ext))) return true;
+    }
+  }
+  return false;
+}
+
+// isGraphifyConfigured — the soft-default-aware gate src/server.mjs's
+// GET /graph/* routes (and bin/mnemosyne-mcp.mjs's wireGraphTools()) use to
+// pick graphify vs. the swarm-memory-backed path. Three cases
+// (cr-01-graphify-default-layer):
+//
+//   1. MNEMOSYNE_LAYERS explicitly names "graphify": always true. Callers
+//      let graphify's own errors (e.g. missing binary) propagate loudly --
+//      an explicit request is an explicit requirement, never silently
+//      downgraded. Unchanged from this function's pre-cr-01 behavior.
+//   2. MNEMOSYNE_LAYERS is set but does NOT mention "graphify" (e.g. a
+//      single "vector" layer): always false, no PATH check at all --
+//      graphify is never invoked. Mnemosyne's pluggability guarantee: an
+//      explicit config is authoritative, never second-guessed.
+//   3. MNEMOSYNE_LAYERS is genuinely unset (a bare, unconfigured install):
+//      SOFT default -- true only if the `graphify` binary is actually
+//      resolvable on PATH. If it isn't, a loud WARNING is logged (not a
+//      silent fallback) and this returns false, so the caller's existing
+//      `if (isGraphifyConfigured()) {...} else {swarm-memory path}` shape
+//      falls through to the swarm-memory-backed default automatically --
+//      preserving the zero-required-external-binary promise for a bare
+//      install (`uv tool install graphifyy` is recommended, not required).
+export function isGraphifyConfigured(env = process.env) {
+  if (isGraphifyExplicitlyConfigured(env)) return true;
+  if (!isMnemosyneLayersUnset(env)) return false;
+  if (isGraphifyOnPath(env)) return true;
+  const command = env.GRAPHIFY_BIN || "graphify";
+  console.warn(
+    `[mnemosyne] WARNING: graphify is not installed or not found on PATH (command: "${command}") -- ` +
+      "falling back to the swarm-memory-backed graph layer for GET /graph/*. Install graphify for " +
+      `repo-scoped graph data: ${INSTALL_HINT} -- see ${PROJECT_URL}`,
+  );
+  return false;
 }
 
 function resolveOptions(env = process.env) {
@@ -175,6 +265,67 @@ function fileTypeOf(graph, id) {
   return graph.nodes.find((node) => node.id === id)?.file_type ?? null;
 }
 
+// Matches a source_file path that's clearly test code -- directory segments
+// (test/, tests/, __tests__/, androidTest/, commonTest/, iosTest/, spec/)
+// or filename suffixes (Test.kt, Tests.swift, .test.ts, .spec.ts, etc.).
+// Deliberately conservative (only obvious conventions) -- a false negative
+// here just means an occasional test file stays eligible as a focus
+// candidate, which is harmless; a false positive would wrongly exclude
+// real production code.
+const TEST_FILE_RE =
+  /(^|\/)(__tests__|tests?|specs?|androidTest|commonTest|iosTest)(\/|$)|(Tests?|Specs?)\.(kt|swift|java|py)$|\.(test|spec)\.[jt]sx?$/i;
+
+function isTestFile(sourceFile) {
+  return Boolean(sourceFile && TEST_FILE_RE.test(sourceFile));
+}
+
+// A node's own degree (edges touching it, either direction) -- used to pick
+// a default focus candidate, same metric the UI would otherwise compute
+// client-side, but with the test-file exclusion below only possible here
+// (source_file per node isn't part of the /graph/edges response shape).
+function computeDegree(graph) {
+  const degree = new Map();
+  for (const link of graph.links) {
+    degree.set(link.source, (degree.get(link.source) ?? 0) + 1);
+    degree.set(link.target, (degree.get(link.target) ?? 0) + 1);
+  }
+  return degree;
+}
+
+// Highest-degree node whose OWN definition isn't in a test file -- the
+// naive "just pick the busiest node" heuristic reliably lands on a
+// test-framework assertion helper (e.g. `.assertEquals()`) instead of
+// anything architecturally meaningful, since every test file in a large
+// codebase calls it. Found via a real cross-repo experiment (event-api +
+// shindig merged graph): `.assertEquals()` had degree 844 -- 1.7x the next
+// candidate -- purely because it's the call target of hundreds of
+// unrelated test assertions, not because it's structurally important.
+function suggestedFocusNode(graph) {
+  const degree = computeDegree(graph);
+  let best = null;
+  let bestDegree = -1;
+  for (const node of graph.nodes) {
+    if (isTestFile(node.source_file)) continue;
+    const d = degree.get(node.id) ?? 0;
+    if (d > bestDegree || (d === bestDegree && best !== null && node.id < best)) {
+      best = node.id;
+      bestDegree = d;
+    }
+  }
+  // Every node lives in a test file (a pure-test repo) -- fall back to the
+  // real highest-degree node rather than returning nothing.
+  if (best === null) {
+    for (const node of graph.nodes) {
+      const d = degree.get(node.id) ?? 0;
+      if (d > bestDegree) {
+        best = node.id;
+        bestDegree = d;
+      }
+    }
+  }
+  return best;
+}
+
 // --- public actions -------------------------------------------------------
 //
 // Same (port, args) call shape as bin/mnemosyne-skill-helper.mjs's
@@ -205,6 +356,11 @@ export async function graphifyStatsAction(_port, _args = {}, env = process.env) 
     edges: graph.links.length,
     edges_by_origin: edgesByOrigin,
     db: opts.graphPath,
+    // A reasonable non-test default node for the UI's graph panel to focus
+    // on first -- computed here (not client-side) because excluding test
+    // files needs each node's source_file, which /graph/edges doesn't
+    // carry. `null` for an empty graph.
+    suggested_focus_node: graph.nodes.length > 0 ? suggestedFocusNode(graph) : null,
     took_ms: Date.now() - t0,
   };
 }
@@ -220,10 +376,21 @@ export async function graphifyEdgesAction(_port, { node } = {}, env = process.en
     links = links.filter((link) => ids.has(link.source) || ids.has(link.target));
   }
 
+  // src/dst are the real graph.json node ids (unique), NOT labels -- labels
+  // collapse distinct nodes that happen to share a short name, which is
+  // common at real scale (verified on a live merged cross-repo graph:
+  // using labels here collapsed 306 real connected components down to 95,
+  // with the largest absorbing nearly everything -- a genuine identity bug,
+  // not just a display concern). src_label/dst_label carry the human-
+  // readable name for display; consumers needing identity/uniqueness (this
+  // repo's own graph UI, in particular) must use src/dst, never the label
+  // fields, to key or compare nodes.
   const edges = links.map((link) => ({
-    src: labelOf(graph, link.source),
+    src: link.source,
+    src_label: labelOf(graph, link.source),
     predicate: link.relation,
-    dst: labelOf(graph, link.target),
+    dst: link.target,
+    dst_label: labelOf(graph, link.target),
     origin: link._origin ?? null,
     // graphify's graph.json carries no per-edge timestamp (unlike
     // swarm-memory's edges.created_at) -- explicit null, not a fabricated

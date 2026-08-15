@@ -32,6 +32,16 @@ const ROOT_DIRECTORY = process.env.MNEMOSYNE_ROOT_DIR || process.cwd();
 
 const SCOPES: ReadonlySet<Scope> = new Set(['project', 'enterprise', 'meta']);
 const INTENTS = new Set(['narrow', 'broad']);
+// cr-04-single-layer-config-proof: this set must track interfaces.ts's
+// `Layer` union in full, not just the original three built-ins — a caller
+// explicitly targeting an already-shipped optional layer (e.g. 'graphify'
+// in a graphify-only config) must get client.ts's accurate
+// 'layer_not_writable' (or a real success) when that name is valid but
+// merely not writable/not configured, never a route-level 'invalid_layer'
+// rejection for a layer name the system actually knows about. Found via a
+// real subprocess test: POST /remember { layer: 'graphify' } against a
+// graphify-only MNEMOSYNE_LAYERS config was wrongly 400'd here before this
+// fix, even though 'graphify' is a real, live layer (la-02-graphify-adapter).
 const LAYERS: ReadonlySet<Layer> = new Set([
   'meta',
   'enterprise',
@@ -39,6 +49,9 @@ const LAYERS: ReadonlySet<Layer> = new Set([
   'code-graph',
   'vector',
   'file',
+  'hive-memory',
+  'graphify',
+  'crossref-linker',
 ]);
 
 const client = new MnemosyneClient({ rootDirectory: ROOT_DIRECTORY });
