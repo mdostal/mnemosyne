@@ -2,6 +2,35 @@
 
 All notable changes to Mnemosyne are documented here.
 
+## [0.5.0] — 2026-08-15
+
+Full `mnemosyne-keyword-recall` epic (`kw-01`..`kw-03`) — closes a real, confirmed gap
+found by `docs/qdrant-hybrid-retrieval-experiment.md`'s hands-on testing: dense-vector
+semantic search cannot reliably distinguish near-identical exact identifiers (e.g. a
+real ticket ID like `PAN-8968` vs. `PAN-7909` in this project's own memory corpus).
+`swarm-memory grep` already found these correctly — the actual defect was that
+`recall()`'s escalation logic only tried keyword search on zero vector hits, so a
+query returning confidently-wrong semantic matches never got a chance to find the
+real answer. Shipped the same way as `v0.3.0`/`v0.4.0`: every story independently
+verified with real tests and real live-server checks against production data before
+merging.
+
+### Fixed
+
+- **`recall()` now runs keyword search alongside vector search for every call**, in
+  both implementations — the JS zero-dep server (`src/engine.mjs`) and the TS client
+  (`lib/mnemosyne/client.ts`, via a new opt-in `KeywordLayerAdapter`/`"keyword"`
+  layer). Not a sequential zero-hit escalation and not hybrid score-fusion — both are
+  queried in parallel and merged, with a hit found by both paths deduped and tagged
+  (`match_type: "both"` / `also_matched`) rather than either being silently dropped.
+  Verified live: a real query for a real ticket ID now correctly returns the exact
+  match via the keyword layer, alongside (not instead of) the wrong-but-plausible
+  semantic neighbors that used to be the only result.
+- Real regression coverage added for the exact failure shape (near-identical IDs
+  sharing one template, mirroring the real corpus's `PAN-XXXX` pattern) as a
+  synthetic, hermetic fixture shared by both implementations' test suites — so this
+  can't silently regress again.
+
 ## [0.4.0] — 2026-08-14
 
 Full `mnemosyne-crossrepo-defaults` epic (`cr-01`..`cr-04`) — Graphify promoted to
