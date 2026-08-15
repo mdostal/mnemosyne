@@ -138,6 +138,33 @@ describe('assertValidPersona', () => {
     expect(() => assertValidPersona(candidate, 'code-architect')).toThrow(/parentRefs/i);
   });
 
+  it.each(['top-orchestrator', 'company-director', 'project-orchestrator'] as const)(
+    "accepts a parentRefs entry naming the global tier '%s'",
+    (tier) => {
+      const candidate = validPersona({ parentRefs: [{ tier, scopeId: 'default' }] });
+      expect(() => assertValidPersona(candidate, 'code-architect')).not.toThrow();
+    },
+  );
+
+  it('rejects a parentRefs entry naming code-architect as the parent tier -- a repo-local persona cannot name another repo-local persona as its parent', () => {
+    const candidate = {
+      ...validPersona(),
+      parentRefs: [{ tier: 'code-architect', scopeId: 'some-other-repo' }],
+    };
+    expect(() => assertValidPersona(candidate, 'code-architect')).toThrow(/parentRefs/i);
+  });
+
+  it('does not reject a parentRefs entry just because no persona exists yet at that (tier, scopeId) in the global store -- schema validation defers existence checks to the fetch path (pf-12/pf-13)', () => {
+    // No global store I/O happens anywhere in assertValidPersona -- this is
+    // a pure shape check. A scopeId that certainly does not exist in any
+    // real global store must still be accepted here; a parent and its child
+    // persona can be authored in either order.
+    const candidate = validPersona({
+      parentRefs: [{ tier: 'project-orchestrator', scopeId: 'definitely-not-seeded-yet-xyz' }],
+    });
+    expect(() => assertValidPersona(candidate, 'code-architect')).not.toThrow();
+  });
+
   it('rejects a non-object candidate', () => {
     expect(() => assertValidPersona(null, 'code-architect')).toThrow();
     expect(() => assertValidPersona('not-an-object', 'code-architect')).toThrow();
