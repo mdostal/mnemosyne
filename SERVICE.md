@@ -58,6 +58,19 @@ not collapse these into one endpoint — they serve different operator intents
 with `provenance`). `scope` defaults to the engine default (`top`) for recall and
 to `personal` for remember.
 
+**kw-01-js-server-parallel-keyword:** `recall()` runs the vector layer and the
+keyword layer (`grep()`, exact-match) in parallel on every call (not as a
+conditional escalation gated on vector's hit count — see
+`docs/qdrant-hybrid-retrieval-experiment.md` for why: this corpus's own score
+calibration puts real matches and noise in nearly the same band, so a
+weak-score escalation threshold isn't reliable here). Results are merged into
+one response; each hit carries `match_type` (`"semantic"` | `"keyword"` |
+`"both"` when the same source+chunk was independently found by both layers)
+alongside the existing `provenance.layer` (`"vector"` | `"file"`, unchanged).
+`layers_attempted` always includes both `"vector"` and `"file"` on a
+successful call. `opts.escalate` and the vector-error `provenance.degraded`
+marker behavior are unchanged.
+
 ### Bulk reindex
 
 For initial index builds or recovering a stale index — e.g. after adding a new

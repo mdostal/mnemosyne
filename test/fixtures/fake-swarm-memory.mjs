@@ -110,6 +110,72 @@ if (cmd === "recall") {
   const minScore = minScoreFlag === -1 ? 0 : Number(args[minScoreFlag + 1] || 0);
   const isEmpty = query.includes("nonexistent_guid_fallback_") || minScore >= 0.999;
 
+  // kw-01: simulates the vector layer genuinely erroring (Qdrant down, etc)
+  // while the keyword (grep) layer -- a completely separate call below --
+  // keeps working, so recall()'s degraded-marker behavior for a real vector
+  // failure can be exercised without also breaking grep().
+  if (query.includes("KWTEST_VECTOR_ERROR")) {
+    process.stderr.write("fake swarm-memory: qdrant connection refused\n");
+    process.exit(1);
+  }
+
+  // kw-01-js-server-parallel-keyword: simulates the REAL confirmed defect --
+  // a ticket-ID-shaped query where dense vector search returns nonzero but
+  // WRONG hits (a different, similarly-shaped ticket), so the old
+  // zero-hit-only escalation never even tried grep(). total_hits > 0 here on
+  // purpose -- that's exactly what made the old escalation gate never fire.
+  if (query.includes("KWTEST_TICKET")) {
+    process.stdout.write(
+      JSON.stringify({
+        query,
+        total_hits: 1,
+        scopes: [
+          {
+            scope: "personal",
+            collection: "test_collection",
+            hits: [
+              {
+                text: "ticket completion note for PAN-7909 (wrong ticket, same template)",
+                score: 0.53,
+                source: "other-ticket.md",
+                full_path: "other-ticket.md",
+                chunk_index: 0,
+              },
+            ],
+          },
+        ],
+      })
+    );
+    process.exit(0);
+  }
+
+  // kw-01: same source+chunk_index found by BOTH vector and keyword search --
+  // exercises the merge/dedupe path (keep one, note it matched both ways).
+  if (query.includes("KWTEST_DUP")) {
+    process.stdout.write(
+      JSON.stringify({
+        query,
+        total_hits: 1,
+        scopes: [
+          {
+            scope: "personal",
+            collection: "test_collection",
+            hits: [
+              {
+                text: "shared chunk found by both vector and keyword",
+                score: 0.7,
+                source: "dup.md",
+                full_path: "dup.md",
+                chunk_index: 2,
+              },
+            ],
+          },
+        ],
+      })
+    );
+    process.exit(0);
+  }
+
   if (indexStorePath()) {
     const entries = readIndexStore();
     const hits = isEmpty
@@ -157,6 +223,73 @@ if (cmd === "recall") {
 if (cmd === "grep") {
   const query = args[0] || "";
   const isEmpty = query.includes("nonexistent_guid_fallback_");
+
+  // kw-01: keyword layer keeps working even when the vector layer (above)
+  // errored for this same magic query -- proves the two are genuinely
+  // independent, parallel attempts.
+  if (query.includes("KWTEST_VECTOR_ERROR")) {
+    process.stdout.write(
+      JSON.stringify([
+        {
+          scope: "personal",
+          collection: "test_collection",
+          hits: [
+            {
+              text: "keyword hit found while vector layer was down",
+              source: "vector-down.md",
+              full_path: "vector-down.md",
+              chunk_index: 0,
+            },
+          ],
+        },
+      ])
+    );
+    process.exit(0);
+  }
+
+  // kw-01: the correct exact-match hit that dense vector search cannot find
+  // for a ticket-ID-shaped query (see the "recall" KWTEST_TICKET case above).
+  if (query.includes("KWTEST_TICKET")) {
+    process.stdout.write(
+      JSON.stringify([
+        {
+          scope: "personal",
+          collection: "test_collection",
+          hits: [
+            {
+              text: "exact ticket match for PAN-8968",
+              source: "correct-ticket.md",
+              full_path: "correct-ticket.md",
+              chunk_index: 0,
+            },
+          ],
+        },
+      ])
+    );
+    process.exit(0);
+  }
+
+  // kw-01: identical source+chunk_index as the "recall" KWTEST_DUP case above
+  // -- the same underlying chunk, found independently by both layers.
+  if (query.includes("KWTEST_DUP")) {
+    process.stdout.write(
+      JSON.stringify([
+        {
+          scope: "personal",
+          collection: "test_collection",
+          hits: [
+            {
+              text: "shared chunk found by both vector and keyword",
+              source: "dup.md",
+              full_path: "dup.md",
+              chunk_index: 2,
+            },
+          ],
+        },
+      ])
+    );
+    process.exit(0);
+  }
 
   process.stdout.write(
     JSON.stringify([

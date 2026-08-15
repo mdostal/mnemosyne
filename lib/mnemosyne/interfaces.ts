@@ -49,6 +49,21 @@
  * merge (la-09/cr-01 findings) provably finds zero edges when the real
  * cross-repo tie is a network API or shared SaaS backend rather than a
  * shared imported package.
+ * `keyword` (kw-02-ts-client-keyword-layer) is a seventh live, OPTIONAL
+ * layer: shells out to `swarm-memory grep <query> --json` (mirrors
+ * `vector`'s `VectorLayerAdapter` shell-out pattern exactly, just calling
+ * `grep` instead of `recall`) for exact/keyword matches against the same
+ * remote Qdrant-indexed corpus `vector` searches -- NOT the same mechanism
+ * as `file` (local-filesystem-only grep over a configured root directory).
+ * Exists to close a real, confirmed gap: dense embeddings cannot reliably
+ * distinguish near-identical exact identifiers (e.g. this repo's own real
+ * "PAN-8968" vs "PAN-7909" ticket IDs -- see
+ * docs/qdrant-hybrid-retrieval-experiment.md), while keyword search finds
+ * them instantly and exactly. `MnemosyneClient` runs `keyword` ALONGSIDE
+ * `vector` (parallel, always, not a zero-hit escalation) whenever a
+ * consumer's layer stack explicitly configures both -- never added to
+ * `DEFAULT_LAYER_STACK_CONFIG` by this story, so an unconfigured/non-opted
+ * consumer is entirely unaffected.
  */
 export type Layer =
   | 'meta'
@@ -59,7 +74,8 @@ export type Layer =
   | 'file'
   | 'hive-memory'
   | 'graphify'
-  | 'crossref-linker';
+  | 'crossref-linker'
+  | 'keyword';
 
 /**
  * The caller-specified boundary for a recall/remember call. Deliberately a
@@ -191,6 +207,18 @@ export interface Hit {
    * part of the provenance completeness contract.
    */
   score?: number;
+
+  /**
+   * kw-02-ts-client-keyword-layer: when `MnemosyneClient`'s always-parallel
+   * keyword+vector cascade step finds the exact same source+chunk via more
+   * than one layer, the duplicate is merged into a single `Hit` (never
+   * returned twice — see client.ts's dedupe logic) and this field records
+   * which OTHER layer(s) also matched it. Absent for a hit only one layer
+   * found — purely additive provenance metadata, never a substitute for
+   * `provenance.layer` (which still names the layer whose copy was kept,
+   * first-found-in-merge-order wins).
+   */
+  also_matched?: Layer[];
 }
 
 /** Records that a layer was skipped or degraded during a recall, and why. */

@@ -210,6 +210,66 @@ export async function scopes() {
 // review/debugging use cases). See status-filter.mjs for the filtering
 // rules. Entries with no flight-status header (pre-la-04 legacy notes, or
 // hits from a layer with no git-context concept) are never filtered.
+// kw-01-js-server-parallel-keyword: identity used to dedupe a hit that both
+// the vector layer and the keyword (grep) layer independently found. Prefer
+// the swarm-memory chunk identity (full_path/location/source + chunk_index)
+// when available -- that's a real "same chunk" match. When chunk_index isn't
+// present (e.g. a layer that doesn't report it), fall back to the hit text
+// itself so two different, unrelated hits that merely share a source file
+// are never incorrectly collapsed into one.
+function hitIdentity(hit) {
+  const source = hit.full_path || hit.location || hit.source || "";
+  const chunk = hit.chunk_index != null ? String(hit.chunk_index) : String(hit.text || "");
+  return `${source}::${chunk}`;
+}
+
+// kw-01: merges the vector result shape ({total_hits, scopes[]}) with the
+// keyword result shape (also normalized to {total_hits, scopes[]} by grep())
+// into one response. Per scope: keyword hits are appended after vector hits
+// (vector stays ranked first since it carries a real similarity score);
+// a hit found by both paths (same source+chunk) is kept once, with its
+// match_type promoted to "both" and provenance.matched_both noted so the
+// dual-match signal isn't silently dropped.
+function mergeVectorAndKeyword(vectorResult, keywordResult) {
+  const scopesByName = new Map();
+  const order = [];
+
+  for (const s of Array.isArray(vectorResult.scopes) ? vectorResult.scopes : []) {
+    const clone = { ...s, hits: Array.isArray(s.hits) ? [...s.hits] : [] };
+    scopesByName.set(s.scope, clone);
+    order.push(s.scope);
+  }
+
+  for (const ks of Array.isArray(keywordResult?.scopes) ? keywordResult.scopes : []) {
+    let target = scopesByName.get(ks.scope);
+    if (!target) {
+      target = { ...ks, hits: [] };
+      scopesByName.set(ks.scope, target);
+      order.push(ks.scope);
+    }
+    const seen = new Map(target.hits.map((h) => [hitIdentity(h), h]));
+    for (const kh of Array.isArray(ks.hits) ? ks.hits : []) {
+      const id = hitIdentity(kh);
+      const existing = seen.get(id);
+      if (existing) {
+        // Same source+chunk found by both paths: keep the existing (vector)
+        // hit -- it carries a real similarity score -- but note the keyword
+        // path also matched it rather than dropping that signal.
+        existing.match_type = "both";
+        existing.provenance = existing.provenance || {};
+        existing.provenance.matched_both = true;
+      } else {
+        target.hits.push(kh);
+        seen.set(id, kh);
+      }
+    }
+  }
+
+  const scopes = order.map((name) => scopesByName.get(name));
+  const total_hits = scopes.reduce((n, s) => n + (Array.isArray(s.hits) ? s.hits.length : 0), 0);
+  return { query: vectorResult.query, total_hits, scopes };
+}
+
 export async function recall(query, scope, opts = {}) {
   if (!query || !String(query).trim()) {
     const err = new Error("query is required");
@@ -222,74 +282,101 @@ export async function recall(query, scope, opts = {}) {
   if (opts.minScore != null) args.push("--min-score", String(opts.minScore));
   if (opts.radius != null) args.push("--radius", String(opts.radius));
 
+  // kw-01: vector and keyword (grep) are ALWAYS run in parallel now, not as a
+  // sequential escalation gated on vector's hit count. Per
+  // docs/qdrant-hybrid-retrieval-experiment.md's recommendation: this corpus's
+  // own score calibration (see ~/.config/swarm-memory/config.toml's comment)
+  // shows real matches and noise land in nearly the same 0.50-0.56 score
+  // band, so a "how weak is weak enough to escalate" threshold isn't
+  // reliable here -- run both, merge, and let honest provenance sort it out.
+  // Promise.allSettled (not Promise.all) so one side's rejection doesn't
+  // prevent the other's results from being used, and the added latency is
+  // the max of the two calls, not their sum.
+  const [vectorOutcome, keywordOutcome] = await Promise.allSettled([run(args), grep(query, scope, opts)]);
+
   let vectorResult;
   let vectorError = null;
-  try {
-    const { stdout } = await run(args);
-    vectorResult = JSON.parse(stdout);
-    
-    // Decorate provenance
-    if (vectorResult.scopes) {
-      for (const s of vectorResult.scopes) {
-        if (s.hits) {
-          for (const h of s.hits) {
-            h.provenance = h.provenance || {};
-            h.provenance.layer = "vector";
-          }
-        }
-      }
-    }
-  } catch (e) {
-    vectorError = e;
-    console.error(`[mnemosyne] ERROR recall: vector layer unavailable: ${e.message}`);
-    vectorResult = { total_hits: 0, scopes: [] };
-  }
-
-  let recallResult = vectorResult;
-
-  // Escalation: vector -> file fallback on zero hits or error
-  if (vectorResult.total_hits === 0 || vectorError) {
-    if (!vectorError) {
-      console.log(`[mnemosyne] vector layer returned 0 hits for "${query}", falling back to file layer (grep)...`);
-    } else {
-      console.log(`[mnemosyne] escalating to file layer due to vector layer failure...`);
-    }
-    
+  if (vectorOutcome.status === "fulfilled") {
     try {
-      const fileResult = await grep(query, scope, opts);
-      fileResult.layers_attempted = ["vector", "file"];
-      
-      // Degraded marker if vector failed completely
-      if (vectorError) {
-        if (fileResult.scopes) {
-          for (const s of fileResult.scopes) {
-            if (s.hits) {
-              for (const h of s.hits) {
-                h.provenance = h.provenance || {};
-                h.provenance.degraded = true;
-              }
+      vectorResult = JSON.parse(vectorOutcome.value.stdout);
+      // Decorate provenance
+      if (vectorResult.scopes) {
+        for (const s of vectorResult.scopes) {
+          if (s.hits) {
+            for (const h of s.hits) {
+              h.provenance = h.provenance || {};
+              h.provenance.layer = "vector";
+              h.match_type = "semantic";
             }
           }
         }
       }
-      recallResult = fileResult;
-    } catch (fallbackErr) {
-      console.error(`[mnemosyne] ERROR recall: file layer fallback also failed: ${fallbackErr.message}`);
-      if (vectorError) throw vectorError; // throw original if both failed
+    } catch (e) {
+      vectorError = e;
+      console.error(`[mnemosyne] ERROR recall: vector layer unavailable: ${e.message}`);
+      vectorResult = { total_hits: 0, scopes: [] };
+    }
+  } else {
+    vectorError = vectorOutcome.reason;
+    console.error(`[mnemosyne] ERROR recall: vector layer unavailable: ${vectorError.message}`);
+    vectorResult = { total_hits: 0, scopes: [] };
+  }
+
+  let keywordResult = null;
+  let keywordError = null;
+  if (keywordOutcome.status === "fulfilled") {
+    keywordResult = keywordOutcome.value;
+    // grep() already decorates provenance.layer = "file"; add match_type
+    // here (recall()'s own concern, not grep()'s) without touching grep().
+    if (keywordResult.scopes) {
+      for (const s of keywordResult.scopes) {
+        if (s.hits) {
+          for (const h of s.hits) {
+            h.match_type = "keyword";
+          }
+        }
+      }
+    }
+  } else {
+    keywordError = keywordOutcome.reason;
+    console.error(`[mnemosyne] ERROR recall: keyword (file) layer failed: ${keywordError.message}`);
+  }
+
+  // Both layers failed: same "throw the original vector error" contract the
+  // old sequential-fallback path had when its escalation attempt also failed.
+  if (vectorError && keywordError) {
+    throw vectorError;
+  }
+
+  vectorResult.query = String(query);
+  let recallResult = mergeVectorAndKeyword(vectorResult, keywordResult);
+
+  // Preserve the existing vector-error degradation-marker behavior exactly:
+  // when vector genuinely errored, every hit in the merged result is (by
+  // construction) from the keyword layer alone, and gets marked degraded --
+  // a distinct concern from "also try keyword", not a replacement for it.
+  if (vectorError) {
+    for (const s of recallResult.scopes) {
+      for (const h of s.hits || []) {
+        h.provenance = h.provenance || {};
+        h.provenance.degraded = true;
+      }
     }
   }
 
-  recallResult.layers_attempted = recallResult.layers_attempted || ["vector"];
+  // layers_attempted honestly reflects that both were genuinely tried on
+  // every successful call -- not just the old escalation-fallback ones.
+  recallResult.layers_attempted = ["vector", "file"];
 
-  // Merge the code-graph layer after the vector/file recall path has selected
-  // its best available result.
+  // Merge the code-graph layer after the vector+keyword recall path has
+  // produced its merged result.
   const { CodeGraphLayer } = await import("./layers/code-graph.mjs");
   const { mergeLayerResults } = await import("./merge.mjs");
   const graphLayer = new CodeGraphLayer();
   const graphHits = await graphLayer.recall(String(query));
-  const merged = mergeLayerResults(recallResult, graphHits);
-  merged.layers_attempted = [...recallResult.layers_attempted, "code-graph"];
-  return applyStatusFilter(merged, opts);
+  const withGraph = mergeLayerResults(recallResult, graphHits);
+  withGraph.layers_attempted = [...recallResult.layers_attempted, "code-graph"];
+  return applyStatusFilter(withGraph, opts);
 }
 
 // applyStatusFilter — la-05-recall-status-filtering. Resolves the caller's
