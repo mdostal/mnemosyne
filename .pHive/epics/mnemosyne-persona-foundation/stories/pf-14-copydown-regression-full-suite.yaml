@@ -1,9 +1,20 @@
 id: pf-14-copydown-regression-full-suite
 epic: mnemosyne-persona-foundation
 title: Copy-down regression test + full-suite regression pass + release bump
-status: pending
+status: complete
 complexity: low
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-15 (commits 0864418, 23acf60). Final story of the epic.
+  Independently verified: reran vitest (140/140) and tsc myself, confirmed
+  correct commit order (regression test first, release bump last), confirmed
+  package.json AND package-lock.json both at 0.6.0, read the actual
+  CHANGELOG entry -- accurate, correctly scoped to only what this epic
+  shipped, explicitly disclaims Epic 2 (mnemosyne-persona-wizard, unbuilt).
+  Standing copy-down regression covers the full real-world fixture corpus
+  (4 fixtures) with all 3 parent tiers referenced simultaneously, not just
+  one example. All acceptance criteria met. Epic complete.
 depends_on: [pf-13-cli-persona-show]
 
 description: |
