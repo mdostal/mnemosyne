@@ -4,7 +4,8 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PERSONA_STORE_BY_TIER, assertValidPersona, getPersonaContent, type Persona } from '../persona.js';
 import { writeRepoLocalPersona } from '../persona-store-repo-local.js';
-import { TIER_CONTENT, TIERS } from '../tiers.js';
+import { writeGlobalPersona } from '../persona-store-global.js';
+import { TIER_CONTENT, TIERS, type Tier } from '../tiers.js';
 
 function validPersona(overrides: Partial<Persona> = {}): Persona {
   return {
@@ -156,6 +157,18 @@ describe('getPersonaContent', () => {
     return root;
   }
 
+  /**
+   * A temp `globalPersonaRoot` for every getPersonaContent call in this
+   * describe block that touches a global tier -- keeps global-tier dispatch
+   * tests hermetic (never reads/writes the real `~/.mnemosyne/personas`),
+   * mirroring `makeTempRepoRoot`'s role for the repo-local path.
+   */
+  async function makeTempGlobalRoot(): Promise<string> {
+    const root = await mkdtemp(path.join(tmpdir(), 'mnemosyne-getpersonacontent-global-'));
+    tempRoots.push(root);
+    return root;
+  }
+
   it("dispatches code-architect to the repo-local store and returns that persona's content when one exists for the scopeId", async () => {
     const root = await makeTempRepoRoot();
     const persona = validPersona({
@@ -210,9 +223,10 @@ describe('getPersonaContent', () => {
   });
 
   it.each(['top-orchestrator', 'company-director', 'project-orchestrator'] as const)(
-    "returns TIER_CONTENT[tier] unchanged for non-code-architect tier '%s' -- identical to today's getTierContent behavior",
-    (tier) => {
-      const content = getPersonaContent(tier, 'any-scope-id', { repoRoot: '/does/not/exist' });
+    "falls back to TIER_CONTENT[tier] for non-code-architect tier '%s' when no global persona exists yet (pf-07: now via the real global-store check, not an unconditional return)",
+    async (tier) => {
+      const globalRoot = await makeTempGlobalRoot();
+      const content = getPersonaContent(tier, 'any-scope-id', { repoRoot: '/does/not/exist', globalPersonaRoot: globalRoot });
       expect(content).toEqual(TIER_CONTENT[tier]);
     },
   );
@@ -222,9 +236,10 @@ describe('getPersonaContent', () => {
     // dispatch bug could route a non-code-architect tier through the
     // repo-local store by mistake.
     const root = await makeTempRepoRoot();
+    const globalRoot = await makeTempGlobalRoot();
     writeRepoLocalPersona(root, validPersona({ scopeId: 'shared-scope' }));
 
-    const content = getPersonaContent('project-orchestrator', 'shared-scope', { repoRoot: root });
+    const content = getPersonaContent('project-orchestrator', 'shared-scope', { repoRoot: root, globalPersonaRoot: globalRoot });
 
     expect(content).toEqual(TIER_CONTENT['project-orchestrator']);
   });
@@ -234,5 +249,123 @@ describe('getPersonaContent', () => {
       // @ts-expect-error deliberately invalid tier for the runtime check
       getPersonaContent('nonexistent-tier', 'some-scope', { repoRoot: '/does/not/exist' }),
     ).toThrow(/unknown tier/i);
+  });
+
+  describe('global-tier dispatch (top-orchestrator / company-director / project-orchestrator via the global store, pf-07)', () => {
+    const globalTiers = ['top-orchestrator', 'company-director', 'project-orchestrator'] as const;
+
+    function validGlobalPersona(tier: Tier, overrides: Partial<Persona> = {}): Persona {
+      return validPersona({
+        tier,
+        scopeId: 'acme-corp',
+        displayName: `${TIER_CONTENT[tier].displayName} — acme-corp`,
+        scope: 'A custom, persona-authored scope statement for the global store.',
+        sections: [{ heading: 'Custom heading', body: 'Custom body specific to acme-corp.' }],
+        ...overrides,
+      });
+    }
+
+    it.each(globalTiers)(
+      "dispatches '%s' to the global store and returns that persona's content when one exists for the (tier, scopeId) pair",
+      async (tier) => {
+        const globalRoot = await makeTempGlobalRoot();
+        const persona = validGlobalPersona(tier);
+        writeGlobalPersona(persona, globalRoot);
+
+        const content = getPersonaContent(tier, 'acme-corp', { repoRoot: '/does/not/exist', globalPersonaRoot: globalRoot });
+
+        expect(content.tier).toBe(tier);
+        expect(content.displayName).toBe(persona.displayName);
+        expect(content.scope).toBe(persona.scope);
+        expect(content.sections).toEqual(persona.sections);
+      },
+    );
+
+    it.each(globalTiers)(
+      "re-injects MANDATE_SECTIONS as an explicit step on a global persona hit for '%s' (personas never store their own mandate)",
+      async (tier) => {
+        const globalRoot = await makeTempGlobalRoot();
+        writeGlobalPersona(validGlobalPersona(tier, { scopeId: 'mandate-check' }), globalRoot);
+
+        const content = getPersonaContent(tier, 'mandate-check', { repoRoot: '/does/not/exist', globalPersonaRoot: globalRoot });
+
+        expect(content.mandateSections).toEqual(TIER_CONTENT[tier].mandateSections);
+        expect(content.mandateSections.length).toBeGreaterThan(0);
+      },
+    );
+
+    it.each(globalTiers)(
+      "falls back to TIER_CONTENT['%s'] and warns (not silently) when no global persona exists yet for the (tier, scopeId) pair",
+      async (tier) => {
+        const globalRoot = await makeTempGlobalRoot();
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+        const content = getPersonaContent(tier, 'never-seeded', { repoRoot: '/does/not/exist', globalPersonaRoot: globalRoot });
+
+        expect(content).toEqual(TIER_CONTENT[tier]);
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        expect(warnSpy.mock.calls[0]?.[0]).toMatch(/fallback|falling back/i);
+        expect(warnSpy.mock.calls[0]?.[0]).toContain('never-seeded');
+
+        warnSpy.mockRestore();
+      },
+    );
+
+    it('does not warn when a global persona is actually found', async () => {
+      const globalRoot = await makeTempGlobalRoot();
+      writeGlobalPersona(validGlobalPersona('company-director', { scopeId: 'found-scope' }), globalRoot);
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      getPersonaContent('company-director', 'found-scope', { repoRoot: '/does/not/exist', globalPersonaRoot: globalRoot });
+
+      expect(warnSpy).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+
+    it('never touches the global store for the code-architect tier, even if a global persona file happens to exist at that (tier-shaped) path', async () => {
+      // Mirror of the existing repo-local regression guard above, in the other direction: a
+      // dispatch bug could route code-architect through the global store by mistake.
+      const root = await makeTempRepoRoot();
+      const globalRoot = await makeTempGlobalRoot();
+      writeGlobalPersona(validGlobalPersona('company-director', { scopeId: 'cross-store-scope' }), globalRoot);
+
+      const content = getPersonaContent('code-architect', 'cross-store-scope', { repoRoot: root, globalPersonaRoot: globalRoot });
+
+      expect(content).toEqual(TIER_CONTENT['code-architect']);
+    });
+
+    it('defaults globalPersonaRoot to DEFAULT_GLOBAL_PERSONA_ROOT when omitted from ctx (real call-site shape: sync.ts only ever passes repoRoot)', () => {
+      // No globalPersonaRoot given at all -- this must not throw, and since nothing is seeded
+      // under the real ~/.mnemosyne/personas for this scopeId, it must fall back cleanly.
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      const content = getPersonaContent('top-orchestrator', 'pf-07-default-root-probe-scope', { repoRoot: '/does/not/exist' });
+
+      expect(content).toEqual(TIER_CONTENT['top-orchestrator']);
+      warnSpy.mockRestore();
+    });
+
+    it('fallback warning wording matches the repo-local path\'s pattern exactly, save for the store-kind word -- proves the two paths share one implementation, not a drifted copy', async () => {
+      const root = await makeTempRepoRoot();
+      const globalRoot = await makeTempGlobalRoot();
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      getPersonaContent('code-architect', 'shared-wording-check', { repoRoot: root, globalPersonaRoot: globalRoot });
+      const repoLocalMessage = warnSpy.mock.calls[0]?.[0] as string;
+      warnSpy.mockClear();
+
+      getPersonaContent('company-director', 'shared-wording-check', { repoRoot: root, globalPersonaRoot: globalRoot });
+      const globalMessage = warnSpy.mock.calls[0]?.[0] as string;
+      warnSpy.mockRestore();
+
+      // Same shape modulo the store-kind word and tier/scopeId values -- normalize those out and
+      // the two messages should collapse to the same template string.
+      const normalize = (msg: string) =>
+        msg
+          .replace(/repo-local|global/g, '<store-kind>')
+          .replace(/'code-architect'|'company-director'/g, '<tier>')
+          .replace(/\(expected at [^)]+\)/, '(expected at <path>)');
+      expect(normalize(repoLocalMessage)).toBe(normalize(globalMessage));
+    });
   });
 });
