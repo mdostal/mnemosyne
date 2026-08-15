@@ -3,6 +3,7 @@
 # Usage: bin/mnemosyne                         # start service (foreground)
 #        PORT=8477 bin/mnemosyne
 #        bin/mnemosyne reindex <scope> [--dir <path>] [--url <base-url>]
+#        bin/mnemosyne persona sync --repo <path> --tier <tier> --scope-id <id> [--dry-run]
 set -euo pipefail
 export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
@@ -10,6 +11,15 @@ HERE="$(cd "$(dirname "$0")/.." && pwd)"
 if [ "${1:-}" = "reindex" ]; then
   shift
   exec node "$HERE/bin/mnemosyne-reindex.mjs" "$@"
+fi
+
+if [ "${1:-}" = "persona" ]; then
+  shift
+  # Unlike reindex.mjs (plain HTTP client, no TS import), mnemosyne-persona.mjs
+  # imports lib/mnemosyne/layer1/*.ts directly (pf-04) -- launched via tsx,
+  # not plain node, since noEmit:true means there is no build step to import
+  # a .ts module without it (see bin/mnemosyne-persona.mjs's own doc comment).
+  exec node "$HERE/node_modules/.bin/tsx" "$HERE/bin/mnemosyne-persona.mjs" "$@"
 fi
 
 exec node "$HERE/src/server.mjs"
