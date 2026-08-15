@@ -1,9 +1,18 @@
 id: pf-09-cli-persona-seed-and-global-sync
 epic: mnemosyne-persona-foundation
 title: "CLI: persona seed + persona sync for global tiers"
-status: pending
+status: complete
 complexity: low
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-15 (commit d3a712b). Independently verified: reran vitest
+  (117/117), persona-cli tests (74/74), tsc clean. Real dispatch proof
+  confirmed: a hand-authored global persona's content genuinely wins over
+  the fallback in a real sync. Honest, accurate finding: global-tier
+  content resolution needed zero code changes (pf-06/pf-07 already made it
+  tier-generic) -- the real gap was --repo semantics messaging, addressed
+  via --help and a runtime note. All acceptance criteria met.
 depends_on: [pf-08-seed-migration-script]
 
 description: |
