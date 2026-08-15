@@ -69,11 +69,12 @@ export interface Persona {
   /**
    * Optional pointers into applicable parent-tier scopeId(s) so a lower-tier
    * persona can query UP into its parent's store on demand (design-
-   * discussion.md Risks table: "query up, never copy down"). Unused until
-   * pf-11/pf-12 (Slice 3) — present now, harmless if unused, per
-   * horizontal-plan.md H1.1 and H5.1 (`{tier, scopeId}[]` pairs, not bare
-   * strings — a parent is identified by both which tier's store to look in
-   * and which scopeId within it).
+   * discussion.md Risks table: "query up, never copy down"). Schema-validated
+   * since pf-11; rendered as pointer-only "Parent context (query up)"
+   * sections by `getPersonaContent`'s repo-local dispatch path since pf-12
+   * (`buildParentContextSections`) — per horizontal-plan.md H1.1 and H5.1,
+   * `{tier, scopeId}[]` pairs, not bare strings, since a parent is identified
+   * by both which tier's store to look in and which scopeId within it.
    */
   parentRefs?: { tier: Tier; scopeId: string }[];
 }
@@ -198,9 +199,46 @@ export interface PersonaContentContext {
  * their own `mandateSections` (`assertValidPersona` rejects mere presence of
  * the key) -- this is the one place that value gets attached, at render
  * time, for a repo-local persona hit.
+ *
+ * `parentContextSections` (pf-12) defaults to `[]` -- only the repo-local
+ * dispatch path below ever passes a non-empty array, built by
+ * `buildParentContextSections` from the persona's OWN `parentRefs` field,
+ * never by reading anything from the parent's actual store.
  */
-function reinjectMandateSections(base: Omit<TierContent, 'mandateSections'>): TierContent {
-  return { ...base, mandateSections: [...MANDATE_SECTIONS] };
+function reinjectMandateSections(
+  base: Omit<TierContent, 'mandateSections' | 'parentContextSections'>,
+  parentContextSections: TierContentSection[] = [],
+): TierContent {
+  return { ...base, mandateSections: [...MANDATE_SECTIONS], parentContextSections };
+}
+
+/**
+ * pf-12-pointer-rendering-query-up: builds the pointer-only "query up"
+ * sections for a repo-local (code-architect) persona's `parentRefs`. Each
+ * entry names ONLY the parent's `tier` and `scopeId` plus a fetch
+ * instruction -- it deliberately never reads the parent's store (global or
+ * otherwise), so there is no code path here through which a parent's real
+ * `sections` content could ever leak in. This is the concrete guardrail
+ * against the copy-down trap docs/layer-architecture-v2-plan.md:35 flags:
+ * "cross-project impact is still answered by querying UP the hierarchy,
+ * never held locally at [the code tier]."
+ *
+ * The fetch instruction references the future `mnemosyne persona show
+ * <tier> <scope-id>` CLI command (pf-13, not yet implemented as of this
+ * story) -- mirrors tiers.ts's `MANDATE_SECTIONS` pattern of instructing an
+ * agent to take an explicit action on demand rather than force-feeding
+ * everything into context on every sync.
+ */
+function buildParentContextSections(parentRefs: { tier: Tier; scopeId: string }[]): TierContentSection[] {
+  return parentRefs.map((ref) => ({
+    heading: `Parent: ${ref.tier} (scopeId: ${ref.scopeId})`,
+    body:
+      `This persona has a parent context at tier '${ref.tier}', scopeId '${ref.scopeId}'. ` +
+      'Cross-project impact is answered by querying UP the hierarchy, never held locally at this tier ' +
+      '(docs/layer-architecture-v2-plan.md). Do not assume, infer, or fabricate that parent\'s content here -- ' +
+      `fetch it on demand when you actually need it, via \`mnemosyne persona show ${ref.tier} ${ref.scopeId}\` ` +
+      '(planned; not implemented yet as of this story) or by resolving it manually against the global persona store in the meantime.',
+  }));
 }
 
 /**
@@ -240,8 +278,13 @@ function fallbackToTierContentWithWarning(
  *   - `tier === 'code-architect'` (repo-local store, pf-02): if a persona
  *     exists on disk for `scopeId` under `ctx.repoRoot`, renders THAT
  *     persona's content, with `MANDATE_SECTIONS` explicitly re-injected
- *     (personas never store their own mandate). If none exists yet, falls
- *     back via `fallbackToTierContentWithWarning`.
+ *     (personas never store their own mandate). Also renders a "Parent
+ *     context (query up)" pointer section from the persona's own
+ *     `parentRefs`, if any (pf-12, `buildParentContextSections`) -- pointer
+ *     only (parent tier + scopeId + a fetch instruction), never the parent's
+ *     actual `sections` content; `[]`/no section at all when `parentRefs` is
+ *     absent. If no persona exists yet, falls back via
+ *     `fallbackToTierContentWithWarning`.
  *   - every other tier (global store, pf-07): same shape, against
  *     persona-store-global.ts's `globalPersonaPath`/`readGlobalPersona`
  *     instead -- if a persona exists on disk for `scopeId` under
@@ -282,10 +325,16 @@ export function getPersonaContent(tier: Tier, scopeId: string, ctx: PersonaConte
   }
 
   const persona = readRepoLocalPersona(ctx.repoRoot, scopeId);
-  return reinjectMandateSections({
-    tier: persona.tier,
-    displayName: persona.displayName,
-    scope: persona.scope,
-    sections: persona.sections,
-  });
+  return reinjectMandateSections(
+    {
+      tier: persona.tier,
+      displayName: persona.displayName,
+      scope: persona.scope,
+      sections: persona.sections,
+    },
+    // pf-12: pointer-only sections built from THIS persona's own parentRefs field --
+    // never a read of the parent's actual store/content. [] (and therefore no
+    // "Parent context" section at all) when parentRefs is absent -- opt-in, not forced.
+    buildParentContextSections(persona.parentRefs ?? []),
+  );
 }

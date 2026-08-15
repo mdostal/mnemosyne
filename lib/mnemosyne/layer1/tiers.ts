@@ -51,6 +51,20 @@ export interface TierContent {
    * mandate" heading whenever entries are present (unchanged from la-01).
    */
   mandateSections: TierContentSection[];
+  /**
+   * pf-12-pointer-rendering-query-up: pointer-only entries naming a parent
+   * tier/scopeId a lower-tier persona should query UP to on demand — never
+   * the parent's actual `sections` content (docs/layer-architecture-v2-plan.md:35,
+   * "cross-project impact is still answered by querying UP... never held
+   * locally"). Populated only by `persona.ts`'s `getPersonaContent` repo-local
+   * dispatch path, from a persona's own `parentRefs` (persona.ts); always `[]`
+   * for the hardcoded `TIER_CONTENT` map built by `tier()` below, and for any
+   * persona with no `parentRefs`. `renderTierContentMarkdown` renders these
+   * under their own "Parent context (query up)" heading, mirroring
+   * `mandateSections`'s extension-point pattern, whenever entries are
+   * present.
+   */
+  parentContextSections: TierContentSection[];
 }
 
 /**
@@ -117,7 +131,9 @@ function tier(
   scope: string,
   sections: TierContentSection[],
 ): TierContent {
-  return { tier: id, displayName, scope, sections, mandateSections: [...MANDATE_SECTIONS] };
+  // parentContextSections is always [] here -- the hardcoded TIER_CONTENT map has no notion of a
+  // persona's parentRefs; only persona.ts's getPersonaContent repo-local dispatch path populates it.
+  return { tier: id, displayName, scope, sections, mandateSections: [...MANDATE_SECTIONS], parentContextSections: [] };
 }
 
 export const TIER_CONTENT: Record<Tier, TierContent> = {
@@ -210,6 +226,13 @@ export function renderTierContentMarkdown(content: TierContent): string {
 
   if (content.mandateSections.length > 0) {
     parts.push('### Memory-lifecycle mandate', ...content.mandateSections.map((section) => renderSection(section)));
+  }
+
+  // pf-12: pointer-only "query up" entries, rendered under their own heading exactly like
+  // mandateSections above -- never the parent's actual sections content, only the pointer
+  // (persona.ts's getPersonaContent is the one place this array gets populated).
+  if (content.parentContextSections.length > 0) {
+    parts.push('### Parent context (query up)', ...content.parentContextSections.map((section) => renderSection(section)));
   }
 
   return parts.join('\n\n').replace(/\n{3,}/g, '\n\n').trim();

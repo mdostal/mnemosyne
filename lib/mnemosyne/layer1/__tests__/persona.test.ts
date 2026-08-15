@@ -1,11 +1,12 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PERSONA_STORE_BY_TIER, assertValidPersona, getPersonaContent, type Persona } from '../persona.js';
 import { writeRepoLocalPersona } from '../persona-store-repo-local.js';
 import { writeGlobalPersona } from '../persona-store-global.js';
-import { TIER_CONTENT, TIERS, type Tier } from '../tiers.js';
+import { TIER_CONTENT, TIERS, renderTierContentMarkdown, type Tier } from '../tiers.js';
+import { syncHarnessFile } from '../sync.js';
 
 function validPersona(overrides: Partial<Persona> = {}): Persona {
   return {
@@ -393,6 +394,177 @@ describe('getPersonaContent', () => {
           .replace(/'code-architect'|'company-director'/g, '<tier>')
           .replace(/\(expected at [^)]+\)/, '(expected at <path>)');
       expect(normalize(repoLocalMessage)).toBe(normalize(globalMessage));
+    });
+  });
+
+  /**
+   * pf-12-pointer-rendering-query-up: the core anti-copy-down guarantee.
+   * docs/layer-architecture-v2-plan.md:35 -- "Cross-project impact is still
+   * answered by querying UP to the company director, never held locally at
+   * the code tier." A code-architect persona with `parentRefs` must render a
+   * "Parent context (query up)" section naming each parent's tier/scopeId,
+   * and must NEVER inline the parent persona's actual `sections` content.
+   * The non-inlining assertions below are real string searches across the
+   * full rendered output against a REAL parent persona written to a REAL
+   * (temp) global store -- not a mock, not a structural/shape check.
+   */
+  describe('Parent context (query up) pointer rendering (pf-12)', () => {
+    const tempRoots: string[] = [];
+    afterEach(async () => {
+      await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+    });
+
+    async function makeTempRepoRoot(): Promise<string> {
+      const root = await mkdtemp(path.join(tmpdir(), 'mnemosyne-pf12-repo-'));
+      tempRoots.push(root);
+      return root;
+    }
+
+    async function makeTempGlobalRoot(): Promise<string> {
+      const root = await mkdtemp(path.join(tmpdir(), 'mnemosyne-pf12-global-'));
+      tempRoots.push(root);
+      return root;
+    }
+
+    // Distinctive, unlikely-to-collide marker strings standing in for each
+    // parent persona's real `sections` body content -- if either of these
+    // ever shows up in a rendered code-architect output, the pointer
+    // mechanism has degraded into copy-down.
+    const PROJECT_ORCHESTRATOR_SECRET =
+      'ZQXVKPLMNOPQRSTUVWXYZ-PROJECT-ORCHESTRATOR-PARENT-BODY-9f3e7a21';
+    const COMPANY_DIRECTOR_SECRET =
+      'GLOBQRSTPARENT-COMPANY-DIRECTOR-PARENT-BODY-7c2b1d64';
+
+    function projectOrchestratorParent(scopeId: string): Persona {
+      return {
+        tier: 'project-orchestrator',
+        scopeId,
+        displayName: 'Project Orchestrator — acme-project',
+        scope: 'Repo-level way-of-working for acme-project.',
+        sections: [
+          {
+            heading: 'Integration notes',
+            body: `Distinctive real parent content that must never be inlined: ${PROJECT_ORCHESTRATOR_SECRET}`,
+          },
+        ],
+      };
+    }
+
+    function companyDirectorParent(scopeId: string): Persona {
+      return {
+        tier: 'company-director',
+        scopeId,
+        displayName: 'Company Director — acme-corp',
+        scope: "Acme Corp's product and business context.",
+        sections: [
+          {
+            heading: 'Business context',
+            body: `Distinctive real parent content that must never be inlined: ${COMPANY_DIRECTOR_SECRET}`,
+          },
+        ],
+      };
+    }
+
+    it("renders a 'Parent context (query up)' section naming each parent's tier/scopeId, and the full rendered output does NOT contain either real parent's distinctive sections body text -- covers two different parent tiers", async () => {
+      const repoRoot = await makeTempRepoRoot();
+      const globalRoot = await makeTempGlobalRoot();
+
+      // Write two REAL parent personas, at two DIFFERENT tiers, into a real
+      // (temp) global store -- each carrying distinctive body content.
+      writeGlobalPersona(projectOrchestratorParent('acme-project'), globalRoot);
+      writeGlobalPersona(companyDirectorParent('acme-corp'), globalRoot);
+
+      // Write a real repo-local code-architect persona naming BOTH as parents.
+      const child = validPersona({
+        scopeId: 'mnemosyne',
+        parentRefs: [
+          { tier: 'project-orchestrator', scopeId: 'acme-project' },
+          { tier: 'company-director', scopeId: 'acme-corp' },
+        ],
+      });
+      writeRepoLocalPersona(repoRoot, child);
+
+      const content = getPersonaContent('code-architect', 'mnemosyne', {
+        repoRoot,
+        globalPersonaRoot: globalRoot,
+      });
+      const rendered = renderTierContentMarkdown(content);
+
+      // --- Pointer presence: tier + scopeId named for each parent ---
+      expect(rendered).toContain('Parent context (query up)');
+      expect(rendered).toContain('project-orchestrator');
+      expect(rendered).toContain('acme-project');
+      expect(rendered).toContain('company-director');
+      expect(rendered).toContain('acme-corp');
+
+      // --- THE non-inlining proof: a real string search across the ENTIRE
+      // rendered output for each real parent's distinctive body text. This
+      // must be absent -- if it appears, the implementation copied the
+      // parent's actual sections content down instead of pointing at it. ---
+      expect(rendered).not.toContain(PROJECT_ORCHESTRATOR_SECRET);
+      expect(rendered).not.toContain(COMPANY_DIRECTOR_SECRET);
+      // Also guard the parent's heading/body text more broadly, not just the marker.
+      expect(rendered).not.toContain('Integration notes');
+      expect(rendered).not.toContain('Business context');
+    });
+
+    it("the same non-inlining guarantee holds end-to-end through a real syncHarnessFile CLAUDE.md write (not just the in-memory render)", async () => {
+      const repoRoot = await makeTempRepoRoot();
+      const globalRoot = await makeTempGlobalRoot();
+      const level0Path = path.join(repoRoot, 'level0-rules.md');
+      await writeFile(level0Path, '# Level 0\n\nPull first. Never commit to main.\n', 'utf8');
+
+      writeGlobalPersona(projectOrchestratorParent('acme-project'), globalRoot);
+
+      const child = validPersona({
+        scopeId: 'sync-check',
+        parentRefs: [{ tier: 'project-orchestrator', scopeId: 'acme-project' }],
+      });
+      writeRepoLocalPersona(repoRoot, child);
+
+      const targetPath = path.join(repoRoot, 'CLAUDE.md');
+      syncHarnessFile(targetPath, 'code-architect', 'claude-code', 'sync-check', { level0Path });
+      const written = await readFile(targetPath, 'utf8');
+
+      expect(written).toContain('Parent context (query up)');
+      expect(written).toContain('project-orchestrator');
+      expect(written).toContain('acme-project');
+      expect(written).not.toContain(PROJECT_ORCHESTRATOR_SECRET);
+    });
+
+    it('renders NO "Parent context" section at all when the persona has no parentRefs -- opt-in, not forced on every code-architect persona', async () => {
+      const repoRoot = await makeTempRepoRoot();
+      const child = validPersona({ scopeId: 'no-parents' });
+      writeRepoLocalPersona(repoRoot, child);
+
+      const content = getPersonaContent('code-architect', 'no-parents', { repoRoot });
+      const rendered = renderTierContentMarkdown(content);
+
+      expect(rendered).not.toContain('Parent context');
+      expect(content.parentContextSections).toEqual([]);
+    });
+
+    it('the pointer section names the future on-demand fetch mechanism, without pretending it exists yet', async () => {
+      const repoRoot = await makeTempRepoRoot();
+      const globalRoot = await makeTempGlobalRoot();
+      writeGlobalPersona(companyDirectorParent('acme-corp'), globalRoot);
+
+      const child = validPersona({
+        scopeId: 'fetch-instruction-check',
+        parentRefs: [{ tier: 'company-director', scopeId: 'acme-corp' }],
+      });
+      writeRepoLocalPersona(repoRoot, child);
+
+      const content = getPersonaContent('code-architect', 'fetch-instruction-check', {
+        repoRoot,
+        globalPersonaRoot: globalRoot,
+      });
+      const rendered = renderTierContentMarkdown(content);
+
+      expect(rendered).toContain('mnemosyne persona show');
+      // Query-up, not copy-down -- ground the instruction in the project's own established
+      // terminology (docs/layer-architecture-v2-plan.md:35).
+      expect(rendered.toLowerCase()).toMatch(/query(ing)? up/);
     });
   });
 });
