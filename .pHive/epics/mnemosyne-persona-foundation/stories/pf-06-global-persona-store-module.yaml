@@ -1,9 +1,18 @@
 id: pf-06-global-persona-store-module
 epic: mnemosyne-persona-foundation
 title: Global persona store module
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-15 (commit 979bc98). Real TDD, independently verified:
+  reran vitest (96/96) and tsc myself, spot-checked the code-architect
+  rejection guard (checked before any disk access, via PERSONA_STORE_BY_TIER)
+  and the read-fresh contract against the design docs. Correctly deferred
+  getPersonaContent's dispatch wiring to pf-07 -- did not touch dispatch
+  logic, only the storage backend itself. Uses pf-03's withLock. All
+  acceptance criteria met.
 depends_on: [pf-05-realworld-fixtures-integration-tests]
 
 description: |
