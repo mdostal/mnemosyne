@@ -85,8 +85,15 @@ export interface TierContent {
  * deleted, reachable via the explicit `includeCrossBranchProvisional`
  * opt-in). Do not restate this from memory if `status-filter.ts` changes --
  * re-read it and update this text to match.
+ *
+ * Exported (pf-02) so `persona.ts`'s `getPersonaContent` can re-inject it as
+ * an explicit, named step for scoped-persona content too -- the same shared,
+ * code-owned constant the `tier()` builder below injects inline for the
+ * hardcoded TIER_CONTENT map. A persona itself is never allowed to carry its
+ * own `mandateSections` (see `persona.ts`'s `assertValidPersona`); this is
+ * the one constant every render path re-attaches at render time.
  */
-const MANDATE_SECTIONS: readonly TierContentSection[] = [
+export const MANDATE_SECTIONS: readonly TierContentSection[] = [
   {
     heading: 'Recall on entry (mandatory)',
     body:
@@ -187,16 +194,6 @@ export const TIER_CONTENT: Record<Tier, TierContent> = {
     ],
   ),
 };
-
-export function getTierContent(tier: Tier): TierContent {
-  const found = TIER_CONTENT[tier];
-  if (!found) {
-    throw new Error(
-      `Unknown tier: ${String(tier)}. Valid tiers are: ${TIERS.join(', ')}.`,
-    );
-  }
-  return found;
-}
 
 function renderSection(section: TierContentSection): string {
   return `### ${section.heading}\n\n${section.body}`;

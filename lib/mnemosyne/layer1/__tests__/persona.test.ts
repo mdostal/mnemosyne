@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
-import { PERSONA_STORE_BY_TIER, assertValidPersona, type Persona } from '../persona.js';
-import { TIERS } from '../tiers.js';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { PERSONA_STORE_BY_TIER, assertValidPersona, getPersonaContent, type Persona } from '../persona.js';
+import { writeRepoLocalPersona } from '../persona-store-repo-local.js';
+import { TIER_CONTENT, TIERS } from '../tiers.js';
 
 function validPersona(overrides: Partial<Persona> = {}): Persona {
   return {
@@ -137,5 +141,98 @@ describe('assertValidPersona', () => {
     expect(() => assertValidPersona(null, 'code-architect')).toThrow();
     expect(() => assertValidPersona('not-an-object', 'code-architect')).toThrow();
     expect(() => assertValidPersona(42, 'code-architect')).toThrow();
+  });
+});
+
+describe('getPersonaContent', () => {
+  const tempRoots: string[] = [];
+  afterEach(async () => {
+    await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
+  async function makeTempRepoRoot(): Promise<string> {
+    const root = await mkdtemp(path.join(tmpdir(), 'mnemosyne-getpersonacontent-'));
+    tempRoots.push(root);
+    return root;
+  }
+
+  it("dispatches code-architect to the repo-local store and returns that persona's content when one exists for the scopeId", async () => {
+    const root = await makeTempRepoRoot();
+    const persona = validPersona({
+      scopeId: 'my-scope',
+      displayName: 'Custom Architect — my-scope',
+      scope: 'A custom, persona-authored scope statement.',
+      sections: [{ heading: 'Custom heading', body: 'Custom body specific to my-scope.' }],
+    });
+    writeRepoLocalPersona(root, persona);
+
+    const content = getPersonaContent('code-architect', 'my-scope', { repoRoot: root });
+
+    expect(content.tier).toBe('code-architect');
+    expect(content.displayName).toBe('Custom Architect — my-scope');
+    expect(content.scope).toBe(persona.scope);
+    expect(content.sections).toEqual(persona.sections);
+  });
+
+  it('re-injects MANDATE_SECTIONS as an explicit step on a repo-local persona hit (personas never store their own mandate)', async () => {
+    const root = await makeTempRepoRoot();
+    writeRepoLocalPersona(root, validPersona({ scopeId: 'mandate-check' }));
+
+    const content = getPersonaContent('code-architect', 'mandate-check', { repoRoot: root });
+
+    expect(content.mandateSections).toEqual(TIER_CONTENT['code-architect'].mandateSections);
+    expect(content.mandateSections.length).toBeGreaterThan(0);
+  });
+
+  it("falls back to TIER_CONTENT['code-architect'] and warns (not silently) when no repo-local persona exists yet for the scopeId", async () => {
+    const root = await makeTempRepoRoot();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const content = getPersonaContent('code-architect', 'never-seeded', { repoRoot: root });
+
+    expect(content).toEqual(TIER_CONTENT['code-architect']);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]?.[0]).toMatch(/fallback|falling back/i);
+    expect(warnSpy.mock.calls[0]?.[0]).toContain('never-seeded');
+
+    warnSpy.mockRestore();
+  });
+
+  it('does not warn when a repo-local persona is actually found', async () => {
+    const root = await makeTempRepoRoot();
+    writeRepoLocalPersona(root, validPersona({ scopeId: 'found-scope' }));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    getPersonaContent('code-architect', 'found-scope', { repoRoot: root });
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it.each(['top-orchestrator', 'company-director', 'project-orchestrator'] as const)(
+    "returns TIER_CONTENT[tier] unchanged for non-code-architect tier '%s' -- identical to today's getTierContent behavior",
+    (tier) => {
+      const content = getPersonaContent(tier, 'any-scope-id', { repoRoot: '/does/not/exist' });
+      expect(content).toEqual(TIER_CONTENT[tier]);
+    },
+  );
+
+  it('never touches the repo-local store for a non-code-architect tier, even if a persona file happens to exist at that path', async () => {
+    // Regression guard for the epic's flagged medium-severity risk: a
+    // dispatch bug could route a non-code-architect tier through the
+    // repo-local store by mistake.
+    const root = await makeTempRepoRoot();
+    writeRepoLocalPersona(root, validPersona({ scopeId: 'shared-scope' }));
+
+    const content = getPersonaContent('project-orchestrator', 'shared-scope', { repoRoot: root });
+
+    expect(content).toEqual(TIER_CONTENT['project-orchestrator']);
+  });
+
+  it('throws a clear error for an unknown tier (equivalent to the old getTierContent behavior)', () => {
+    expect(() =>
+      // @ts-expect-error deliberately invalid tier for the runtime check
+      getPersonaContent('nonexistent-tier', 'some-scope', { repoRoot: '/does/not/exist' }),
+    ).toThrow(/unknown tier/i);
   });
 });
