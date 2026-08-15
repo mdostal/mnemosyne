@@ -68,6 +68,19 @@ async function main() {
       MNEMOSYNE_ROOT_DIR: root,
       SWARM_MEMORY_BIN: "/definitely/missing/swarm-memory",
       SWARM_MEMORY_GRAPH_DB: path.join(root, "missing-graph.sqlite"),
+      // cr-01-graphify-default-layer: this suite's whole point below is a
+      // deterministic "the graph layer is unavailable, recall floors at
+      // file" scenario -- SWARM_MEMORY_BIN/SWARM_MEMORY_GRAPH_DB above
+      // already disable 'code-graph' the same way. graphify is now the
+      // DEFAULT structural-graph layer and this sandbox has the real
+      // binary on PATH, so without this override it would actually run
+      // `graphify update` against `root` and find real hits there,
+      // breaking this test's "exactly 2 file-layer hits" premise. Breaking
+      // GRAPHIFY_BIN too keeps this test's original intent (and its
+      // assertions) unchanged -- config.ts's soft default then falls back
+      // to 'code-graph' (also broken above), so this is genuinely the
+      // "both graph backends unavailable" case, not a graphify-specific one.
+      GRAPHIFY_BIN: "/definitely/missing/graphify-binary-xyz",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -103,6 +116,12 @@ async function main() {
       Array.isArray(layers.body.layers) && layers.body.layers.length === 3,
       `GET /layers -> 3 layers by default (got ${JSON.stringify(layers.body.layers)})`,
     );
+    // cr-01-graphify-default-layer: the unconfigured default's first slot
+    // is normally 'graphify' (see layers/config.ts), but this subprocess's
+    // GRAPHIFY_BIN is deliberately broken above (same reason as
+    // SWARM_MEMORY_BIN) so the soft default's PATH-unavailable fallback
+    // resolves it back to 'code-graph' here -- still the right assertion
+    // for THIS deliberately-degraded environment, not a stale one.
     ok(
       layers.body.layers.map((l) => l.layer).join(",") === "code-graph,vector,file",
       `GET /layers -> default cascade order code-graph,vector,file (got ${layers.body.layers.map((l) => l.layer).join(",")})`,

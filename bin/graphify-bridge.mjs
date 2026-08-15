@@ -18,9 +18,28 @@
 // exactly mirroring the pre-existing duality this story's CBA describes
 // between CodeGraphLayerAdapter.ts and src/engine.mjs's own graph* functions
 // (two thin access paths onto swarm-memory; this is the same architectural
-// split applied to graphify instead). bin/mnemosyne-mcp.mjs selects between
-// the two implementations per graph_* tool, gated on whether MNEMOSYNE_LAYERS
-// configures a "graphify" layer — see wireGraphTools() there.
+// split applied to graphify instead). bin/mnemosyne-mcp.mjs and
+// src/server.mjs's GET /graph/* routes both select between the two
+// implementations via isGraphifyConfigured() below.
+//
+// isGraphifyConfigured() gating (cr-01-graphify-default-layer, soft
+// default): three cases, not a plain boolean anymore --
+//   1. MNEMOSYNE_LAYERS explicitly names "graphify" -> always use graphify;
+//      a missing binary fails loudly (unchanged pre-cr-01 behavior, never
+//      silently downgraded -- an explicit request is an explicit
+//      requirement).
+//   2. MNEMOSYNE_LAYERS is set but does NOT mention "graphify" (e.g. just
+//      "vector") -> graphify is NEVER invoked, no PATH check even happens.
+//      Pluggability guarantee: an explicit config is always authoritative.
+//   3. MNEMOSYNE_LAYERS is genuinely unset (bare install) -> SOFT default:
+//      use graphify if its binary is resolvable on PATH, else fall back to
+//      the swarm-memory-backed path with a loud console.warn() (not a hard
+//      failure) -- preserves the zero-required-external-binary promise for
+//      an install that hasn't run `uv tool install graphifyy` yet (now
+//      recommended, not required -- see README.md/SERVICE.md). Mirrors
+//      lib/mnemosyne/layers/config.ts's resolveUnconfiguredDefault() on the
+//      TS client side (same story, same reasoning, independently
+//      implemented since the two sides share no code).
 //
 // Never wraps `graphify`'s mutation paths (there are none read-only tools
 // need to avoid here beyond graph.json itself, which this module only
@@ -71,8 +90,79 @@ export function findGraphifyLayerEntry(env = process.env) {
   return config.layers.find((entry) => entry && entry.name === "graphify") ?? null;
 }
 
-export function isGraphifyConfigured(env = process.env) {
+// isGraphifyExplicitlyConfigured — true only when MNEMOSYNE_LAYERS is SET
+// and its layers[] names "graphify". Distinct from isGraphifyConfigured()
+// below: this never looks at PATH, so it's the "did the consumer actually
+// ask for this" signal the soft-default's hard-fail-loud branch needs.
+export function isGraphifyExplicitlyConfigured(env = process.env) {
   return findGraphifyLayerEntry(env) !== null;
+}
+
+// isMnemosyneLayersUnset — true only when MNEMOSYNE_LAYERS is genuinely
+// absent/empty, as opposed to "set, but doesn't mention graphify" (e.g.
+// `{"layers":[{"name":"vector"}]}`). The soft default below applies ONLY
+// in the former case -- an explicit, non-graphify config is authoritative
+// and must never have graphify invoked at all (Mnemosyne's pluggability
+// guarantee, cr-01-graphify-default-layer's critical constraint).
+function isMnemosyneLayersUnset(env = process.env) {
+  const raw = env.MNEMOSYNE_LAYERS;
+  return !raw || !raw.trim();
+}
+
+// isGraphifyOnPath — non-throwing PATH probe, mirrors
+// lib/mnemosyne/layers/GraphifyLayerAdapter.ts's isCommandOnPath() (kept as
+// a separate, small implementation here rather than imported -- this file
+// is the zero-dep-JS-side counterpart with no reachable dependency on the
+// TypeScript layer registry, same reasoning as this file's top-of-module
+// comment explains for the rest of its duplication).
+export function isGraphifyOnPath(env = process.env) {
+  const command = env.GRAPHIFY_BIN || "graphify";
+  if (command.includes(path.sep) || (path.sep !== "/" && command.includes("/"))) {
+    return existsSync(command);
+  }
+  const pathEnv = env.PATH ?? "";
+  const dirs = pathEnv.split(path.delimiter).filter((dir) => dir.length > 0);
+  const extensions = process.platform === "win32" ? (env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";") : [""];
+  for (const dir of dirs) {
+    for (const ext of extensions) {
+      if (existsSync(path.join(dir, command + ext))) return true;
+    }
+  }
+  return false;
+}
+
+// isGraphifyConfigured — the soft-default-aware gate src/server.mjs's
+// GET /graph/* routes (and bin/mnemosyne-mcp.mjs's wireGraphTools()) use to
+// pick graphify vs. the swarm-memory-backed path. Three cases
+// (cr-01-graphify-default-layer):
+//
+//   1. MNEMOSYNE_LAYERS explicitly names "graphify": always true. Callers
+//      let graphify's own errors (e.g. missing binary) propagate loudly --
+//      an explicit request is an explicit requirement, never silently
+//      downgraded. Unchanged from this function's pre-cr-01 behavior.
+//   2. MNEMOSYNE_LAYERS is set but does NOT mention "graphify" (e.g. a
+//      single "vector" layer): always false, no PATH check at all --
+//      graphify is never invoked. Mnemosyne's pluggability guarantee: an
+//      explicit config is authoritative, never second-guessed.
+//   3. MNEMOSYNE_LAYERS is genuinely unset (a bare, unconfigured install):
+//      SOFT default -- true only if the `graphify` binary is actually
+//      resolvable on PATH. If it isn't, a loud WARNING is logged (not a
+//      silent fallback) and this returns false, so the caller's existing
+//      `if (isGraphifyConfigured()) {...} else {swarm-memory path}` shape
+//      falls through to the swarm-memory-backed default automatically --
+//      preserving the zero-required-external-binary promise for a bare
+//      install (`uv tool install graphifyy` is recommended, not required).
+export function isGraphifyConfigured(env = process.env) {
+  if (isGraphifyExplicitlyConfigured(env)) return true;
+  if (!isMnemosyneLayersUnset(env)) return false;
+  if (isGraphifyOnPath(env)) return true;
+  const command = env.GRAPHIFY_BIN || "graphify";
+  console.warn(
+    `[mnemosyne] WARNING: graphify is not installed or not found on PATH (command: "${command}") -- ` +
+      "falling back to the swarm-memory-backed graph layer for GET /graph/*. Install graphify for " +
+      `repo-scoped graph data: ${INSTALL_HINT} -- see ${PROJECT_URL}`,
+  );
+  return false;
 }
 
 function resolveOptions(env = process.env) {

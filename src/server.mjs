@@ -359,16 +359,25 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ...SERVICE, ...result, took_ms: Date.now() - t0 });
     }
 
-    // --- Graph (s-04, extended by la-02-graphify-adapter): READ-ONLY -------
-    // impact-graph exploration. Default backend is swarm-memory's graph
-    // QUERY verbs (stats/edges/impact/deps) via engine.mjs, unchanged from
-    // before — but when MNEMOSYNE_LAYERS configures a "graphify" layer,
-    // these routes delegate to bin/graphify-bridge.mjs instead, which reads
-    // graphify's own graph.json and already returns these exact response
-    // envelopes (see bin/mnemosyne-mcp.mjs's identical wireGraphTools()
-    // pattern — this mirrors it for the browser UI, not just MCP). `graph
-    // add`/`graph remove` (mutation verbs) are never wrapped by either
-    // backend and no route below reaches them — mutation is out of scope.
+    // --- Graph (s-04, extended by la-02-graphify-adapter, soft-defaulted by
+    // cr-01-graphify-default-layer): READ-ONLY impact-graph exploration.
+    // isGraphifyConfigured() (bin/graphify-bridge.mjs) decides the backend
+    // per request, not a plain "did MNEMOSYNE_LAYERS mention graphify"
+    // check:
+    //   - MNEMOSYNE_LAYERS explicitly names "graphify" -> graphify, always;
+    //     a missing binary fails loudly (500), never silently downgraded.
+    //   - MNEMOSYNE_LAYERS explicitly names something else (e.g. just
+    //     "vector") -> swarm-memory's graph QUERY verbs via engine.mjs,
+    //     always -- graphify is never even attempted (pluggability).
+    //   - MNEMOSYNE_LAYERS entirely unset (bare install) -> SOFT default:
+    //     graphify if its binary is on PATH, else the swarm-memory-backed
+    //     path below with a loud console.warn() (not a hard failure) --
+    //     preserves the zero-required-external-binary promise for a bare
+    //     install (see SERVICE.md's "Graph" section, and
+    //     bin/mnemosyne-mcp.mjs's identical wireGraphTools() pattern — this
+    //     mirrors it for the browser UI, not just MCP). `graph add`/`graph
+    //     remove` (mutation verbs) are never wrapped by either backend and
+    //     no route below reaches them — mutation is out of scope.
 
     if (route === "GET /graph/stats") {
       if (isGraphifyConfigured()) {

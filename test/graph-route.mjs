@@ -12,6 +12,16 @@
 // Also asserts (per s-04's hard constraint): GET /ui never exposes any
 // action reaching `swarm-memory graph add`/`graph remove`.
 //
+// cr-01-graphify-default-layer (soft default): the FIRST block below
+// deliberately breaks GRAPHIFY_BIN so it keeps exercising the
+// swarm-memory-backed path even though this sandbox has the real graphify
+// CLI installed on PATH -- that's the "MNEMOSYNE_LAYERS unset AND graphify
+// unavailable" soft-fallback case (AC3). Separate blocks further down
+// cover: "unset AND graphify available" (AC2, real default), "explicit
+// graphify config + missing binary" (AC4, unchanged hard failure), and
+// "explicit single non-graphify layer + missing binary" (AC5, graphify
+// never even attempted).
+//
 // Usage: node test/graph-route.mjs
 import { spawn } from "node:child_process";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
@@ -42,8 +52,12 @@ async function waitForServer(url, timeoutMs = 8000) {
   return false;
 }
 
+// GRAPHIFY_BIN deliberately points at a nonexistent binary -- simulates
+// "graphify not on PATH" (AC3's soft-default fallback) without touching
+// the real PATH env var (which this sandbox needs intact for node/npm/tsx
+// resolution). No MNEMOSYNE_LAYERS set at all.
 const child = spawn(process.execPath, [SERVER_PATH], {
-  env: { ...process.env, PORT: String(PORT) },
+  env: { ...process.env, PORT: String(PORT), GRAPHIFY_BIN: "/definitely/missing/graphify-binary-xyz" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 
@@ -67,6 +81,10 @@ try {
     ok(body.edges === direct.edges, `GET /graph/stats edges (${body.edges}) === direct CLI edges (${direct.edges})`);
     ok(JSON.stringify(body.edges_by_origin) === JSON.stringify(direct.edges_by_origin),
       "GET /graph/stats edges_by_origin matches direct CLI output");
+    ok(
+      /WARNING: graphify is not installed or not found on PATH/.test(serverOutput),
+      "server logs a loud WARNING (not a silent fallback) when MNEMOSYNE_LAYERS is unset and graphify isn't on PATH",
+    );
   }
 
   // --- GET /graph/edges: shape + count matches `swarm-memory graph edges` ---
@@ -186,13 +204,22 @@ try {
 }
 
 // --- zero-edges empty state: fresh throwaway graph.sqlite, separate server -
+// cr-01-graphify-default-layer: GRAPHIFY_BIN is deliberately broken here too
+// -- this block tests the swarm-memory-backed empty state specifically
+// (SWARM_MEMORY_GRAPH_DB), which the soft default would otherwise bypass in
+// favor of graphify (installed on this sandbox's real PATH).
 await (async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "mnemosyne-graph-route-empty-"));
   const dbPath = path.join(dir, "fresh-graph.sqlite");
   const emptyPort = PORT + 1;
   const emptyBase = `http://127.0.0.1:${emptyPort}`;
   const emptyChild = spawn(process.execPath, [SERVER_PATH], {
-    env: { ...process.env, PORT: String(emptyPort), SWARM_MEMORY_GRAPH_DB: dbPath },
+    env: {
+      ...process.env,
+      PORT: String(emptyPort),
+      SWARM_MEMORY_GRAPH_DB: dbPath,
+      GRAPHIFY_BIN: "/definitely/missing/graphify-binary-xyz",
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let emptyOutput = "";
@@ -249,6 +276,120 @@ await (async () => {
   } finally {
     if (fails) console.log("\n--- graphify-configured server output ---\n" + graphifyOutput);
     graphifyChild.kill();
+  }
+})();
+
+// --- cr-01-graphify-default-layer: soft default, graphify AVAILABLE, no
+// MNEMOSYNE_LAYERS at all -- AC2. Distinct from the "graphify-configured"
+// block above (which sets MNEMOSYNE_LAYERS explicitly): this proves the
+// UNCONFIGURED default itself now resolves to graphify when the binary is
+// resolvable, with zero explicit config, no PATH override needed since
+// this sandbox has the real graphify CLI installed. ---------------------
+await (async () => {
+  const softDefaultPort = PORT + 3;
+  const softDefaultBase = `http://127.0.0.1:${softDefaultPort}`;
+  const softDefaultChild = spawn(process.execPath, [SERVER_PATH], {
+    env: { ...process.env, PORT: String(softDefaultPort) },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let softDefaultOutput = "";
+  softDefaultChild.stdout.on("data", (d) => { softDefaultOutput += d.toString(); });
+  softDefaultChild.stderr.on("data", (d) => { softDefaultOutput += d.toString(); });
+  try {
+    const up = await waitForServer(softDefaultBase + "/scopes");
+    ok(up, "soft-default (unconfigured, graphify available) test server came up");
+
+    const statsRes = await fetch(softDefaultBase + "/graph/stats");
+    const statsBody = await statsRes.json();
+    ok(statsRes.status === 200 && typeof statsBody.nodes === "number" && statsBody.nodes > 0,
+      `GET /graph/stats (no MNEMOSYNE_LAYERS, graphify on PATH) -> real graphify node count, not swarm-memory's (got ${JSON.stringify(statsBody)})`);
+    ok(statsBody.db && statsBody.db.includes("graph.json"),
+      `GET /graph/stats (soft default) -> db path points at graphify's graph.json, not swarm-memory's sqlite (got ${statsBody.db})`);
+    ok(!/WARNING: graphify/.test(softDefaultOutput),
+      "no WARNING logged when graphify IS available -- the warning is reserved for the fallback case only");
+  } finally {
+    if (fails) console.log("\n--- soft-default server output ---\n" + softDefaultOutput);
+    softDefaultChild.kill();
+  }
+})();
+
+// --- cr-01-graphify-default-layer: explicit MNEMOSYNE_LAYERS=graphify +
+// binary missing -- AC4. Must fail loudly exactly as before this story,
+// never silently downgrade to swarm-memory. A fresh, throwaway repoRoot
+// (via the layer's own `options.repoRoot`) forces loadGraph() to actually
+// attempt `graphify update` -- pointing at THIS repo's real cwd would
+// instead just read the graph.json other blocks in this file already
+// generated there, masking the missing-binary failure entirely. -----------
+await (async () => {
+  const hardFailPort = PORT + 4;
+  const hardFailBase = `http://127.0.0.1:${hardFailPort}`;
+  const freshRoot = await mkdtemp(path.join(tmpdir(), "mnemosyne-graph-route-hardfail-"));
+  const hardFailChild = spawn(process.execPath, [SERVER_PATH], {
+    env: {
+      ...process.env,
+      PORT: String(hardFailPort),
+      GRAPHIFY_BIN: "/definitely/missing/graphify-binary-xyz",
+      MNEMOSYNE_LAYERS: JSON.stringify({ layers: [{ name: "graphify", options: { repoRoot: freshRoot } }] }),
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let hardFailOutput = "";
+  hardFailChild.stdout.on("data", (d) => { hardFailOutput += d.toString(); });
+  hardFailChild.stderr.on("data", (d) => { hardFailOutput += d.toString(); });
+  try {
+    const up = await waitForServer(hardFailBase + "/scopes");
+    ok(up, "explicit-graphify-config-with-missing-binary test server came up");
+
+    const statsRes = await fetch(hardFailBase + "/graph/stats");
+    ok(statsRes.status >= 500,
+      `GET /graph/stats (MNEMOSYNE_LAYERS=graphify, binary missing) -> fails loudly (got ${statsRes.status}), never a silent fallback to swarm-memory`);
+    const statsBody = await statsRes.json().catch(() => ({}));
+    ok(/graphify/i.test(JSON.stringify(statsBody)),
+      `error body names graphify, not a generic/unrelated error (${JSON.stringify(statsBody)})`);
+  } finally {
+    if (fails) console.log("\n--- explicit-graphify-missing-binary server output ---\n" + hardFailOutput);
+    hardFailChild.kill();
+    await rm(freshRoot, { recursive: true, force: true });
+  }
+})();
+
+// --- cr-01-graphify-default-layer: explicit MNEMOSYNE_LAYERS names a
+// single non-graphify layer + binary missing -- AC5 (pluggability). Proves
+// graphify is never even attempted: the swarm-memory-backed route still
+// works normally, and no missing-binary warning/error appears anywhere.
+// ("vector" isn't itself a graph backend, but the point here is purely
+// about isGraphifyConfigured() never being coaxed into a graphify attempt
+// by an explicit, non-graphify config -- GET /graph/stats still resolves
+// via the swarm-memory path exactly as it does with no config at all.) ----
+await (async () => {
+  const pluggablePort = PORT + 5;
+  const pluggableBase = `http://127.0.0.1:${pluggablePort}`;
+  const pluggableChild = spawn(process.execPath, [SERVER_PATH], {
+    env: {
+      ...process.env,
+      PORT: String(pluggablePort),
+      GRAPHIFY_BIN: "/definitely/missing/graphify-binary-xyz",
+      MNEMOSYNE_LAYERS: JSON.stringify({ layers: [{ name: "vector" }] }),
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let pluggableOutput = "";
+  pluggableChild.stdout.on("data", (d) => { pluggableOutput += d.toString(); });
+  pluggableChild.stderr.on("data", (d) => { pluggableOutput += d.toString(); });
+  try {
+    const up = await waitForServer(pluggableBase + "/scopes");
+    ok(up, "explicit-single-non-graphify-layer test server came up");
+
+    const direct = await graphStats();
+    const statsRes = await fetch(pluggableBase + "/graph/stats");
+    const statsBody = await statsRes.json();
+    ok(statsRes.status === 200 && statsBody.nodes === direct.nodes,
+      `GET /graph/stats (MNEMOSYNE_LAYERS=[vector]) -> swarm-memory-backed data, unaffected by the missing graphify binary (got ${JSON.stringify(statsBody)})`);
+    ok(!/graphify/i.test(pluggableOutput),
+      "no graphify-related warning or error appears anywhere -- graphify was never invoked at all for an explicit non-graphify config");
+  } finally {
+    if (fails) console.log("\n--- explicit-single-non-graphify-layer server output ---\n" + pluggableOutput);
+    pluggableChild.kill();
   }
 })();
 

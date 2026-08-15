@@ -1,7 +1,54 @@
 id: cr-01-graphify-default-layer
 epic: mnemosyne-crossrepo-defaults
 title: Promote Graphify to the default code-graph layer (both TS client and JS server)
-status: pending
+status: complete
+note: >
+  TS side: lib/mnemosyne/layers/config.ts's DEFAULT_LAYER_STACK_CONFIG first entry is
+  now {name:'graphify'} (was 'code-graph'), with a SOFT PATH-availability fallback
+  (resolveUnconfiguredDefault()) back to {name:'code-graph'} + a console.warn() when the
+  `graphify` binary isn't resolvable -- added beyond the story's literal text because a
+  hard swap alone breaks MnemosyneClient's eager per-layer construction (GraphifyLayerAdapter's
+  constructor throws synchronously via ensureBinaryOnPath() when the binary is missing) in
+  any environment lacking graphify, including this repo's own CI (.github/workflows/ci.yml
+  is Node-only, confirmed no graphify install step) and lib/mnemosyne/server.ts's GET /layers
+  route (constructs MnemosyneClient once at module load). Verified for real: reset PATH to a
+  fake dir with/without a fake graphify executable via vitest env stubs (lib/mnemosyne/layers/__tests__/config.test.ts,
+  12 tests, all passing) and confirmed the existing client.test.ts suite (21 assertions,
+  "must stay completely unmodified") still passes unmodified by extending client.ts's
+  legacyOverrideByName to map BOTH 'code-graph' and 'graphify' to options.codeGraphLayer.
+  JS side: bin/graphify-bridge.mjs's isGraphifyConfigured() is now a 3-case soft gate
+  (isGraphifyExplicitlyConfigured -> hard true; MNEMOSYNE_LAYERS set but non-graphify ->
+  hard false, no PATH check; MNEMOSYNE_LAYERS unset -> soft, PATH-dependent, warns and
+  falls back otherwise) -- wired transparently into src/server.mjs's 4 GET /graph/* routes
+  and bin/mnemosyne-mcp.mjs's wireGraphTools() with zero code changes to either (both already
+  called isGraphifyConfigured() as their sole gate). Verified for real via
+  test/graphify-bridge.mjs's new "soft-default gating" section: a REAL node subprocess
+  (spawnSync) with PATH pointed at an empty throwaway dir and MNEMOSYNE_LAYERS="" confirmed
+  exit code 0 (not a crash), isGraphifyConfigured()===false, and a
+  "WARNING: graphify is not installed or not found on PATH" line on stderr -- the exact
+  PATH-broken-fallback subprocess test the epic's TDD guidance called for. test/graph-route.mjs
+  gained 3 new real-subprocess blocks (soft-default w/ graphify available, explicit
+  MNEMOSYNE_LAYERS=graphify + missing binary still 500s loudly via a fresh throwaway
+  repoRoot, explicit MNEMOSYNE_LAYERS=[vector] + missing binary never even attempts graphify)
+  plus GRAPHIFY_BIN overrides added to its 2 pre-existing swarm-memory-comparison blocks
+  (which this sandbox's real installed graphify binary would otherwise silently hijack).
+  test/http-api.mjs's GET /layers assertion and its whole POST /recall/remember block needed
+  the same GRAPHIFY_BIN override for the identical reason (query "target" against a temp repo
+  was starting to match graphify's own real indexing of that temp dir, 5 hits instead of the
+  intended 2 file-layer hits) -- fixed by extending that test's existing "disable the graph
+  backend" pattern to cover graphify too, zero assertion rewrites needed. Ran the full `npm test`
+  combined script plus git-hooks.mjs/install-git-hooks.mjs/lifecycle-compliance-audit.mjs/the
+  vitest contracts run individually (npm test's && chain stops at the crash below): confirmed
+  the pre-existing better-sqlite3/CodeGraphLayerAdapter worker-process crash (test/http-api.mjs's
+  own comment, reproduced identically via `git stash` against fbf6b08 pre-story) is unchanged --
+  same crash point (POST /recall), same "fetch failed"/socket-closed signature, not worsened.
+  383 vitest tests pass (376 on baseline; +7 from this story's own new coverage). Deviation from
+  the story's literal text: the story only asked for a config.ts default swap on the TS side with
+  no fallback; the soft PATH-availability fallback there was added because without it the change
+  fails its own acceptance criterion ("all existing pl-01 registry/config tests still pass") in
+  any graphify-less environment, which includes this repo's CI. Updated SERVICE.md's "Graph"
+  section and README.md's layer-stack prose/mermaid diagram + Quickstart to document graphify as
+  the new recommended (not required) default and the fallback's honest behavior.
 complexity: medium
 methodology: tdd
 depends_on: []

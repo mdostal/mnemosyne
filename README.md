@@ -23,12 +23,26 @@ Memory is organized as an ordered, escalating stack — meta (broad) to file (ra
 meta        (hive Obsidian vault — Consus knowledge home / canonical truth)
   → enterprise   (org-wide knowledge + standards, promoted from approved CBAs)
     → project    (per-project working memory, decisions, context)
-      → code-graph   (typed impact graph: depends_on / cites / implements)
+      → graphify     (typed impact graph: depends_on / cites / implements — default; see below)
         → vector     (Qdrant Cloud — default backend, semantic recall)
           → file     (raw grep — loud-failure floor)
 ```
 
 Backends are **pluggable**: Qdrant is the *default* vector backend but the slot is swappable (any OpenAI-compatible embeddings / alternate vector store); Obsidian is the default meta store but the meta layer is a contract, not a hard dependency. Slot config is owned by **Vesta**.
+
+**Graph layer: [Graphify](https://github.com/Graphify-Labs/graphify) by
+default, `code-graph` as a soft, automatic fallback.** A real A/B benchmark
+against this repo found the older in-house `code-graph` layer's backing
+store had **zero** nodes from this repo (it has no per-repo scoping), while
+Graphify indexed 1470+ real nodes from this repo's own source, faster —
+see `docs/layer-architecture-v2-plan.md` §7. `uv tool install graphifyy` is
+**recommended, not required**: an unconfigured install with no `graphify`
+binary on PATH automatically falls back to `code-graph` (with a logged
+warning, never a hard failure), so a bare `npm install` still works. Both
+layers stay registered and explicitly selectable via `MNEMOSYNE_LAYERS` —
+this only changes the *unconfigured* default, never how configuration
+itself works (see `SERVICE.md`'s "Graph" section for the full gating
+rules).
 
 ## Architecture
 
@@ -52,7 +66,7 @@ flowchart TB
     meta["meta — Obsidian vault"]
     ent["enterprise"]
     proj["project"]
-    cg["code-graph"]
+    cg["graphify (default)<br/>code-graph (soft fallback)"]
     vec["vector — Qdrant Cloud"]
     file["file — grep (loud floor)"]
   end
@@ -73,7 +87,8 @@ flowchart TB
   idx -.keeps fresh.-> meta
 
   vec -->|wraps| sm[("swarm-memory<br/>+ Qdrant Cloud")]
-  cg -->|wraps| sm
+  cg -->|wraps, if graphify unavailable| sm
+  cg -->|or reads| gj[("graphify's own<br/>graph.json")]
 
   api -.decision + metric record.-> argus
 
@@ -87,7 +102,7 @@ Mnemosyne fills the **memory capability slot** in Pantheon: one god per capabili
 - **Host / framework:** [pantheon-v2](https://github.com/mdostal/pantheon-v2) — the core host that assembles gods behind shared contracts.
 - **Substrate:** work is planned and executed on [Multica](https://github.com/firefly-events/multica) with the [plugin-hive](https://firefly-events.github.io/plugin-hive/) SDLC (kickoff → plan → execute → review → test → ship). Continuous indexing schedules are **Multica-native** (no localized cron).
 - **Sibling gods it talks to:** **Minerva** (planner) and swarm agents are the primary recall callers; **Consus** / **Janus** provide the human read model (browse layers, trace a recall's provenance, spot stale scopes); **Vesta** owns which backend fills each layer slot; **Argus** / **Metis** receive the decision + metric records.
-- **Builds on:** [`swarm-memory`](https://github.com/mdostal/swarm-memory) (Qdrant-backed semantic memory + code/docs impact graph) — adopted/wrapped as the vector and code-graph layers, **not** rewritten.
+- **Builds on:** [`swarm-memory`](https://github.com/mdostal/swarm-memory) (Qdrant-backed semantic memory + code/docs impact graph) — adopted/wrapped as the vector layer, and (as a soft fallback) the `code-graph` layer, **not** rewritten. [`Graphify`](https://github.com/Graphify-Labs/graphify) is the default graph layer (see "The layer stack" above).
 
 ## Quickstart
 
@@ -97,6 +112,12 @@ cd mnemosyne
 npm install
 npm test
 ```
+
+Optional but recommended: `uv tool install graphifyy` — installs the
+`graphify` CLI that backs the graph layer by default (see "The layer stack"
+above). Not required: without it, the service and library both fall back to
+the `code-graph` layer automatically, with a logged warning, never a hard
+failure.
 
 See `npm run` in `package.json` for the service entrypoint, and [`hooks/README.md`](./hooks/README.md) to wire the pre-recall/post-remember hooks into an agent runner.
 

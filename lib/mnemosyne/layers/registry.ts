@@ -10,6 +10,7 @@
  * `client.ts`). It only answers "given a name, build me that layer."
  */
 import { CodeGraphLayerAdapter } from './CodeGraphLayerAdapter.js';
+import { CrossRepoLinkerAdapter } from './CrossRepoLinkerAdapter.js';
 import { FileLayerAdapter } from './FileLayerAdapter.js';
 import { GraphifyLayerAdapter } from './GraphifyLayerAdapter.js';
 import type { LayerAdapter } from './LayerAdapter.js';
@@ -70,16 +71,40 @@ export function registerBuiltinLayers(registry: LayerRegistry): void {
   registry.register('code-graph', () => new CodeGraphLayerAdapter());
   registry.register('vector', (options) => new VectorLayerAdapter(options as ConstructorParameters<typeof VectorLayerAdapter>[0]));
   registry.register('file', (_options, ctx) => new FileLayerAdapter(ctx.rootDirectory ?? process.cwd()));
-  // "graphify" (la-02-graphify-adapter): a NEW layer name, registered
-  // alongside "code-graph" rather than replacing it -- la-10 does the A/B
-  // comparison before any retirement. rootDirectory flows through as
-  // graphify's repoRoot (the directory it indexes) when the caller doesn't
-  // override it via per-layer options.
+  // "graphify" (la-02-graphify-adapter): registered alongside "code-graph"
+  // rather than replacing it -- la-10's A/B benchmark gave a GO on
+  // eventually retiring 'code-graph' (docs/layer-architecture-v2-plan.md
+  // §7), which is what cr-01-graphify-default-layer used to promote
+  // 'graphify' to config.ts's DEFAULT_LAYER_STACK_CONFIG -- but retirement
+  // itself is a separate, later story; both stay registered here so either
+  // is explicitly selectable via MNEMOSYNE_LAYERS regardless of which one
+  // the unconfigured default currently resolves to. rootDirectory flows
+  // through as graphify's repoRoot (the directory it indexes) when the
+  // caller doesn't override it via per-layer options.
   registry.register('graphify', (options, ctx) => {
     const adapterOptions = options as ConstructorParameters<typeof GraphifyLayerAdapter>[0];
     return new GraphifyLayerAdapter({
       ...adapterOptions,
       repoRoot: adapterOptions?.repoRoot ?? ctx.rootDirectory ?? process.cwd(),
     });
+  });
+  // "crossref-linker" (cr-02-crossrepo-identifier-linker): a NEW, OPTIONAL
+  // layer, genuinely different from every layer above -- multi-repo by
+  // design (see CrossRepoLinkerAdapter.ts), so unlike "graphify"/"file" it
+  // does NOT default `options.repos` from ctx.rootDirectory: a single
+  // rootDirectory is structurally insufficient for a layer whose entire
+  // purpose is finding relationships BETWEEN repos, so the caller must
+  // always pass `repos` explicitly (loud failure at construction time
+  // otherwise). Never invoked unless a consumer's MNEMOSYNE_LAYERS config
+  // explicitly includes "crossref-linker" -- registration alone has zero
+  // effect on any other layer/config.
+  registry.register('crossref-linker', (options) => {
+    // Unlike every other factory above, `repos` is a REQUIRED field (loud
+    // failure at construction otherwise) so `Record<string, unknown>`
+    // doesn't structurally satisfy CrossRepoLinkerAdapterOptions -- the
+    // `unknown` hop below is the same "caller-supplied config, trust but
+    // let the constructor's own validation catch a bad shape" pattern as
+    // every other registry factory, just spelled out for a required field.
+    return new CrossRepoLinkerAdapter(options as unknown as ConstructorParameters<typeof CrossRepoLinkerAdapter>[0]);
   });
 }

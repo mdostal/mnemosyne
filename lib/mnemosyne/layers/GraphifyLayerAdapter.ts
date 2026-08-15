@@ -101,11 +101,16 @@ export interface GraphifyLayerAdapterOptions {
  * adapter never opts into more than that -- see la-02's risk/mitigation on
  * GEMINI_API_KEY environment variance.
  *
- * Registered under the NEW layer name "graphify" (see registry.ts), not a
- * replacement for CodeGraphLayerAdapter's "code-graph" -- that's la-10's
- * job, after an A/B comparison.
+ * Registered under the layer name "graphify" (see registry.ts) alongside
+ * "code-graph" (CodeGraphLayerAdapter.ts) -- both stay registered, never one
+ * replacing the other. la-10's real A/B benchmark (GO on retirement, see
+ * docs/layer-architecture-v2-plan.md §7) is what made cr-01-graphify-default-layer
+ * promote this layer to the DEFAULT unconfigured stack's first slot
+ * (layers/config.ts's DEFAULT_LAYER_STACK_CONFIG), with a soft PATH-availability
+ * fallback back to 'code-graph' -- see that file's doc comment.
  *
- * Story: la-02-graphify-adapter (epic: mnemosyne-layer-architecture-v2)
+ * Story: la-02-graphify-adapter (epic: mnemosyne-layer-architecture-v2).
+ * Promoted to default: cr-01-graphify-default-layer (epic: mnemosyne-crossrepo-defaults).
  */
 export class GraphifyLayerAdapter implements LayerAdapter {
   readonly layer = 'graphify' as const;
@@ -250,27 +255,39 @@ export class GraphifyLayerAdapter implements LayerAdapter {
 // how a shell resolves `./foo` or `/abs/foo`); a bare command name is
 // resolved by scanning PATH, same as `which`.
 
-function ensureBinaryOnPath(command: string): void {
+/**
+ * Non-throwing PATH probe -- exported so other modules can ask "is this
+ * command resolvable" without needing GraphifyLayerAdapter's loud-failure
+ * constructor semantics (cr-01-graphify-default-layer: `config.ts`'s
+ * soft-default fallback needs exactly this, deciding WITHOUT throwing
+ * whether the unconfigured default should resolve to 'graphify' or fall
+ * back to 'code-graph'). `pathEnv` defaults to the real `process.env.PATH`
+ * but accepts an explicit override for deterministic tests.
+ */
+export function isCommandOnPath(command: string, pathEnv: string | undefined = process.env.PATH): boolean {
   if (command.includes(path.sep) || (path.sep !== '/' && command.includes('/'))) {
-    if (existsSync(command)) {
-      return;
-    }
-    throw missingBinaryError(command);
+    return existsSync(command);
   }
 
-  const pathEnv = process.env.PATH ?? '';
-  const dirs = pathEnv.split(path.delimiter).filter((dir) => dir.length > 0);
+  const dirs = (pathEnv ?? '').split(path.delimiter).filter((dir) => dir.length > 0);
   const extensions = process.platform === 'win32' ? (process.env.PATHEXT ?? '.EXE;.CMD;.BAT').split(';') : [''];
 
   for (const dir of dirs) {
     for (const ext of extensions) {
       const candidate = path.join(dir, command + ext);
       if (existsSync(candidate)) {
-        return;
+        return true;
       }
     }
   }
 
+  return false;
+}
+
+function ensureBinaryOnPath(command: string): void {
+  if (isCommandOnPath(command)) {
+    return;
+  }
   throw missingBinaryError(command);
 }
 
