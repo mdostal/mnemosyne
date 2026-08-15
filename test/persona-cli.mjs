@@ -29,6 +29,23 @@
 //             --dry-run run, and files that would be newly created are
 //             NOT created on disk.
 //
+// Extended by pf-09-cli-persona-seed-and-global-sync (epic: same) to also
+// cover:
+//   AC-seed        `persona seed` wires in pf-08's
+//                  bin/mnemosyne-persona-seed.mjs and reports which of the
+//                  3 global tiers (top-orchestrator/company-director/
+//                  project-orchestrator) were newly seeded vs. already
+//                  present, idempotently across repeat runs.
+//   AC-global-sync `persona sync` also works for the 3 global tiers:
+//                  --repo is still required (it's the write target for the
+//                  harness files) even though content resolution for a
+//                  global tier comes from the global persona store
+//                  (~/.mnemosyne/personas), never from inside --repo.
+//                  Covers both the no-persona-seeded-yet fallback path and
+//                  the real dispatch-to-global-store path (a distinctive
+//                  marker in a hand-written global persona file must show
+//                  up in the synced harness content).
+//
 // Usage: node test/persona-cli.mjs
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -78,6 +95,30 @@ async function makeFakeHome() {
     "utf8",
   );
   return home;
+}
+
+/**
+ * Hand-writes a global persona YAML file directly at
+ * `<home>/.mnemosyne/personas/<tier>/<scopeId>.yaml` (persona-store-global.ts's
+ * fixed location convention) -- this test file can't import
+ * persona-store-global.ts's writeGlobalPersona in-process (same constraint
+ * as the CLI itself, see doc comment above), so it writes the YAML shape by
+ * hand instead. JSON.stringify'd scalars are valid YAML flow scalars, so
+ * this is safe for arbitrary marker text without a YAML-escaping dependency.
+ */
+async function writeFakeGlobalPersona(home, tier, scopeId, { displayName, scope, sections }) {
+  const dir = path.join(home, ".mnemosyne", "personas", tier);
+  await mkdir(dir, { recursive: true });
+  const yamlText =
+    [
+      `tier: ${JSON.stringify(tier)}`,
+      `scopeId: ${JSON.stringify(scopeId)}`,
+      `displayName: ${JSON.stringify(displayName)}`,
+      `scope: ${JSON.stringify(scope)}`,
+      `sections:`,
+      ...sections.flatMap((s) => [`  - heading: ${JSON.stringify(s.heading)}`, `    body: ${JSON.stringify(s.body)}`]),
+    ].join("\n") + "\n";
+  await writeFile(path.join(dir, `${scopeId}.yaml`), yamlText, "utf8");
 }
 
 /** Runs the CLI as a real subprocess via tsx (directly, or through the bin/mnemosyne dispatcher). */
@@ -215,6 +256,110 @@ async function main() {
     await rm(home, { recursive: true, force: true });
     await rm(repo, { recursive: true, force: true });
     await rm(emptyRepo, { recursive: true, force: true });
+  }
+
+  // --- AC-seed: `persona seed` subcommand (pf-09) ---------------------------
+  {
+    const home = await makeFakeHome();
+
+    const first = await runCli(["seed"], { home });
+    ok(first.code === 0, `seed (first run) -> exit 0 (got ${first.code}, stderr=${short(first.stderr)})`);
+    ok(/seed\s+top-orchestrator\/default/.test(first.stdout), `seed reports top-orchestrator newly seeded -> ${short(first.stdout)}`);
+    ok(/seed\s+company-director\/default/.test(first.stdout), `seed reports company-director newly seeded -> ${short(first.stdout)}`);
+    ok(/seed\s+project-orchestrator\/default/.test(first.stdout), `seed reports project-orchestrator newly seeded -> ${short(first.stdout)}`);
+    ok(!/code-architect/.test(first.stdout), `seed never mentions code-architect (repo-local tier, out of scope) -> ${short(first.stdout)}`);
+    ok(/3 seeded, 0 skipped \(already existed\), 3 total/.test(first.stdout), `seed reports 3 seeded / 0 skipped on first run -> ${short(first.stdout)}`);
+
+    for (const tier of ["top-orchestrator", "company-director", "project-orchestrator"]) {
+      const exists = await stat(path.join(home, ".mnemosyne", "personas", tier, "default.yaml")).then(() => true).catch(() => false);
+      ok(exists, `seed actually wrote ${tier}/default.yaml to the global persona store`);
+    }
+
+    // Idempotency: second run reports the same 3 tiers as already present, not re-seeded.
+    const second = await runCli(["seed"], { home });
+    ok(second.code === 0, `seed (second run) -> exit 0 (got ${second.code})`);
+    ok(/skip\s+top-orchestrator\/default/.test(second.stdout), `seed (second run) reports top-orchestrator already present -> ${short(second.stdout)}`);
+    ok(/skip\s+company-director\/default/.test(second.stdout), `seed (second run) reports company-director already present -> ${short(second.stdout)}`);
+    ok(/skip\s+project-orchestrator\/default/.test(second.stdout), `seed (second run) reports project-orchestrator already present -> ${short(second.stdout)}`);
+    ok(/0 seeded, 3 skipped \(already existed\), 3 total/.test(second.stdout), `seed (second run) reports 0 seeded / 3 skipped -> ${short(second.stdout)}`);
+
+    // Dispatcher wiring: `bin/mnemosyne persona seed` reaches the same code.
+    const viaDispatcher = await runCli(["seed"], { home, viaDispatcher: true });
+    ok(viaDispatcher.code === 0, `bin/mnemosyne persona seed -> exit 0 (got ${viaDispatcher.code}, stderr=${short(viaDispatcher.stderr)})`);
+    ok(/skip\s+top-orchestrator\/default/.test(viaDispatcher.stdout), `bin/mnemosyne persona seed reaches the seed script (reports already-present tiers) -> ${short(viaDispatcher.stdout)}`);
+
+    await rm(home, { recursive: true, force: true });
+  }
+
+  // --- AC-global-sync: `persona sync` for the 3 global tiers (pf-09) --------
+  {
+    // --repo is still required for a global tier -- it's the write target, not the content source.
+    const home = await makeFakeHome();
+    const missingRepoGlobal = await runCli(["sync", "--tier", "company-director", "--scope-id", "default"], { home });
+    ok(missingRepoGlobal.code !== 0, `global-tier sync missing --repo -> non-zero exit (got ${missingRepoGlobal.code})`);
+    ok(/--repo.*--tier.*--scope-id.*required/i.test(missingRepoGlobal.stderr), `global-tier sync missing --repo -> same clear stderr message as any other tier -> ${short(missingRepoGlobal.stderr)}`);
+    await rm(home, { recursive: true, force: true });
+  }
+  {
+    // No persona seeded yet for this scope -- falls back to the hardcoded TIER_CONTENT, same
+    // fallback contract as code-architect, and the CLI still writes the harness files using --repo
+    // purely as the write target.
+    const home = await makeFakeHome();
+    const repo = await makeTempDir("mnemosyne-persona-cli-global-fallback-repo-");
+
+    const result = await runCli(["sync", "--repo", repo, "--tier", "company-director", "--scope-id", "unseeded-scope"], { home });
+    ok(result.code === 0, `global-tier sync (unseeded scope) -> exit 0 (got ${result.code}, stderr=${short(result.stderr)})`);
+    ok(/created .*CLAUDE\.md/.test(result.stdout), `global-tier sync reports CLAUDE.md created -> ${short(result.stdout)}`);
+    ok(
+      /global persona store/i.test(result.stdout) && /--repo/.test(result.stdout),
+      `global-tier sync stdout explicitly notes content comes from the global persona store, not --repo -> ${short(result.stdout)}`,
+    );
+
+    const claude = await readFile(path.join(repo, "CLAUDE.md"), "utf8");
+    ok(claude.includes("Company Director"), "CLAUDE.md contains company-director tier content (no persona seeded -> fallback)");
+    ok(claude.includes("Memory-lifecycle mandate"), "CLAUDE.md contains the memory-lifecycle mandate for a global tier too");
+
+    await rm(home, { recursive: true, force: true });
+    await rm(repo, { recursive: true, force: true });
+  }
+  {
+    // A real global persona on disk (hand-written, distinctive marker text) -- content resolution
+    // must dispatch to the global store, not the --repo directory, and not the hardcoded fallback.
+    const home = await makeFakeHome();
+    const repo = await makeTempDir("mnemosyne-persona-cli-global-real-repo-");
+
+    await writeFakeGlobalPersona(home, "company-director", "acme-corp", {
+      displayName: "Company Director",
+      scope: "GLOBAL_PERSONA_SCOPE_MARKER — Acme Corp's own authored scope statement.",
+      sections: [{ heading: "Authored section", body: "GLOBAL_PERSONA_BODY_MARKER — real seeded content, not the hardcoded fallback." }],
+    });
+
+    const result = await runCli(["sync", "--repo", repo, "--tier", "company-director", "--scope-id", "acme-corp"], { home });
+    ok(result.code === 0, `global-tier sync (seeded scope) -> exit 0 (got ${result.code}, stderr=${short(result.stderr)})`);
+    ok(!/falling back/i.test(result.stderr), `global-tier sync (seeded scope) does NOT print the fallback warning -> ${short(result.stderr)}`);
+
+    const claude = await readFile(path.join(repo, "CLAUDE.md"), "utf8");
+    ok(claude.includes("GLOBAL_PERSONA_SCOPE_MARKER"), "CLAUDE.md contains the hand-authored global persona's scope text, proving dispatch to the global store");
+    ok(claude.includes("GLOBAL_PERSONA_BODY_MARKER"), "CLAUDE.md contains the hand-authored global persona's section body");
+    ok(
+      !claude.includes("Owns one company's product/business context"),
+      "CLAUDE.md does NOT contain the hardcoded TIER_CONTENT fallback text (real persona took precedence)",
+    );
+
+    await rm(home, { recursive: true, force: true });
+    await rm(repo, { recursive: true, force: true });
+  }
+
+  // --- AC-help: --help output distinguishes write-target from content-source (pf-09) ------------
+  {
+    const help = await runCli(["--help"]);
+    ok(help.code === 0, `persona --help -> exit 0 (got ${help.code})`);
+    const helpText = help.stdout + help.stderr;
+    ok(/seed/.test(helpText), `persona --help mentions the seed subcommand -> ${short(helpText)}`);
+    ok(
+      /global persona store/i.test(helpText) && /code-architect/.test(helpText),
+      `persona --help explicitly distinguishes global-tier content (global store) from code-architect (--repo) -> ${short(helpText)}`,
+    );
   }
 }
 
