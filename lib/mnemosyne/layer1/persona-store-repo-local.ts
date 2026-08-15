@@ -1,0 +1,84 @@
+/**
+ * Layer 1 — repo-local persona store.
+ *
+ * Holds `code-architect`-tier personas only (design-discussion.md §3a):
+ * scoped to exactly one repo, git-committed alongside the code it describes
+ * (not gitignored — see .gitignore, which deliberately has no
+ * `.mnemosyne/personas` exclusion). This is the storage level for the
+ * "repo build-out" step of the repo-spinup lifecycle, AFTER a repo exists;
+ * the (not-yet-built) global store covers the other three tiers, which do
+ * their ideation BEFORE any repo exists.
+ *
+ * Format is YAML, not JSON (design-discussion.md §7a, direct operator
+ * correction: "we define our own yaml") — reuses the `yaml` package already
+ * in package.json's dependencies rather than adding a new one.
+ *
+ * Reads are fresh off disk on every call, no module-level caching -- mirrors
+ * level0.ts's "read fresh every run" contract (level0.ts:23-33).
+ *
+ * Story: pf-01-persona-schema-repo-local-store (epic: mnemosyne-persona-foundation)
+ */
+
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { parse, stringify } from 'yaml';
+import { PERSONA_STORE_BY_TIER, assertValidPersona, type Persona } from './persona.js';
+import type { Tier } from './tiers.js';
+
+/** The only tier the repo-local store ever holds. */
+export const REPO_LOCAL_PERSONA_TIER: Tier = 'code-architect';
+
+/**
+ * Guards that `tier` is one PERSONA_STORE_BY_TIER actually routes to the
+ * repo-local store -- consults the shared map (persona.ts) rather than
+ * re-deriving the split independently, so a future change to the map can't
+ * silently desync store enforcement from schema-level tier validation.
+ */
+function assertRepoLocalTier(tier: unknown): asserts tier is Tier {
+  const kind = typeof tier === 'string' ? PERSONA_STORE_BY_TIER[tier as Tier] : undefined;
+  if (kind !== 'repo-local') {
+    throw new Error(
+      `The repo-local persona store only holds '${REPO_LOCAL_PERSONA_TIER}' personas -- ` +
+        `got tier '${String(tier)}', which belongs in the global store (not this one). Refusing to write.`,
+    );
+  }
+}
+
+/** `<repoRoot>/.mnemosyne/personas/<scopeId>.yaml` -- the repo-local store's fixed location convention. */
+export function repoLocalPersonaPath(repoRoot: string, scopeId: string): string {
+  return path.join(repoRoot, '.mnemosyne', 'personas', `${scopeId}.yaml`);
+}
+
+/**
+ * Validates and writes a code-architect persona to the repo-local store.
+ * Throws (writing nothing) if `candidate` is not tier=code-architect, or
+ * fails schema validation (including a bare attempt to smuggle in
+ * `mandateSections`). Returns the file path written.
+ */
+export function writeRepoLocalPersona(repoRoot: string, candidate: unknown): string {
+  const tier = (candidate as { tier?: unknown } | null)?.tier;
+  assertRepoLocalTier(tier);
+  assertValidPersona(candidate, tier);
+
+  const filePath = repoLocalPersonaPath(repoRoot, candidate.scopeId);
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, stringify(candidate), 'utf8');
+  return filePath;
+}
+
+/**
+ * Reads a code-architect persona back from the repo-local store, fresh off
+ * disk (never cached). Throws a clear error if no persona file exists for
+ * `scopeId`, or if the on-disk content fails schema validation.
+ */
+export function readRepoLocalPersona(repoRoot: string, scopeId: string): Persona {
+  const filePath = repoLocalPersonaPath(repoRoot, scopeId);
+  if (!existsSync(filePath)) {
+    throw new Error(`No repo-local persona found at ${filePath}.`);
+  }
+
+  const raw = readFileSync(filePath, 'utf8');
+  const parsed: unknown = parse(raw);
+  assertValidPersona(parsed, REPO_LOCAL_PERSONA_TIER);
+  return parsed;
+}
