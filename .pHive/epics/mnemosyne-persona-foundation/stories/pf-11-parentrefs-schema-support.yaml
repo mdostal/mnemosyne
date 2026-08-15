@@ -6,6 +6,16 @@ complexity: low
 methodology: tdd
 depends_on: [pf-09-cli-persona-seed-and-global-sync, pf-10-global-tier-fixture-regression]
 
+note_on_completion: >
+  Merged 2026-08-15 (commit fe9b687). Independently verified (orchestrator):
+  reran vitest (131/131) and tsc myself, read the actual diff. Found a real
+  bug: parentRefs validation used the full TIERS list instead of
+  PERSONA_STORE_BY_TIER-derived global tiers, so a code-architect parent
+  reference incorrectly passed validation -- a real AC2 violation, fixed by
+  narrowing to PERSONA_STORE_BY_TIER[tier] === 'global'. Correctly left the
+  not-yet-existing-parent non-check alone, deferring to pf-12/pf-13. All
+  acceptance criteria met.
+
 description: |
   Starts Slice 3. pf-01's Persona schema already reserved the `parentRefs`
   field (harmless if unused, per horizontal-plan.md H1.1); this story
