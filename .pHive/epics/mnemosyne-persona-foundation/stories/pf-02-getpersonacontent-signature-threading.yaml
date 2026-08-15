@@ -1,9 +1,19 @@
 id: pf-02-getpersonacontent-signature-threading
 epic: mnemosyne-persona-foundation
 title: getPersonaContent + scopeId signature threading through sync.ts
-status: pending
+status: complete
 complexity: high
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-15. Real TDD, independently verified: reran vitest (71/71)
+  and tsc myself in the worktree, spot-checked getPersonaContent's dispatch/
+  fallback/mandate-reinjection logic directly against the design docs (not
+  just the agent's description of it), confirmed block.ts/level0.ts have
+  zero diff. Old bare-tier getTierContent(tier) fully removed, no parallel
+  path left reachable (grep-verified by the builder, spot-checked by me).
+  Two judgment calls made (repoRoot derivation, tiers.test.ts update) --
+  both sound as-is, no correction needed. All acceptance criteria met.
 depends_on: [pf-01-persona-schema-repo-local-store]
 
 description: |
