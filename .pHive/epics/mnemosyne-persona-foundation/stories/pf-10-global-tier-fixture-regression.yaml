@@ -1,10 +1,37 @@
 id: pf-10-global-tier-fixture-regression
 epic: mnemosyne-persona-foundation
 title: Global-tier fixture/regression coverage (Slice 2)
-status: pending
+status: complete
 complexity: low
 methodology: tdd
 depends_on: [pf-08-seed-migration-script]
+
+note_on_completion: >
+  Verification story, as expected required zero production-code changes --
+  pf-06/pf-07/pf-08 were correct. Added
+  lib/mnemosyne/layer1/__tests__/fixtures/real-world/company-director-
+  example.md (global-tier-flavored, marker-free, human-edited fixture) and
+  extended sync.integration.test.ts with: (1) an in-process
+  syncHarnessFile(tier=company-director) round trip against it, exercising
+  the fallback-to-TIER_CONTENT path (in-process calls have no way to
+  override getPersonaContent's globalPersonaRoot -- sync.ts's SyncOptions
+  never threads it through, a documented pf-07 design decision); (2) a real
+  CLI-subprocess round trip, parametrized across all three global tiers
+  (top-orchestrator/company-director/project-orchestrator), that seeds a
+  REAL global persona via writeGlobalPersona and confirms the CLI (HOME
+  override, fresh process) renders the SEEDED persona's own content, not the
+  hardcoded fallback -- proven by asserting the fallback's rendered heading
+  is absent; (3) an explicit "Slice 1 regression" describe block that
+  re-exercises syncHarnessFile and the real pf-04 CLI subprocess against
+  pf-05's original three fixtures, tier=code-architect, with fresh marker
+  strings never used elsewhere in the file, so it cannot pass via cached
+  state. Full suite: 126/126 (lib/mnemosyne/layer1), tsc --noEmit clean.
+  One iteration needed: an early assertion checked the fallback tier
+  displayName was fully absent from output, but the company-director fixture's
+  own human prose legitimately contains the words "Company Director" --
+  fixed by checking for the rendered "## <displayName>" heading form instead
+  of a bare substring. This was a test-authoring bug, not a Slice 2
+  production bug.
 
 description: |
   Extends pf-05's integration test suite (Slice 1) to cover global-tier sync,

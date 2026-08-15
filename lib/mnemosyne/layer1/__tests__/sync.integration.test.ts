@@ -27,6 +27,8 @@ import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { syncHarnessFile } from '../sync.js';
 import { BLOCK_END, BLOCK_START } from '../block.js';
+import { writeGlobalPersona } from '../persona-store-global.js';
+import { TIER_CONTENT, type Tier } from '../tiers.js';
 // Pure, side-effect-free CLI helper reused directly rather than
 // reimplemented -- see bin/mnemosyne-persona.mjs's own doc comment for why
 // the rest of that module (the parts that touch fs/process.exit) is
@@ -59,6 +61,13 @@ const FIXTURES = {
   noMarkers: path.join(FIXTURES_DIR, 'claude-md-no-markers.md'),
   mixedFormatting: path.join(FIXTURES_DIR, 'agents-md-mixed-formatting.md'),
   partialMarker: path.join(FIXTURES_DIR, 'gemini-md-partial-marker.md'),
+  // pf-10: global-tier-flavored real-world fixture (Slice 2 closing story) --
+  // same "marker-free, human-edited" shape as claude-md-no-markers.md, but
+  // content flavored for a company-director/global-tier reader. Included in
+  // the same FIXTURES map on purpose so the fixture-stability guard
+  // (beforeAll/afterAll below) covers it automatically, no separate guard
+  // needed.
+  companyDirector: path.join(FIXTURES_DIR, 'company-director-example.md'),
 };
 
 function sha256(text: string): string {
@@ -361,6 +370,155 @@ describe('real-world fixture: gemini-md-partial-marker.md (BLOCK_START present, 
   });
 });
 
+describe('real-world fixture: company-director-example.md (global-tier flavor, pf-10/Slice 2)', () => {
+  it('the fixture itself really has no mnemosyne markers, and its own bare --- divider (sanity, not the interesting assertion)', () => {
+    const original = readFixture(FIXTURES.companyDirector);
+    expect(original).not.toContain('mnemosyne:layer1');
+    expect(original.indexOf(BLOCK_START)).toBe(-1);
+    expect(original.indexOf(BLOCK_END)).toBe(-1);
+    expect(countMatches(original, /^---$/gm)).toBe(1);
+    expect(countMatches(original, / +\n/g)).toBeGreaterThan(0);
+  });
+
+  it(
+    'sync (in-process, tier=company-director) preserves human content byte-for-byte and adds exactly one managed block, idempotently -- same guarantees pf-05 proved for code-architect',
+    async () => {
+      // In-process calls have no way to point getPersonaContent's global-store
+      // lookup at a temp dir: sync.ts's SyncOptions only threads level0Path
+      // through to getPersonaContent -- ctx.globalPersonaRoot is left
+      // undefined at every real call site sync.ts has (a documented pf-07
+      // design decision; see persona.test.ts's "defaults globalPersonaRoot to
+      // DEFAULT_GLOBAL_PERSONA_ROOT when omitted from ctx (real call-site
+      // shape: sync.ts only ever passes repoRoot)" test). So this in-process
+      // case necessarily exercises the fallback-to-TIER_CONTENT path, not a
+      // seeded persona -- which is still a fully real, production code path
+      // (`fallbackToTierContentWithWarning`) and proves the same round-trip/
+      // no-corruption mechanics hold for a global tier as for code-architect.
+      // The genuine SEEDED-persona round trip is proven below, via the real
+      // CLI subprocess, whose HOME override actually takes effect (fresh
+      // process => DEFAULT_GLOBAL_PERSONA_ROOT resolves against the fake HOME
+      // at import time) -- same reasoning as this file's own top-of-file doc
+      // comment about DEFAULT_LEVEL0_PATH.
+      const root = await makeTempRoot();
+      const level0Path = await makeLevel0(root, '# Level 0\n\nPF10_L0_MARKER — pull first, never commit to main.\n');
+      const targetPath = path.join(root, 'CLAUDE.md');
+      const original = await copyFixtureTo(FIXTURES.companyDirector, targetPath);
+
+      const result = syncHarnessFile(targetPath, 'company-director', 'claude-code', SCOPE_ID, { level0Path });
+      expect(result.created).toBe(false);
+
+      const written = readFileSync(targetPath, 'utf8');
+      const trimmedOriginal = original.replace(/\n+$/, '');
+      expect(written.startsWith(trimmedOriginal)).toBe(true);
+      expect(written).toContain('## Escalation');
+      expect(written).toContain("Board/investor questions: ask Directors' Ops first, not Legal");
+      expect(written).toContain('PF10_L0_MARKER');
+      expect(written).toContain(TIER_CONTENT['company-director'].displayName);
+
+      // No marker duplication.
+      expect(written.split(BLOCK_START)).toHaveLength(2);
+      expect(written.split(BLOCK_END)).toHaveLength(2);
+
+      // Idempotent second run: still exactly one pair, human content still intact.
+      const second = syncHarnessFile(targetPath, 'company-director', 'claude-code', SCOPE_ID, { level0Path });
+      expect(second.created).toBe(false);
+      const writtenTwice = readFileSync(targetPath, 'utf8');
+      expect(writtenTwice.split(BLOCK_START)).toHaveLength(2);
+      expect(writtenTwice.split(BLOCK_END)).toHaveLength(2);
+      expect(writtenTwice.startsWith(trimmedOriginal)).toBe(true);
+      expect(writtenTwice).toContain("Board/investor questions: ask Directors' Ops first, not Legal");
+    },
+  );
+});
+
+describe('global persona store round trip via the real CLI subprocess (top-orchestrator / company-director / project-orchestrator)', () => {
+  // Distinct seeded content per tier, deliberately NOT sharing any substring
+  // with that tier's hardcoded TIER_CONTENT.displayName (tiers.ts) -- the
+  // "must NOT contain the fallback's displayName" assertion below is what
+  // proves the seeded persona (not the fallback) is genuinely what got
+  // rendered, not just a coincidentally-overlapping string.
+  const GLOBAL_TIER_CASES: {
+    tier: Tier;
+    scopeId: string;
+    displayName: string;
+    distinctiveBody: string;
+  }[] = [
+    {
+      tier: 'top-orchestrator',
+      scopeId: 'pf10-top-scope',
+      displayName: 'Pantheon Portfolio Lead (seeded persona)',
+      distinctiveBody: 'Seeded top-orchestrator persona body unique to scope pf10-top-scope.',
+    },
+    {
+      tier: 'company-director',
+      scopeId: 'pf10-director-scope',
+      displayName: 'Northwind Business Lead (seeded persona)',
+      distinctiveBody: 'Seeded company-director persona body unique to scope pf10-director-scope.',
+    },
+    {
+      tier: 'project-orchestrator',
+      scopeId: 'pf10-project-scope',
+      displayName: 'Fenwick Delivery Lead (seeded persona)',
+      distinctiveBody: 'Seeded project-orchestrator persona body unique to scope pf10-project-scope.',
+    },
+  ];
+
+  it.each(GLOBAL_TIER_CASES)(
+    'mnemosyne persona sync --tier $tier renders the SEEDED global persona (not the TIER_CONTENT fallback) onto a real-world fixture, byte-preserving, idempotent',
+    async ({ tier, scopeId, displayName, distinctiveBody }) => {
+      const home = await makeFakeHome(`PF10_GLOBAL_L0_MARKER_${tier}`);
+      const globalRoot = path.join(home, '.mnemosyne', 'personas');
+      writeGlobalPersona(
+        {
+          tier,
+          scopeId,
+          displayName,
+          scope: `A persona-authored scope statement unique to ${tier}/${scopeId}.`,
+          sections: [{ heading: 'Seeded section', body: distinctiveBody }],
+        },
+        globalRoot,
+      );
+
+      const repo = await makeTempRoot('mnemosyne-layer1-integration-global-cli-repo-');
+      const original = await copyFixtureTo(FIXTURES.companyDirector, path.join(repo, 'CLAUDE.md'));
+
+      const first = await runCli(['sync', '--repo', repo, '--tier', tier, '--scope-id', scopeId], home);
+      expect(first.code, `cli sync stderr: ${first.stderr}`).toBe(0);
+      expect(first.stdout).toMatch(/updated .*CLAUDE\.md/);
+
+      const written = await readFile(path.join(repo, 'CLAUDE.md'), 'utf8');
+      const trimmedOriginal = original.replace(/\n+$/, '');
+      expect(written.startsWith(trimmedOriginal)).toBe(true);
+
+      // The SEEDED persona's own content -- proves the global store is the
+      // real content source for this sync, not the hardcoded TIER_CONTENT
+      // fallback. Checked as a rendered HEADING ("## <displayName>",
+      // renderTierContentMarkdown's own format) rather than a bare substring
+      // search, because company-director-example.md's own human prose
+      // legitimately contains the words "Company Director" (it's a
+      // company-director-flavored fixture) -- a bare-substring check would
+      // false-positive against that prose, not against fallback content.
+      expect(written).toContain(displayName);
+      expect(written).toContain(distinctiveBody);
+      expect(written).not.toContain(`## ${TIER_CONTENT[tier].displayName}`);
+
+      expect(written).toContain(`PF10_GLOBAL_L0_MARKER_${tier}`);
+      expect(written.split(BLOCK_START)).toHaveLength(2);
+      expect(written.split(BLOCK_END)).toHaveLength(2);
+
+      // Idempotent second run: still exactly one pair, seeded content still intact.
+      const second = await runCli(['sync', '--repo', repo, '--tier', tier, '--scope-id', scopeId], home);
+      expect(second.code, `cli sync (2nd run) stderr: ${second.stderr}`).toBe(0);
+      const writtenTwice = await readFile(path.join(repo, 'CLAUDE.md'), 'utf8');
+      expect(writtenTwice.split(BLOCK_START)).toHaveLength(2);
+      expect(writtenTwice.split(BLOCK_END)).toHaveLength(2);
+      expect(writtenTwice).toContain(distinctiveBody);
+      expect(writtenTwice.startsWith(trimmedOriginal)).toBe(true);
+    },
+    20_000,
+  );
+});
+
 describe('via the pf-04 CLI (real subprocess, not in-process)', () => {
   it('mnemosyne persona sync against a repo of real-world fixtures: human content survives, no marker duplication, idempotent', async () => {
     const home = await makeFakeHome('PF05_CLI_L0_MARKER');
@@ -515,4 +673,122 @@ describe('concurrency: pf-03 locking holds against a real-world fixture (not the
     },
     20_000,
   );
+});
+
+/**
+ * pf-10 (Slice 2's closing story): an EXPLICIT regression block re-exercising
+ * Slice 1's own production code paths -- syncHarnessFile and the real pf-04
+ * CLI subprocess, against the exact same fixtures pf-05 used -- to prove
+ * repo-local/code-architect sync still works, unchanged, now that Slice 2
+ * (pf-06 global persona store, pf-07 global-tier getPersonaContent dispatch,
+ * pf-08 seed/migration script) has landed on this branch.
+ *
+ * This is deliberately NOT "the describe blocks above this comment, which
+ * happen to still be in the file" -- those already re-run on every suite
+ * execution and would already catch a regression, but this block exists so
+ * that fact is explicit and load-bearing rather than incidental: it uses its
+ * own fresh marker strings (PF10_SLICE1_REGRESSION_MARKER /
+ * PF10_SLICE1_CLI_REGRESSION_MARKER, never used anywhere above) precisely so
+ * it cannot be satisfied by any cached state or prior assertion in this
+ * file -- every expectation here is computed fresh, in this block, against
+ * the current (post-Slice-2) codebase.
+ */
+describe('Slice 1 regression (pf-10): repo-local code-architect sync still works, unchanged, after Slice 2 (pf-06/pf-07/pf-08) landed', () => {
+  it.each([
+    {
+      name: 'noMarkers',
+      fixture: FIXTURES.noMarkers,
+      fileName: 'CLAUDE.md',
+      mustContain: 'Billing domain questions: #kestrel-eng',
+      expectedStartCount: 2,
+      expectedEndCount: 2,
+    },
+    {
+      name: 'mixedFormatting',
+      fixture: FIXTURES.mixedFormatting,
+      fileName: 'AGENTS.md',
+      mustContain: 'That horizontal rule above is NOT a Mnemosyne marker.',
+      expectedStartCount: 2,
+      expectedEndCount: 2,
+    },
+    {
+      name: 'partialMarker (append-mode fallback)',
+      fixture: FIXTURES.partialMarker,
+      fileName: 'GEMINI.md',
+      mustContain: 'These notes were added later by a human, after the stray begin marker',
+      expectedStartCount: 3, // stray original BLOCK_START + the new one
+      expectedEndCount: 2, // real appended block's BLOCK_END only
+    },
+  ])(
+    're-exercises syncHarnessFile(tier=code-architect) against the $name real-world fixture: byte-for-byte preservation, no marker duplication, idempotent -- the same production code path pf-05 exercised, run now against Slice 2\'s codebase state',
+    async ({ fixture, fileName, mustContain, expectedStartCount, expectedEndCount }) => {
+      const root = await makeTempRoot();
+      const level0Path = await makeLevel0(
+        root,
+        '# Level 0\n\nPF10_SLICE1_REGRESSION_MARKER — pull first, never commit to main.\n',
+      );
+      const targetPath = path.join(root, fileName);
+      const original = await copyFixtureTo(fixture, targetPath);
+
+      syncHarnessFile(targetPath, 'code-architect', 'claude-code', SCOPE_ID, { level0Path });
+      const written = readFileSync(targetPath, 'utf8');
+      const trimmedOriginal = original.replace(/\n+$/, '');
+
+      expect(written.startsWith(trimmedOriginal)).toBe(true);
+      expect(written).toContain(mustContain);
+      expect(written).toContain('PF10_SLICE1_REGRESSION_MARKER');
+      // code-architect's own content resolution (repo-local store, pf-02) is
+      // unchanged: no repo-local persona exists at SCOPE_ID here, so this
+      // falls back to the hardcoded TIER_CONTENT heading, exactly as before
+      // Slice 2.
+      expect(written).toContain(TIER_CONTENT['code-architect'].displayName);
+      expect(written.split(BLOCK_START)).toHaveLength(expectedStartCount);
+      expect(written.split(BLOCK_END)).toHaveLength(expectedEndCount);
+
+      // Idempotent second run -- still true post-Slice-2.
+      syncHarnessFile(targetPath, 'code-architect', 'claude-code', SCOPE_ID, { level0Path });
+      const writtenTwice = readFileSync(targetPath, 'utf8');
+      expect(writtenTwice.split(BLOCK_START)).toHaveLength(expectedStartCount);
+      expect(writtenTwice.split(BLOCK_END)).toHaveLength(expectedEndCount);
+      expect(writtenTwice.startsWith(trimmedOriginal)).toBe(true);
+    },
+  );
+
+  it('re-exercises the real pf-04 CLI subprocess end-to-end against all three real-world fixtures at once, tier=code-architect: unchanged after Slice 2', async () => {
+    const home = await makeFakeHome('PF10_SLICE1_CLI_REGRESSION_MARKER');
+    const repo = await makeTempRoot('mnemosyne-layer1-integration-slice1-regression-cli-repo-');
+
+    const originalClaude = await copyFixtureTo(FIXTURES.noMarkers, path.join(repo, 'CLAUDE.md'));
+    const originalAgents = await copyFixtureTo(FIXTURES.mixedFormatting, path.join(repo, 'AGENTS.md'));
+    const originalGemini = await copyFixtureTo(FIXTURES.partialMarker, path.join(repo, 'GEMINI.md'));
+
+    const result = await runCli(['sync', '--repo', repo, '--tier', 'code-architect', '--scope-id', SCOPE_ID], home);
+    expect(result.code, `cli sync stderr: ${result.stderr}`).toBe(0);
+    expect(result.stdout).toMatch(/updated .*CLAUDE\.md/);
+    expect(result.stdout).toMatch(/updated .*AGENTS\.md/);
+    expect(result.stdout).toMatch(/updated .*GEMINI\.md/);
+
+    const [claude, agents, gemini] = await Promise.all([
+      readFile(path.join(repo, 'CLAUDE.md'), 'utf8'),
+      readFile(path.join(repo, 'AGENTS.md'), 'utf8'),
+      readFile(path.join(repo, 'GEMINI.md'), 'utf8'),
+    ]);
+
+    expect(claude.startsWith(originalClaude.replace(/\n+$/, ''))).toBe(true);
+    expect(agents.startsWith(originalAgents.replace(/\n+$/, ''))).toBe(true);
+    expect(gemini.startsWith(originalGemini.replace(/\n+$/, ''))).toBe(true);
+    expect(claude).toContain('PF10_SLICE1_CLI_REGRESSION_MARKER');
+    // append-mode signature (GEMINI.md's stray BLOCK_START) unchanged post-Slice-2.
+    expect(gemini.split(BLOCK_START)).toHaveLength(3);
+    expect(gemini.split(BLOCK_END)).toHaveLength(2);
+
+    // Idempotent second CLI run: no additional marker duplication.
+    const second = await runCli(['sync', '--repo', repo, '--tier', 'code-architect', '--scope-id', SCOPE_ID], home);
+    expect(second.code).toBe(0);
+    const claudeAfterSecond = await readFile(path.join(repo, 'CLAUDE.md'), 'utf8');
+    const geminiAfterSecond = await readFile(path.join(repo, 'GEMINI.md'), 'utf8');
+    expect(claudeAfterSecond.split(BLOCK_START)).toHaveLength(2);
+    expect(geminiAfterSecond.split(BLOCK_START)).toHaveLength(3);
+    expect(geminiAfterSecond.split(BLOCK_END)).toHaveLength(2);
+  }, 20_000);
 });
