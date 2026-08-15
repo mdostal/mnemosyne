@@ -1,0 +1,67 @@
+id: pf-10-global-tier-fixture-regression
+epic: mnemosyne-persona-foundation
+title: Global-tier fixture/regression coverage (Slice 2)
+status: pending
+complexity: low
+methodology: tdd
+depends_on: [pf-08-seed-migration-script]
+
+description: |
+  Extends pf-05's integration test suite (Slice 1) to cover global-tier sync,
+  and adds an explicit regression test proving Slice 1's repo-local/
+  code-architect sync still passes unchanged after Slice 2's changes. This
+  is the concrete, automated proof — not just an assumption — that Slice 2
+  is non-regressive, matching the vertical plan's stated pattern of carrying
+  forward each prior slice's tests as regression checks.
+
+acceptance_criteria:
+  - "Given the real-world fixture corpus from pf-05, when synced with global-tier content (top-orchestrator/company-director/project-orchestrator), then the same round-trip/no-corruption guarantees hold as for code-architect"
+  - "Given pf-05's full Slice 1 acceptance suite, when run against the codebase after pf-06 through pf-09's changes, then every assertion still passes without modification"
+
+steps:
+  - id: research
+    description: Re-read pf-05's sync.integration.test.ts (now on this branch) to extend it consistently rather than duplicating fixture/test scaffolding.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for global-tier fixture round-trips and add an explicit "Slice 1 still passes" regression assertion set.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Extend the fixture corpus and integration suite; this story should not need any production-code changes if pf-06 through pf-09 are correct — if it does, that's a signal one of those stories has a bug.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review that the regression assertions genuinely re-exercise Slice 1's code paths (not just re-import the same test file without running it against the new codebase state).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch. This is Slice 2's final story — confirm the full Slice 1 + Slice 2 story set is green together before moving to Slice 3.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/layer1/__tests__/sync.integration.test.ts
+      purpose: "pf-05's integration suite, extended here for global-tier coverage."
+
+files_to_modify:
+  - file: lib/mnemosyne/layer1/__tests__/fixtures/real-world/company-director-example.md
+    change: "New fixture, global-tier flavor of pf-05's fixture corpus."
+  - file: lib/mnemosyne/layer1/__tests__/sync.integration.test.ts
+    change: "Extended with global-tier cases and an explicit Slice-1-regression test block."
+
+design_decisions:
+  - decision: "This story is deliberately low-complexity and expected to require zero production-code changes if the preceding Slice 2 stories are correct — it's a verification story, not a feature story."
+    rationale: "vertical-plan.md's own complexity rating (low) for this story, consistent with its role as the slice's regression/closing story."
+
+cross_cutting: []
+
+risks: []
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-foundation/docs/vertical-plan.md
+    relevant_excerpt: |
+      Slice 2 H7 (extend): Fixture/test coverage extended to global-tier
+      sync; a specific regression test proving Slice 1's repo-local/
+      code-architect sync still passes unchanged.

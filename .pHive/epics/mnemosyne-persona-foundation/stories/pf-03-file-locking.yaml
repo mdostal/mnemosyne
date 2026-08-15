@@ -1,0 +1,98 @@
+id: pf-03-file-locking
+epic: mnemosyne-persona-foundation
+title: File locking around sync + persona-store writes
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [pf-02-getpersonacontent-signature-threading]
+
+description: |
+  Implements horizontal-plan.md H4: advisory locking around syncHarnessFile's
+  read-splice-write sequence (sync.ts:58-63, confirmed to have zero
+  coordination between the read and the final write) and around pf-01's
+  repo-local persona-store writes. This is a hard precondition for pf-04's
+  CLI shipping against real files — design-discussion.md is explicit that
+  locking must exist "before this ships against real files," not as a later
+  hardening pass.
+
+acceptance_criteria:
+  - "Given two concurrent syncHarnessFile calls targeting the same file, when both run simultaneously, then no update is lost and no output is corrupted — the second call either waits and applies cleanly, or fails loudly"
+  - "Given a lock file whose mtime exceeds 30 seconds, when a new lock attempt is made, then the stale lock is detected and stolen rather than deadlocking forever"
+  - "Given withLock(path, fn) wraps a write, when fn throws, then the lock is still released (finally semantics) — a failed write must not leave a permanent lock"
+
+steps:
+  - id: research
+    description: Confirm sync.ts:58-63's exact read-splice-write sequence and check package.json's dependencies to confirm no lockfile-style package exists today (project is zero-third-party-dep by convention).
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests: concurrency test (two overlapping withLock calls
+      against the same path, assert serialization), stale-lock steal test
+      (mock/fake an old mtime, assert the lock is taken rather than blocking
+      forever), and release-on-error test (fn throws, lock file is gone after).
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      Create lib/mnemosyne/layer1/lock.ts (withLock via fs.openSync(path, 'wx')
+      exclusive-creation locking, no third-party dependency, stale-lock
+      timeout/steal logic). Wire into syncHarnessFile's read-splice-write
+      boundary and pf-01's repo-local store write function.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review for real TOCTOU safety (not just a happy-path lock), correct finally-release semantics, and zero third-party dependencies added.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/layer1/sync.ts
+      purpose: "syncHarnessFile's read-splice-write sequence (sync.ts:58-63) is the primary thing this story wraps in a lock."
+    - path: lib/mnemosyne/layer1/persona-store-repo-local.ts
+      purpose: "pf-01's write function also needs lock wrapping — a manual persona edit racing a sync is the same class of risk."
+    - path: package.json
+      purpose: "Confirm no lockfile dependency exists; this story must not add one (zero-dep project convention)."
+
+files_to_modify:
+  - file: lib/mnemosyne/layer1/lock.ts
+    change: "New file. withLock(path, fn) via exclusive file creation, stale-lock detection/steal, finally-release."
+  - file: lib/mnemosyne/layer1/sync.ts
+    change: "syncHarnessFile's body (lines 58-63) wrapped in withLock(targetFilePath, ...)."
+  - file: lib/mnemosyne/layer1/persona-store-repo-local.ts
+    change: "Write function wrapped in withLock(personaFilePath, ...)."
+  - file: lib/mnemosyne/layer1/__tests__/lock.test.ts
+    change: "New file. Concurrency, stale-lock, and release-on-error tests."
+
+design_decisions:
+  - decision: "Zero-dependency advisory lock via fs.openSync(path, 'wx'), not a third-party lockfile package."
+    rationale: "horizontal-plan.md H4.1: 'project has no proper-lockfile-style dependency today... consistent with the project's stated zero-dep posture.'"
+  - decision: "Lock file path is derived from the target path (<targetFilePath>.mnemosyne.lock), not a separate lock registry."
+    rationale: "horizontal-plan.md H4.1 — simplest correct scheme, co-locates the lock with what it protects, self-cleans on success."
+
+cross_cutting: []
+
+risks:
+  - severity: high
+    description: "Without this story, two concurrent syncs (a wizard write + a manual CLI run, or two personas racing) can clobber a real harness file via a classic TOCTOU race — this was an architect-lens review finding, previously entirely unaddressed."
+    mitigation: "The concurrency test in this story's acceptance criteria is the concrete proof this risk is closed, not just documentation."
+  - severity: low
+    description: "A crashed process leaving a stale lock could otherwise deadlock every future sync attempt against that file forever."
+    mitigation: "30-second mtime-based stale-lock steal logic, tested explicitly."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-foundation/docs/design-discussion.md
+    relevant_excerpt: |
+      No locking on syncHarnessFile (readFileSync -> splice -> writeFileSync,
+      no lock) — two concurrent syncs (wizard + manual CLI run, or two
+      personas racing) can clobber a real harness file (TOCTOU).
+  - path: .pHive/epics/mnemosyne-persona-foundation/docs/horizontal-plan.md
+    relevant_excerpt: |
+      H4: File Locking. Stale-lock detection: if a lock file's mtime exceeds
+      a timeout (e.g. 30s), treat it as abandoned (crashed process) and
+      steal it rather than deadlocking forever.

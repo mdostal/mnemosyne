@@ -1,0 +1,71 @@
+id: pf-09-cli-persona-seed-and-global-sync
+epic: mnemosyne-persona-foundation
+title: "CLI: persona seed + persona sync for global tiers"
+status: pending
+complexity: low
+methodology: tdd
+depends_on: [pf-08-seed-migration-script]
+
+description: |
+  Extends pf-04's CLI (Slice 1: `persona sync` for code-architect only) with
+  a `persona seed` subcommand (invoking pf-08's migration script) and
+  extends `persona sync` to also work for the 3 global tiers. Low complexity
+  — this is wiring, not new logic; pf-06/pf-07/pf-08 already did the real
+  work.
+
+acceptance_criteria:
+  - "Given `mnemosyne persona seed`, when run, then it invokes pf-08's migration script and reports which of the 3 global tiers were newly seeded vs. already present"
+  - "Given `mnemosyne persona sync --tier company-director --scope-id <id>`, when run against a target repo, then it produces correct locked output in that repo's harness files using the seeded/authored global content — note global-tier sync does not need --repo for CONTENT resolution (content comes from the global store), but still needs a target repo to know where to write the harness file"
+  - "Given pf-04's Slice 1 acceptance suite (code-architect sync + dry-run), when re-run, then it still passes unmodified"
+
+steps:
+  - id: research
+    description: Re-read pf-04's bin/mnemosyne-persona.mjs implementation (now on this branch) to extend it consistently rather than introducing a parallel argument-parsing style.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for the seed subcommand's reporting output and global-tier sync's argument handling (no --repo required for content, still required for the harness-file write target).
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Extend bin/mnemosyne-persona.mjs with the seed subcommand and global-tier support in sync.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review CLI UX consistency with pf-04's existing sync subcommand and confirm the --repo semantics are correctly documented in --help output.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: bin/mnemosyne-persona.mjs
+      purpose: "pf-04's existing sync subcommand, extended here rather than replaced."
+
+files_to_modify:
+  - file: bin/mnemosyne-persona.mjs
+    change: "Add `seed` subcommand; extend `sync` to accept global tiers."
+  - file: test/persona-cli.mjs
+    change: "Extend pf-04's CLI test file with seed and global-sync cases."
+
+design_decisions:
+  - decision: "Global-tier sync still requires a target repo argument (to know where to write the harness file) even though it doesn't need it for content resolution."
+    rationale: "horizontal-plan.md H6 (Slice 2 extend): 'global-tier sync doesn't take --repo for content resolution... still needs a target repo to write the harness file into.' Syncing IS still a per-repo action even when the content source is global."
+
+cross_cutting: []
+
+risks:
+  - severity: low
+    description: "Confusing --repo semantics (needed for the write target but not the content source) could mislead a user into thinking global-tier content is somehow repo-scoped."
+    mitigation: "--help output and this story's review step explicitly check the CLI's messaging distinguishes 'where to write' from 'where content comes from.'"
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-foundation/docs/vertical-plan.md
+    relevant_excerpt: |
+      Slice 2 H6 (extend): bin/mnemosyne persona seed; persona sync now
+      also works for the 3 global tiers (--tier company-director
+      --scope-id <id>, no --repo needed since the global store isn't
+      repo-scoped).

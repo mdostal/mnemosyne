@@ -1,0 +1,81 @@
+id: pf-14-copydown-regression-full-suite
+epic: mnemosyne-persona-foundation
+title: Copy-down regression test + full-suite regression pass + release bump
+status: pending
+complexity: low
+methodology: tdd
+depends_on: [pf-13-cli-persona-show]
+
+description: |
+  Closes the epic. Adds the automated check that pointer content stays a
+  pointer (never a copy) as a standing regression test — not a one-time
+  assertion in pf-12 alone — re-runs the full Slice 1 + Slice 2 regression
+  suites, and performs the version/CHANGELOG bump per this repo's versioning
+  cross-cutting concern (this is the last story on the epic branch, so the
+  bump commit lands last, per that concern's own checklist).
+
+acceptance_criteria:
+  - "Given the full epic's implementation (pf-01 through pf-13), when the copy-down regression test runs, then it proves — across every code-architect persona with parentRefs in the fixture corpus — that parent sections content never appears verbatim in synced output"
+  - "Given pf-05's and pf-10's full regression suites (Slice 1 + Slice 2), when re-run against the final state of the branch, then every assertion still passes"
+  - "Given this is the epic's final story, when the release bump lands, then package.json's version is bumped minor and CHANGELOG.md gains a new dated entry summarizing the epic's consumer-visible additions (persona sync/seed/show CLI verbs, the two-tier persona storage model) — and this bump commit is the LAST commit on the epic branch"
+
+steps:
+  - id: research
+    description: Confirm the current package.json version and CHANGELOG.md's most recent entry format (matching the v0.5.0 entry's style) before drafting the new entry.
+    agent: researcher
+  - id: test-spec
+    description: Write the standing copy-down regression test (distinct from pf-12's initial assertion — this one runs across the full fixture corpus, not a single example) and confirm pf-05/pf-10's suites are wired into the same test run.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: "Implement the regression test; fix anything it surfaces (expected result: none, if pf-01 through pf-13 are correct). Bump package.json's version (minor) and add the CHANGELOG.md entry."
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review the CHANGELOG entry for accuracy against what actually shipped (not aspirational — e.g. do not claim the wizard/UI, which is Epic 2 and explicitly not part of this epic).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch. This is the last commit on the epic branch — confirm the full epic (pf-01 through pf-14) is green together before this epic is considered ready to merge.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: package.json
+      purpose: "Version bump target."
+    - path: CHANGELOG.md
+      purpose: "New dated entry, matching the style of the existing v0.3.0/v0.4.0/v0.5.0 entries."
+
+files_to_modify:
+  - file: package.json
+    change: "Version bump (minor)."
+  - file: package-lock.json
+    change: "Version bump (minor), matching package.json."
+  - file: CHANGELOG.md
+    change: "New dated entry for this epic's consumer-visible additions."
+  - file: lib/mnemosyne/layer1/__tests__/sync.integration.test.ts
+    change: "Standing copy-down regression test added, running across the full fixture corpus."
+
+design_decisions:
+  - decision: "The CHANGELOG entry explicitly scopes to what THIS epic shipped (data-driven two-tier persona storage + CLI) and does not describe or imply the wizard/UI, which remains entirely Epic 2's scope."
+    rationale: "Avoids the CHANGELOG misleading a future reader into thinking the wizard/UI already exists — a real risk given how tightly related the two epics are."
+
+cross_cutting:
+  - concern: versioning
+    action: "package.json/CHANGELOG.md bumped minor (additive new capability, non-breaking — TIER_CONTENT fallback keeps the old hardcoded path working). Bump commit is the last commit on the epic branch, per this concern's own checklist."
+
+risks: []
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-foundation/docs/vertical-plan.md
+    relevant_excerpt: |
+      Slice 3 H7 (extend): A test asserting the synced repo-local harness
+      file contains the parent pointer but does not contain the parent's
+      sections text verbatim — the concrete, automatable check against the
+      copy-down risk. Full regression pass of Slices 1 and 2.
+  - path: CHANGELOG.md
+    relevant_excerpt: |
+      ## [0.5.0] — 2026-08-15 ... (existing entry style/format to match for
+      the new entry this story adds)

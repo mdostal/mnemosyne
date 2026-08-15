@@ -1,0 +1,63 @@
+name: mnemosyne-persona-foundation
+title: Data-driven, two-tier persona storage for Layer 1 + a safe sync-invocation mechanism
+target_codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+methodology: tdd
+version_bump: minor
+
+stories:
+  - id: pf-01-persona-schema-repo-local-store
+    title: Persona YAML schema + repo-local store
+    complexity: medium
+    depends_on: []
+  - id: pf-02-getpersonacontent-signature-threading
+    title: getPersonaContent + scopeId signature threading through sync.ts
+    complexity: high
+    depends_on: [pf-01-persona-schema-repo-local-store]
+  - id: pf-03-file-locking
+    title: File locking around sync + persona-store writes
+    complexity: medium
+    depends_on: [pf-02-getpersonacontent-signature-threading]
+  - id: pf-04-cli-persona-sync-dry-run
+    title: "CLI: persona sync + --dry-run"
+    complexity: medium
+    depends_on: [pf-02-getpersonacontent-signature-threading]
+  - id: pf-05-realworld-fixtures-integration-tests
+    title: Real-world fixture corpus + integration test suite (Slice 1)
+    complexity: medium
+    depends_on: [pf-03-file-locking, pf-04-cli-persona-sync-dry-run]
+  - id: pf-06-global-persona-store-module
+    title: Global persona store module
+    complexity: medium
+    depends_on: [pf-05-realworld-fixtures-integration-tests]
+  - id: pf-07-getpersonacontent-global-dispatch
+    title: getPersonaContent global-tier dispatch
+    complexity: medium
+    depends_on: [pf-06-global-persona-store-module]
+  - id: pf-08-seed-migration-script
+    title: Seed/migration script for the 3 global tiers
+    complexity: medium
+    depends_on: [pf-07-getpersonacontent-global-dispatch]
+  - id: pf-09-cli-persona-seed-and-global-sync
+    title: "CLI: persona seed + persona sync for global tiers"
+    complexity: low
+    depends_on: [pf-08-seed-migration-script]
+  - id: pf-10-global-tier-fixture-regression
+    title: Global-tier fixture/regression coverage (Slice 2)
+    complexity: low
+    depends_on: [pf-08-seed-migration-script]
+  - id: pf-11-parentrefs-schema-support
+    title: parentRefs schema support + validation
+    complexity: low
+    depends_on: [pf-09-cli-persona-seed-and-global-sync, pf-10-global-tier-fixture-regression]
+  - id: pf-12-pointer-rendering-query-up
+    title: Pointer rendering in getPersonaContent (query-up, not copy-down)
+    complexity: medium
+    depends_on: [pf-11-parentrefs-schema-support]
+  - id: pf-13-cli-persona-show
+    title: "CLI: persona show"
+    complexity: low
+    depends_on: [pf-12-pointer-rendering-query-up]
+  - id: pf-14-copydown-regression-full-suite
+    title: Copy-down regression test + full-suite regression pass + release bump
+    complexity: low
+    depends_on: [pf-13-cli-persona-show]

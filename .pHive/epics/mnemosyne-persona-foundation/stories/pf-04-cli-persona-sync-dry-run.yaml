@@ -1,0 +1,97 @@
+id: pf-04-cli-persona-sync-dry-run
+epic: mnemosyne-persona-foundation
+title: "CLI: persona sync + --dry-run"
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [pf-02-getpersonacontent-signature-threading]
+
+description: |
+  Implements horizontal-plan.md H6 (subset): a real CLI entrypoint that
+  actually invokes syncHarnessFile/syncAllHarnesses in production — closing
+  the pre-existing gap research-brief.md §5 confirms ("the only real
+  invocation path today is the Vitest suite. No CLI verb, no hook, no HTTP
+  route"). This is the epic's own named minimum slice requirement: "run the
+  new CLI verb" as a first-class step.
+
+  Scope for THIS story (Slice 1): `persona sync` for the code-architect tier
+  only, plus --dry-run. No `persona seed` or `persona show` yet (those are
+  Slice 2/3 — nothing for them to do until the global store exists).
+
+acceptance_criteria:
+  - "Given a hand-authored repo-local persona file, when `mnemosyne persona sync --repo <path> --tier code-architect --scope-id <id>` runs, then it produces correct managed-block content in all three harness files (CLAUDE.md/AGENTS.md/GEMINI.md), idempotently"
+  - "Given the same command with --dry-run, when it runs, then it prints an accurate preview of the would-be diff and performs zero filesystem writes — checksum/mtime of the target files unchanged"
+  - "Given --dry-run's implementation, when it computes the preview, then it reuses spliceManagedBlock in-memory rather than calling the real write path at all"
+
+steps:
+  - id: research
+    description: Read bin/mnemosyne's existing dispatcher (bin/mnemosyne:9-15, currently only branches on reindex) and how it delegates to bin/mnemosyne-reindex.mjs, to mirror that exact pattern for the new persona verb group.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests for the CLI's argument parsing (--repo, --tier,
+      --scope-id, --dry-run), the sync subcommand's success path, and the
+      dry-run path's zero-write guarantee (assert file mtime/checksum
+      unchanged after a --dry-run invocation against a fixture file).
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      Create bin/mnemosyne-persona.mjs (parseArgs/run pattern matching
+      bin/mnemosyne-reindex.mjs) with the `sync` subcommand and --dry-run
+      flag. Wire `persona` into bin/mnemosyne's dispatcher. Dry-run reuses
+      spliceManagedBlock to compute an in-memory diff, never calls the real
+      write path.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review for correct dispatcher wiring, real dry-run zero-write guarantee (not just "usually" zero-write), and consistent CLI UX with the existing reindex verb.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: bin/mnemosyne
+      purpose: "Existing dispatcher (bin/mnemosyne:9-15) currently only branches on reindex — this story adds the persona branch following the same pattern."
+    - path: lib/mnemosyne/layer1/block.ts
+      purpose: "spliceManagedBlock (block.ts:37-57) is reused in-memory for the dry-run diff computation, never the real write path."
+    - path: lib/mnemosyne/layer1/sync.ts
+      purpose: "The pf-02 signature (syncHarnessFile/syncAllHarnesses with scopeId) this CLI calls through."
+
+files_to_modify:
+  - file: bin/mnemosyne-persona.mjs
+    change: "New file. `sync` subcommand (--repo, --tier, --scope-id, --dry-run)."
+  - file: bin/mnemosyne
+    change: "Add persona branch to the existing dispatcher, mirroring the reindex pattern."
+  - file: test/persona-cli.mjs
+    change: "New file. CLI integration test matching the project's existing test/*.mjs convention (not Vitest — this repo's CLI tests are plain node scripts per package.json's test script)."
+
+design_decisions:
+  - decision: "New verb group is `bin/mnemosyne persona <subcommand>`, following the exact dispatcher pattern reindex already uses — not a separate top-level binary."
+    rationale: "horizontal-plan.md H6.1: 'wired into the existing dispatcher in bin/mnemosyne... the same way reindex dispatches to bin/mnemosyne-reindex.mjs.'"
+  - decision: "Dry-run computes the diff via spliceManagedBlock in memory and never calls the real write path at all, rather than calling the real path and then reverting."
+    rationale: "horizontal-plan.md H6.2: 'Cheapest correct implementation... never call the real syncHarnessFile write path' — avoids any window where a bug could turn a dry-run into a real write."
+
+cross_cutting: []
+
+risks:
+  - severity: medium
+    description: "A dry-run implementation that calls the real write path and reverts (rather than never writing at all) risks an interrupted process leaving a real, unintended write behind."
+    mitigation: "Acceptance criteria explicitly requires the in-memory-only approach; reviewer step checks this specifically."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-foundation/docs/horizontal-plan.md
+    relevant_excerpt: |
+      H6: CLI / Invocation Surface. mnemosyne persona sync --repo <path>
+      --tier <tier> --scope-id <id> [--dry-run] -> calls
+      syncHarnessFile/syncAllHarnesses through the locked, scope-aware path.
+  - path: .pHive/epics/mnemosyne-persona-foundation/docs/vertical-plan.md
+    relevant_excerpt: |
+      Slice 1 H6 (subset): bin/mnemosyne persona sync --repo <path> --tier
+      code-architect --scope-id <id> [--dry-run]. No persona show, no
+      persona seed yet.

@@ -1,0 +1,72 @@
+id: pf-07-getpersonacontent-global-dispatch
+epic: mnemosyne-persona-foundation
+title: getPersonaContent global-tier dispatch
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [pf-06-global-persona-store-module]
+
+description: |
+  Extends pf-02's getPersonaContent (built in Slice 1 for code-architect
+  only) to route top-orchestrator/company-director/project-orchestrator
+  through pf-06's global store instead of the Slice-1 fallback-only path.
+  This is where the fallback-to-TIER_CONTENT safety net (already built in
+  pf-02) becomes actually exercisable for real, since a real global store
+  now exists to be empty or populated.
+
+acceptance_criteria:
+  - "Given a global-store persona exists for a (tier, scopeId) pair, when getPersonaContent is called for a global tier, then it returns that persona's content, MANDATE_SECTIONS re-injected"
+  - "Given no global-store persona exists yet for a (tier, scopeId) pair, when getPersonaContent is called, then it falls back to TIER_CONTENT[tier] and logs/warns (same safety-net contract as pf-02's code-architect fallback)"
+  - "Given pf-05's Slice 1 acceptance suite, when re-run against this story's changes, then it still passes unmodified — code-architect/repo-local dispatch is untouched by this story"
+
+steps:
+  - id: research
+    description: Re-read pf-02's getPersonaContent implementation (now on this branch) and pf-06's global store read function to confirm the exact dispatch shape before extending it.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for global-tier dispatch (persona exists vs. fallback), and a regression test that re-runs pf-05's Slice 1 fixtures/assertions unchanged.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Extend getPersonaContent's dispatch (keyed off PERSONA_STORE_BY_TIER) to route global tiers through pf-06's read function, with the same fallback-and-warn behavior pf-02 established for code-architect.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review that the fallback-and-warn logic is not duplicated/drifted between the code-architect path (pf-02) and the global-tier path (this story) — should share one implementation.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/layer1/persona.ts
+      purpose: "getPersonaContent (built in pf-02) — this story extends its dispatch to cover the 3 global tiers via pf-06's store."
+
+files_to_modify:
+  - file: lib/mnemosyne/layer1/persona.ts
+    change: "getPersonaContent's dispatch logic extended to route global tiers through persona-store-global.ts's read function."
+  - file: lib/mnemosyne/layer1/__tests__/persona.test.ts
+    change: "Add global-tier dispatch tests alongside the existing code-architect tests from pf-02."
+
+design_decisions:
+  - decision: "Fallback-and-warn behavior is shared logic between the code-architect path and the global-tier path, not duplicated."
+    rationale: "Avoids the two paths drifting — a bug fix to one fallback behavior should apply to both without a second patch."
+
+cross_cutting: []
+
+risks:
+  - severity: medium
+    description: "If this story's dispatch extension accidentally changes the code-architect path's behavior (e.g. by restructuring shared dispatch code), Slice 1's non-regression guarantee breaks silently."
+    mitigation: "Acceptance criteria explicitly requires pf-05's Slice 1 suite to pass unmodified — this is the concrete regression proof."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-foundation/docs/vertical-plan.md
+    relevant_excerpt: |
+      Slice 2 H2 (remainder): getPersonaContent's dispatch now routes
+      top-orchestrator/company-director/project-orchestrator to the global
+      store instead of the Slice-1 fallback-only path; falls back to
+      TIER_CONTENT[tier] only when no persona file exists yet.

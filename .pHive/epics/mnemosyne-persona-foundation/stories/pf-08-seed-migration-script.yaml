@@ -1,0 +1,91 @@
+id: pf-08-seed-migration-script
+epic: mnemosyne-persona-foundation
+title: Seed/migration script for the 3 global tiers
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [pf-07-getpersonacontent-global-dispatch]
+
+description: |
+  Implements horizontal-plan.md H3: one-time export of the current hardcoded
+  TIER_CONTENT (tiers.ts:116-189) into pf-06's global store. Design-discussion.md
+  names this "the single highest-blast-radius risk in the epic" — without it,
+  a cutover to data-driven content on an empty store would silently regress
+  every harness in every repo to zero Layer 1 content until 4 tiers are
+  re-authored from scratch.
+
+acceptance_criteria:
+  - "Given an empty ~/.mnemosyne/personas/ directory, when the seed script runs, then it produces 3 files (one per global tier) whose rendered markdown is byte-for-byte equivalent (modulo wrapping) to today's renderTierContentMarkdown(TIER_CONTENT[tier]) output"
+  - "Given the seed script has already run once, when it is run again, then it is a no-op — it skips (does not overwrite) any scopeId file that already exists, so operator edits made after the first run are never clobbered"
+  - "Given a fresh environment where the seed script has never been run, when getPersonaContent is called for a global tier, then it still produces correct (fallback) content via pf-07's fallback contract — never empty content, regardless of seed-script state"
+  - "Given the seed script does NOT auto-write a repo-local code-architect persona into any checked-out repo, when it runs, then it only ever touches the global store — repo-local content remains exclusively git-committed per-repo, by design"
+
+steps:
+  - id: research
+    description: Read bin/mnemosyne-reindex.mjs's parseArgs/run pattern (the convention this new script follows) and tiers.ts's renderTierContentMarkdown function to know exactly what byte-for-byte equivalence means for the migration test.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests: seed-against-empty-store produces 3 correct files,
+      re-run is a no-op (existing file content unchanged, not overwritten),
+      and a byte-for-byte comparison test against renderTierContentMarkdown's
+      current output for each of the 3 global tiers.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      Create bin/mnemosyne-persona-seed.mjs (or as a function pf-09's CLI
+      subcommand calls). Reads TIER_CONTENT for the 3 global tiers, writes
+      each as a global-store persona via pf-06's write function, idempotent
+      skip-if-exists logic.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review the byte-for-byte equivalence claim specifically — a seed script that produces subtly different output than today's hardcoded rendering would itself be a silent regression.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/layer1/tiers.ts
+      purpose: "TIER_CONTENT (tiers.ts:116-189) is the source data this script exports; renderTierContentMarkdown is the equivalence baseline the migration test compares against."
+    - path: bin/mnemosyne-reindex.mjs
+      purpose: "Existing standalone script pattern (parseArgs/run) this new migration script follows, per horizontal-plan.md H3.1."
+
+files_to_modify:
+  - file: bin/mnemosyne-persona-seed.mjs
+    change: "New file. Reads TIER_CONTENT's 3 global tiers, writes each as a global-store persona at a default scopeId, idempotent skip-if-exists."
+  - file: lib/mnemosyne/layer1/__tests__/persona-seed.test.ts
+    change: "New file. Byte-for-byte equivalence, idempotency, and fallback-without-seed tests."
+
+design_decisions:
+  - decision: "The seed script writes to a well-known default scopeId (e.g. 'default') for each global tier, becoming the fallback content referenced in pf-02/pf-07's dispatch."
+    rationale: "horizontal-plan.md H3.1 — gives cutover a concrete, predictable target rather than an ambiguous scopeId scheme."
+  - decision: "The seed script deliberately does NOT write repo-local code-architect personas into any repo — that remains the fallback-to-TIER_CONTENT path (pf-02) until a repo explicitly authors its own."
+    rationale: "horizontal-plan.md H3.1: a global seed script touching arbitrary git working trees it doesn't own would be a real overreach — repo-local content is git-committed per-repo by design (design-discussion.md §3a)."
+  - decision: "Two independent mechanisms protect against a regression: the idempotent seed script (durable fix) and the fallback-to-hardcoded-TIER_CONTENT contract already built in pf-02/pf-07 (safety net) — the fallback is what actually makes cutover safe even in environments where the seed hasn't run yet."
+    rationale: "horizontal-plan.md H3.2, explicit two-layer defense against the single highest-blast-radius risk in the epic."
+
+cross_cutting: []
+
+risks:
+  - severity: high
+    description: "This is explicitly named the single highest-blast-radius risk in the whole epic — every harness file in every repo regresses to empty content if this is wrong."
+    mitigation: "Byte-for-byte equivalence test against the CURRENT renderTierContentMarkdown output is the concrete proof, not a visual/manual check; the fallback contract (pf-02/pf-07) is a second, independent layer of protection even if this script itself has a bug."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-foundation/docs/design-discussion.md
+    relevant_excerpt: |
+      No seed/migration path — if the new data store starts empty on
+      cutover, every harness regresses to zero Layer 1 content until 4
+      tiers are re-authored from scratch.
+  - path: .pHive/epics/mnemosyne-persona-foundation/docs/horizontal-plan.md
+    relevant_excerpt: |
+      H3: this is the single highest-blast-radius risk in the epic — it's
+      the difference between a refactor and a regression that silently
+      empties every CLAUDE.md/AGENTS.md/GEMINI.md in every repo on next sync.

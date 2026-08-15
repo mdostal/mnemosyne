@@ -1,0 +1,117 @@
+id: pf-02-getpersonacontent-signature-threading
+epic: mnemosyne-persona-foundation
+title: getPersonaContent + scopeId signature threading through sync.ts
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [pf-01-persona-schema-repo-local-store]
+
+description: |
+  Implements horizontal-plan.md H2: replaces the bare-`tier` assumption in
+  `getTierContent`/`syncHarnessFile`/`syncAllHarnesses` with a real
+  scoped-persona resolution path. This is explicitly NOT a drop-in swap —
+  design-discussion.md §3a corrects an earlier (wrong) research-brief claim
+  that no signature changes were needed. This is the highest-complexity
+  story in the epic and the one every other Slice-1 story depends on.
+
+  Scope for THIS story (Slice 1): dispatch is tier === 'code-architect' ->
+  pf-01's repo-local store; every OTHER tier -> TIER_CONTENT[tier] unchanged
+  (the existing, already-tested path — zero regression risk for global
+  tiers in this slice). The global store (pf-06/pf-07) does not exist yet.
+
+acceptance_criteria:
+  - "Given a code-architect persona exists in the repo-local store for a scopeId, when getPersonaContent(tier, scopeId, ctx) is called, then it returns that persona's content with MANDATE_SECTIONS re-injected as an explicit, named step"
+  - "Given no code-architect persona exists yet for a scopeId, when getPersonaContent is called, then it falls back to TIER_CONTENT['code-architect'] and logs/warns that the fallback fired (not silent)"
+  - "Given any non-code-architect tier, when getPersonaContent is called, then it returns TIER_CONTENT[tier] unchanged — behavior identical to today's getTierContent"
+  - "Given syncHarnessFile/syncAllHarnesses's new signatures, when called with a required scopeId parameter, then buildManagedBody's getTierContent(tier) call site is replaced by getPersonaContent(tier, scopeId, {repoRoot})"
+  - "Given the existing sync.test.ts suite, when every call site is updated to pass a scopeId argument, then all existing assertions (idempotency, Level 0 ordering, fresh-read, mandate presence) still pass unmodified in behavior"
+
+steps:
+  - id: research
+    description: Read tiers.ts's getTierContent (tiers.ts:191-199) and the tier() builder helper's MANDATE_SECTIONS injection (tiers.ts:107-114) in full, plus sync.ts's buildManagedBody (sync.ts:37-41) and syncHarnessFile/syncAllHarnesses (sync.ts:47-76), plus every call site in sync.test.ts (sync.test.ts:32,45,56,76,99,110,134,162,186 per research-brief.md).
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests for getPersonaContent's dispatch logic (code-architect
+      -> repo-local store vs. fallback vs. other tiers -> TIER_CONTENT), the
+      explicit MANDATE_SECTIONS re-injection step, and updated sync.ts
+      signatures accepting scopeId. Update existing sync.test.ts call sites to
+      pass scopeId (mechanical but required — do this as part of test-spec, not
+      implement, since it defines the new expected call contract).
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      Add getPersonaContent to persona.ts (or tiers.ts extension). Change
+      syncHarnessFile(targetFilePath, tier, harnessId, scopeId, options) and
+      syncAllHarnesses(repoRoot, tier, scopeId, options) signatures. Update
+      buildManagedBody's getTierContent(tier) call site to
+      getPersonaContent(tier, scopeId, {repoRoot}). Old getTierContent(tier)
+      bare-tier signature is fully replaced, not left as a parallel path.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review for signature-change completeness (every call site updated, no bare-tier path left reachable), fallback-logging correctness, and mandate re-injection correctness.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/layer1/tiers.ts
+      purpose: "getTierContent (tiers.ts:191-199) is being replaced; MANDATE_SECTIONS injection (tiers.ts:107-114) must be preserved as an explicit step in the new function."
+    - path: lib/mnemosyne/layer1/sync.ts
+      purpose: "buildManagedBody (sync.ts:37-41) and syncHarnessFile/syncAllHarnesses (sync.ts:47-76) signatures change here."
+    - path: lib/mnemosyne/layer1/__tests__/sync.test.ts
+      purpose: "Every existing call site needs a scopeId argument added — mechanical but must not be missed."
+    - path: lib/mnemosyne/layer1/persona.ts
+      purpose: "pf-01's Persona type, assertValidPersona, and PERSONA_STORE_BY_TIER — getPersonaContent dispatches through this map."
+
+files_to_modify:
+  - file: lib/mnemosyne/layer1/persona.ts
+    change: "Add getPersonaContent(tier, scopeId, ctx) function."
+  - file: lib/mnemosyne/layer1/tiers.ts
+    change: "getTierContent(tier) bare-tier signature removed/replaced by getPersonaContent."
+  - file: lib/mnemosyne/layer1/sync.ts
+    change: "syncHarnessFile/syncAllHarnesses gain a required scopeId parameter; buildManagedBody's content-read call site updated."
+  - file: lib/mnemosyne/layer1/__tests__/sync.test.ts
+    change: "All existing call sites updated to pass scopeId."
+
+design_decisions:
+  - decision: "This is a real signature change (scopeId threaded through syncHarnessFile/syncAllHarnesses/getPersonaContent), not a drop-in swap of TIER_CONTENT for a data-reading function."
+    rationale: "design-discussion.md §3a, correcting research-brief.md's original (wrong) claim. Architect-lens review flagged this as the single most important correction in the whole epic."
+  - decision: "For non-code-architect tiers, dispatch to TIER_CONTENT[tier] unchanged in THIS slice — the global store does not exist until pf-06/pf-07 (Slice 2)."
+    rationale: "vertical-plan.md Slice 1 scope: 'every other tier -> TIER_CONTENT[tier] unchanged (no regression risk — this is the existing, already-tested path).'"
+  - decision: "The hardcoded-TIER_CONTENT fallback for code-architect (when no repo-local persona exists yet) logs/warns rather than staying silent."
+    rationale: "horizontal-plan.md H2.1: 'logs/warns when this fallback fires so an empty store doesn't go unnoticed' — this is also the safety net pf-08's seed script relies on later."
+
+cross_cutting:
+  - concern: existing-infrastructure
+    action: "This story explicitly extends sync.ts/tiers.ts rather than rewriting them — block.ts and level0.ts are untouched (design-discussion.md §5: 'Existing, unchanged'). Verify no changes leak into those two files during implementation."
+
+risks:
+  - severity: high
+    description: "Missing a call site in sync.test.ts during the signature migration would leave a broken/uncompiling test suite, or worse, a silently-passing test that no longer exercises the real path."
+    mitigation: "Grep for every getTierContent/syncHarnessFile/syncAllHarnesses call site before starting implement, not just the ones already known from research-brief.md's line numbers (source may have shifted)."
+  - severity: medium
+    description: "A dispatch bug could route a non-code-architect tier through the repo-local store path by mistake, silently breaking global-tier sync."
+    mitigation: "Dispatch logic keys off PERSONA_STORE_BY_TIER (pf-01), a single source of truth, not a duplicated if/else — and the acceptance criteria explicitly requires non-code-architect tiers behave identically to today."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-foundation/docs/design-discussion.md
+    relevant_excerpt: |
+      this is not a zero-change drop-in. getTierContent(tier) and
+      syncHarnessFile/syncAllHarnesses currently take a bare tier and assume
+      exactly one content object per tier — nothing resolves which
+      persona/scope to render. Making this real requires threading a
+      scopeId parameter through... a genuine signature change.
+  - path: .pHive/epics/mnemosyne-persona-foundation/docs/vertical-plan.md
+    relevant_excerpt: |
+      Slice 1 H2 (subset): getPersonaContent(tier, scopeId, ctx) is
+      introduced and re-injects MANDATE_SECTIONS. Dispatch: tier ===
+      'code-architect' -> repo-local store; every other tier ->
+      TIER_CONTENT[tier] unchanged.

@@ -1,0 +1,109 @@
+id: pf-01-persona-schema-repo-local-store
+epic: mnemosyne-persona-foundation
+title: Persona YAML schema + repo-local store
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: []
+
+description: |
+  Implements horizontal-plan.md H1 (subset): the `Persona` data shape and the
+  repo-local storage backend that holds `code-architect`-tier personas. This
+  is the root of the epic — nothing else in Slice 1 has anywhere to read from
+  or write to until this exists.
+
+  Persona storage is YAML (design-discussion.md §7a, operator correction —
+  NOT JSON), Mnemosyne's own canonical, harness-agnostic format. This story
+  does not touch `sync.ts`/`tiers.ts` at all — it only introduces the new
+  schema/store modules in isolation, unit-tested standalone.
+
+acceptance_criteria:
+  - "Given a valid persona YAML for tier=code-architect, when written via the repo-local store's write function, then it round-trips through the read function unchanged"
+  - "Given a persona candidate with a `mandateSections` key present, when validated, then it is rejected with a clear error — mandateSections is never author-storable (design-discussion.md §3a: 'never author-editable')"
+  - "Given a persona candidate with tier=company-director, when written via the repo-local store's write function, then it throws — the repo-local store only ever holds code-architect"
+  - "Given the repo-local store's file location, when a persona is written, then it lands at `<repoRoot>/.mnemosyne/personas/<scopeId>.yaml`, git-committed (not gitignored)"
+
+steps:
+  - id: research
+    description: Read tiers.ts's TierContent/TierContentSection shape and MANDATE_SECTIONS (tiers.ts:38-54, 89-105) so the new Persona type stays structurally compatible with what getPersonaContent (pf-02) will need to render.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests for: Persona type validation (mandateSections rejection,
+      tier/store mismatch rejection), repo-local store read/write round-trip,
+      and the PERSONA_STORE_BY_TIER map's code-architect -> repo-local entry.
+      Do NOT read the implementation — tests define the contract independently.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      Create lib/mnemosyne/layer1/persona.ts (Persona type, assertValidPersona,
+      PERSONA_STORE_BY_TIER) and lib/mnemosyne/layer1/persona-store-repo-local.ts
+      (read/write functions, tier guard). Make the failing tests pass without
+      modifying them.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review implementation and tests for correctness, YAML-format correctness (not JSON), and convention compliance with the rest of lib/mnemosyne/layer1/.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/layer1/tiers.ts
+      purpose: "Source of TierContent/TierContentSection shape (tiers.ts:38-54) and MANDATE_SECTIONS (tiers.ts:89-105) that Persona must stay compatible with, minus mandateSections."
+    - path: lib/mnemosyne/layer1/level0.ts
+      purpose: "Read-fresh-never-cache contract (level0.ts:23-33) that persona store reads should mirror — no module-level caching."
+    - path: package.json
+      purpose: "Confirm which YAML parsing library is already a dependency (yaml package is listed) — reuse it rather than adding a new dependency."
+
+files_to_modify:
+  - file: lib/mnemosyne/layer1/persona.ts
+    change: "New file. Persona type ({tier, scopeId, displayName, scope, sections, parentRefs?}), assertValidPersona(candidate, expectedTier), PERSONA_STORE_BY_TIER map."
+  - file: lib/mnemosyne/layer1/persona-store-repo-local.ts
+    change: "New file. Read/write functions for <repoRoot>/.mnemosyne/personas/<scopeId>.yaml, code-architect-only guard."
+  - file: lib/mnemosyne/layer1/__tests__/persona.test.ts
+    change: "New file. Unit tests for schema validation."
+  - file: lib/mnemosyne/layer1/__tests__/persona-store-repo-local.test.ts
+    change: "New file. Unit tests for repo-local store read/write round-trip and tier guard."
+
+design_decisions:
+  - decision: "Persona schema excludes mandateSections entirely — it is re-injected at render time in pf-02, never stored per-persona."
+    rationale: "design-discussion.md §3a: mandateSections is a shared, universal, code-owned constant, not persona content. Storing it per-persona would let a wizard/human accidentally author mandate-shaped content."
+  - decision: "parentRefs is an optional field on the schema now, even though it's unused until pf-11/pf-12 (Slice 3)."
+    rationale: "horizontal-plan.md H1.1: avoids a second schema migration later. Harmless if present-but-unused in Slice 1."
+  - decision: "Storage format is YAML, not JSON."
+    rationale: "design-discussion.md §7a, direct operator correction: 'we define our own yaml' — Mnemosyne's canonical persona format must be its own, not shaped by any harness or by an earlier draft's JSON assumption."
+
+cross_cutting:
+  - concern: documentation
+    action: "The two-store split is new ground for the layer architecture (design-discussion.md §3a/§5). Add a short addition to docs/layer-architecture-v2-plan.md's tier-model section documenting the global vs. repo-local storage split, once this story's schema is real."
+  - concern: existing-infrastructure
+    action: "Confirm this story does not duplicate or bypass the yaml parsing dependency already in package.json's dependencies — reuse it, do not add a new YAML library."
+
+risks:
+  - severity: medium
+    description: "A tier/store mismatch (e.g. writing a company-director persona into the repo-local store) could silently corrupt the store split if not enforced as a real guard."
+    mitigation: "assertValidPersona and the store write functions throw loudly on mismatch — verified by a dedicated test, not just documentation."
+  - severity: low
+    description: "mandateSections enforcement only happening at this layer could be bypassed if a later layer (pf-02's getPersonaContent) reads raw files without going through assertValidPersona."
+    mitigation: "pf-02 must call the read function that includes validation, not read raw YAML directly — flagged here so pf-02's implementer doesn't skip it."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-foundation/docs/design-discussion.md
+    relevant_excerpt: |
+      A "persona" is `{tier, scopeId, content: TierContent minus mandateSections}`
+      — `mandateSections` stays a shared, code-owned constant, never
+      author-editable. ... persona storage must be Mnemosyne's own canonical
+      format — YAML, not JSON.
+  - path: .pHive/epics/mnemosyne-persona-foundation/docs/horizontal-plan.md
+    relevant_excerpt: |
+      H1: Persona Schema + Two Storage Backends. Repo-local persona store:
+      Location <repoRoot>/.mnemosyne/personas/<scopeId>.yaml, git-committed.
+      Tier is implicitly code-architect. Write path throws if called with
+      any tier other than code-architect.

@@ -1,0 +1,70 @@
+id: pf-11-parentrefs-schema-support
+epic: mnemosyne-persona-foundation
+title: parentRefs schema support + validation
+status: pending
+complexity: low
+methodology: tdd
+depends_on: [pf-09-cli-persona-seed-and-global-sync, pf-10-global-tier-fixture-regression]
+
+description: |
+  Starts Slice 3. pf-01's Persona schema already reserved the `parentRefs`
+  field (harmless if unused, per horizontal-plan.md H1.1); this story
+  actually populates and validates it. A repo-local (code-architect) persona
+  names its applicable global-store parent(s) as explicit {tier, scopeId}
+  pairs — human-assigned, consistent with the epic's "no auto-detection"
+  stance on scopeId throughout.
+
+acceptance_criteria:
+  - "Given a repo-local persona YAML with a parentRefs field listing [{tier: 'project-orchestrator', scopeId: 'default'}], when read/validated, then it is accepted and the parentRefs shape is preserved"
+  - "Given a parentRefs entry naming a tier that is not one of top-orchestrator/company-director/project-orchestrator (e.g. code-architect, or an invalid string), when validated, then it is rejected with a clear error — a repo-local persona cannot name another repo-local persona as its parent"
+  - "Given a parentRefs entry naming a (tier, scopeId) pair with no corresponding persona in the global store, when validated at read time, then this is NOT rejected at schema-validation time — that check belongs to pf-12/pf-13's fetch path, not schema validation (a parent can be authored after the child references it)"
+
+steps:
+  - id: research
+    description: Re-read pf-01's Persona schema (now on this branch) for the exact placeholder shape of parentRefs, and pf-06's global store to know what a valid (tier, scopeId) target looks like.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for parentRefs acceptance, invalid-tier rejection, and the explicit non-check of "does the parent actually exist yet."
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Extend persona.ts's Persona type/validation to accept and shape-check parentRefs for repo-local personas.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review that validation correctly distinguishes "malformed parentRefs entry" (reject now) from "parent doesn't exist yet" (defer to fetch time) — conflating these would either over-reject valid authoring order or under-validate real mistakes.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/layer1/persona.ts
+      purpose: "Persona type's parentRefs field (reserved in pf-01) — this story implements real validation for it."
+
+files_to_modify:
+  - file: lib/mnemosyne/layer1/persona.ts
+    change: "parentRefs shape validation added to assertValidPersona for repo-local (code-architect) personas."
+  - file: lib/mnemosyne/layer1/__tests__/persona.test.ts
+    change: "parentRefs acceptance/rejection test cases added."
+
+design_decisions:
+  - decision: "parentRefs entries are human-assigned {tier, scopeId} pairs, not auto-detected."
+    rationale: "design-discussion.md Risk mitigation: 'Keep scopeId a plain human-assigned label for now — no auto-detection' — this consistency is explicitly called out in horizontal-plan.md H5.1 as well."
+  - decision: "Schema validation does not check whether the referenced parent actually exists in the global store — that's deferred to the fetch path (pf-12/pf-13)."
+    rationale: "A parent persona and a child referencing it may be authored in either order; hard-failing at schema-validation time on a not-yet-existing parent would make authoring order matter unnecessarily."
+
+cross_cutting: []
+
+risks: []
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-foundation/docs/horizontal-plan.md
+    relevant_excerpt: |
+      H5.1: parentRefs on repo-local personas (H1.1's schema field) — a
+      code-architect persona names its applicable parent(s) as explicit
+      {tier, scopeId} pairs, human-assigned.

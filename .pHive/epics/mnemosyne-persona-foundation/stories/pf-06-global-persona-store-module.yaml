@@ -1,0 +1,84 @@
+id: pf-06-global-persona-store-module
+epic: mnemosyne-persona-foundation
+title: Global persona store module
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [pf-05-realworld-fixtures-integration-tests]
+
+description: |
+  Implements horizontal-plan.md H1 (remainder): the global storage backend
+  for top-orchestrator/company-director/project-orchestrator personas. This
+  starts Slice 2. By this point, pf-01 through pf-05 (Slice 1, repo-local
+  only) are already shipped on this branch — this story extends the same
+  PERSONA_STORE_BY_TIER map/schema from pf-01 with the second store, it does
+  not redesign the schema.
+
+acceptance_criteria:
+  - "Given a valid persona YAML for tier=company-director, when written via the global store's write function, then it round-trips through the read function unchanged"
+  - "Given a persona candidate with tier=code-architect, when written via the global store's write function, then it throws — the global store never holds code-architect"
+  - "Given the global store's file location, when a persona is written, then it lands at `~/.mnemosyne/personas/<tier>/<scopeId>.yaml`, NOT git-committed (outside any repo, same rationale as Level 0)"
+  - "Given the global store's read function, when called twice in a row after an external edit to the file, then the second call reflects the edit — no module-level caching, mirroring level0.ts's read-fresh contract"
+
+steps:
+  - id: research
+    description: Re-read level0.ts's DEFAULT_LEVEL0_PATH and read-fresh-never-cache contract (level0.ts:21-33) — the global store mirrors this exact convention, both in location sibling-ness and in caching behavior.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for global store read/write round-trip, the code-architect rejection guard, and the read-fresh (no-caching) contract.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Create lib/mnemosyne/layer1/persona-store-global.ts. Update PERSONA_STORE_BY_TIER (pf-01) to route the 3 global tiers here (it may already have been stubbed in pf-01 per horizontal-plan.md's note that the map exists from Slice 1 but only the code-architect branch was exercised).
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review for read-fresh correctness (no accidental caching), and confirm this story does not touch the repo-local store or pf-02's dispatch logic (that's pf-07's job).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/layer1/level0.ts
+      purpose: "DEFAULT_LEVEL0_PATH (level0.ts:21) and the read-fresh-never-cache contract (level0.ts:23-33) this store's location convention and read function directly mirror."
+    - path: lib/mnemosyne/layer1/persona.ts
+      purpose: "pf-01's PERSONA_STORE_BY_TIER map — this story wires the 3 global tiers into it."
+
+files_to_modify:
+  - file: lib/mnemosyne/layer1/persona-store-global.ts
+    change: "New file. Read/write functions for ~/.mnemosyne/personas/<tier>/<scopeId>.yaml, code-architect-rejection guard, read-fresh contract."
+  - file: lib/mnemosyne/layer1/persona.ts
+    change: "PERSONA_STORE_BY_TIER's global-tier branches now point at real implementation (previously stubbed/typed only, per pf-01)."
+  - file: lib/mnemosyne/layer1/__tests__/persona-store-global.test.ts
+    change: "New file. Round-trip, tier-guard, and read-fresh tests."
+
+design_decisions:
+  - decision: "Global store location is ~/.mnemosyne/personas/<tier>/<scopeId>.yaml — sibling to Level 0's ~/.mnemosyne/level0-rules.md, not a repo-scoped location."
+    rationale: "horizontal-plan.md H1.2: 'sibling convention to DEFAULT_LEVEL0_PATH... applies across companies/projects, not scoped to one repo' — matches design-discussion.md §3a's lifecycle reasoning (ideation happens before any repo exists)."
+  - decision: "Not git-committed — lives entirely outside any repo's working tree."
+    rationale: "Same rationale as Level 0 itself: this content spans potentially many future repos, so it cannot live inside any one of them."
+
+cross_cutting: []
+
+risks:
+  - severity: low
+    description: "If the global store accidentally caches reads (unlike level0.ts's explicit no-cache contract), an operator editing a persona file by hand wouldn't see the change take effect without a process restart."
+    mitigation: "Read-fresh test explicitly asserts a second read reflects an external edit — same test shape as level0.ts's own contract would require if it were tested this way."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-foundation/docs/design-discussion.md
+    relevant_excerpt: |
+      Global persona store (~/.mnemosyne/personas/, alongside Level 0's
+      existing convention) holds top-orchestrator, company-director, and
+      project-orchestrator tier personas. This store is where ideation
+      happens before a repo exists.
+  - path: .pHive/epics/mnemosyne-persona-foundation/docs/horizontal-plan.md
+    relevant_excerpt: |
+      H1.2 Global persona store: Read/write functions mirror level0.ts's
+      "read fresh, never cache" contract — no module-level caching, same
+      failure posture (loud throw, not silent fallback).
