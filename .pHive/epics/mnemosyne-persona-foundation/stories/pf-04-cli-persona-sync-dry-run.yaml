@@ -1,9 +1,22 @@
 id: pf-04-cli-persona-sync-dry-run
 epic: mnemosyne-persona-foundation
 title: "CLI: persona sync + --dry-run"
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-15 (commit 921987f). Real TDD, independently verified:
+  reran node test/persona-cli.mjs myself (43/43, real subprocess tests via
+  tsx and via bin/mnemosyne itself, with sha256+mtime proof --dry-run never
+  writes and proof it never creates would-be files on disk), vitest (71/71),
+  tsc clean. Sound judgment call: launches via tsx not plain node, since
+  tsconfig.json's noEmit:true means a plain node process can't import the
+  .ts modules this CLI needs -- matches the existing
+  bin/mnemosyne-client-api/bin/mnemosyne-audit-lifecycle convention. Merged
+  ahead of pf-03 (which was still building) rather than block on ordering;
+  will rerun the full suite again once pf-03 lands on top. All acceptance
+  criteria met.
 depends_on: [pf-02-getpersonacontent-signature-threading]
 
 description: |
