@@ -30,6 +30,7 @@ import path from 'node:path';
 import { spliceManagedBlock } from './block.js';
 import { HARNESS_TARGETS, type HarnessId } from './harness.js';
 import { DEFAULT_LEVEL0_PATH, readLevel0Content } from './level0.js';
+import { withLock } from './lock.js';
 import { getPersonaContent } from './persona.js';
 import { renderTierContentMarkdown, type Tier } from './tiers.js';
 
@@ -72,12 +73,22 @@ export function syncHarnessFile(
   const repoRoot = path.dirname(targetFilePath);
   const managedBody = buildManagedBody(tier, scopeId, repoRoot, level0Content);
 
-  const created = !existsSync(targetFilePath);
-  const existingContent = created ? null : readFileSync(targetFilePath, 'utf8');
-  const nextContent = spliceManagedBlock(existingContent, managedBody);
-
+  // The lock file itself lives alongside targetFilePath, so its directory must exist before we
+  // can even attempt to acquire the lock -- create it up front, outside the locked section.
   mkdirSync(path.dirname(targetFilePath), { recursive: true });
-  writeFileSync(targetFilePath, nextContent, 'utf8');
+
+  // The read (existsSync/readFileSync) -> splice -> write (writeFileSync) sequence has zero
+  // coordination on its own -- two concurrent syncs of the same target file is a classic TOCTOU
+  // race (design-discussion.md). withLock serializes the whole read-splice-write against that path.
+  const created = withLock(targetFilePath, () => {
+    const fileExisted = existsSync(targetFilePath);
+    const existingContent = fileExisted ? readFileSync(targetFilePath, 'utf8') : null;
+    const nextContent = spliceManagedBlock(existingContent, managedBody);
+
+    writeFileSync(targetFilePath, nextContent, 'utf8');
+
+    return !fileExisted;
+  });
 
   return { filePath: targetFilePath, harness: harnessId, tier, created };
 }
