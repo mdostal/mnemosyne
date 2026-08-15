@@ -13,6 +13,7 @@ import { CodeGraphLayerAdapter } from './CodeGraphLayerAdapter.js';
 import { CrossRepoLinkerAdapter } from './CrossRepoLinkerAdapter.js';
 import { FileLayerAdapter } from './FileLayerAdapter.js';
 import { GraphifyLayerAdapter } from './GraphifyLayerAdapter.js';
+import { KeywordLayerAdapter } from './KeywordLayerAdapter.js';
 import type { LayerAdapter } from './LayerAdapter.js';
 import { VectorLayerAdapter } from './VectorLayerAdapter.js';
 
@@ -107,4 +108,14 @@ export function registerBuiltinLayers(registry: LayerRegistry): void {
     // every other registry factory, just spelled out for a required field.
     return new CrossRepoLinkerAdapter(options as unknown as ConstructorParameters<typeof CrossRepoLinkerAdapter>[0]);
   });
+  // "keyword" (kw-02-ts-client-keyword-layer): a NEW, OPTIONAL layer --
+  // shells out to `swarm-memory grep <query> --json` (mirrors "vector"'s
+  // shell-out pattern exactly) for exact/keyword matches against the same
+  // remote Qdrant-indexed corpus "vector" searches. Registered here so it's
+  // resolvable by name via MNEMOSYNE_LAYERS, but deliberately NOT added to
+  // config.ts's DEFAULT_LAYER_STACK_CONFIG by this story -- registration
+  // alone has zero effect on any consumer who doesn't explicitly opt in.
+  // client.ts's cascade runs "keyword" ALONGSIDE "vector" (parallel, always)
+  // only when a consumer's resolved stack configures both.
+  registry.register('keyword', (options) => new KeywordLayerAdapter(options as ConstructorParameters<typeof KeywordLayerAdapter>[0]));
 }

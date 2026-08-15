@@ -50,6 +50,7 @@ import type {
   LayerSkip,
   RecallFailure,
   RecallResult,
+  RecallSuccess,
   RememberResult,
   Scope,
 } from './interfaces.js';
@@ -114,8 +115,109 @@ export interface RecallStatusOptions {
   includeCrossBranchProvisional?: boolean;
 }
 
+/**
+ * kw-02-ts-client-keyword-layer: a single step of the recall() cascade.
+ * Normally each configured layer is its own step ('single'). When a
+ * consumer's resolved stack configures BOTH 'vector' and 'keyword',
+ * those two entries collapse into one 'parallel-pair' step (see
+ * `buildCascadeNodes`) so they are queried concurrently and merged as one
+ * cascade slot, instead of 'keyword' sitting as its own sequential
+ * zero-hit-escalation candidate. A stack that does not configure both
+ * names produces ONLY 'single' nodes -- byte-identical to this class's
+ * pre-kw-02 cascade, so an unconfigured/non-opted consumer sees zero
+ * behavior change.
+ */
+type CascadeNode =
+  | { kind: 'single'; adapter: LayerAdapter }
+  | { kind: 'parallel-pair'; vector: LayerAdapter; keyword: LayerAdapter };
+
+/**
+ * Groups `layers` into cascade steps, collapsing a configured 'vector' +
+ * 'keyword' pair into a single 'parallel-pair' step positioned at whichever
+ * of the two appears FIRST in the resolved stack order (the other's own
+ * slot is dropped, folded into the pair). Every other layer keeps its
+ * normal single-step position and relative order. When only one (or
+ * neither) of 'vector'/'keyword' is configured, this is a no-op mapping
+ * (one 'single' node per layer, same order) -- the pairing behavior is
+ * strictly additive and only engages when a consumer explicitly configured
+ * both names.
+ */
+function buildCascadeNodes(layers: LayerAdapter[]): CascadeNode[] {
+  const vectorIndex = layers.findIndex((adapter) => adapter.layer === 'vector');
+  const keywordIndex = layers.findIndex((adapter) => adapter.layer === 'keyword');
+
+  if (vectorIndex === -1 || keywordIndex === -1) {
+    return layers.map((adapter) => ({ kind: 'single', adapter }));
+  }
+
+  const pairIndex = Math.min(vectorIndex, keywordIndex);
+  const nodes: CascadeNode[] = [];
+  for (let i = 0; i < layers.length; i++) {
+    if (i === vectorIndex && i !== pairIndex) continue; // folded into the pair below
+    if (i === keywordIndex && i !== pairIndex) continue; // folded into the pair below
+    if (i === pairIndex) {
+      nodes.push({ kind: 'parallel-pair', vector: layers[vectorIndex]!, keyword: layers[keywordIndex]! });
+      continue;
+    }
+    nodes.push({ kind: 'single', adapter: layers[i]! });
+  }
+  return nodes;
+}
+
+/**
+ * Identity used to dedupe a hit found by both the vector and keyword
+ * cascade steps -- mirrors kw-01's `hitIdentity()` (src/engine.mjs, the JS
+ * zero-dep server's own always-parallel implementation) so both
+ * implementations agree on what counts as "the same hit," per this epic's
+ * "kept in sync" convention. Prefers `chunk_span.index` when a layer
+ * reports one (a real "same chunk" match); falls back to the hit's own
+ * content when it doesn't, so two different, unrelated hits that merely
+ * share a source (e.g. a layer with no chunk-index concept) are never
+ * incorrectly collapsed into one.
+ */
+function hitIdentity(hit: Hit): string {
+  const chunk = hit.provenance.chunk_span?.index !== undefined ? String(hit.provenance.chunk_span.index) : hit.content;
+  return `${hit.provenance.source}::${chunk}`;
+}
+
+/**
+ * Dedupes hits produced by the always-parallel vector+keyword cascade step
+ * (kw-02) that name the exact same source+chunk -- the same underlying
+ * memory found via both paths is one result, not two. The FIRST occurrence
+ * in `hits` (vector's, since `queryVectorKeywordPair` concatenates vector's
+ * hits before keyword's) is kept; its `also_matched` field records that
+ * the OTHER layer(s) confirmed it too, so that signal isn't silently lost
+ * when the duplicate is dropped. Order-preserving otherwise.
+ */
+function dedupeParallelHits(hits: Hit[]): Hit[] {
+  const bySourceChunk = new Map<string, Hit>();
+  const order: string[] = [];
+
+  for (const hit of hits) {
+    const key = hitIdentity(hit);
+    const existing = bySourceChunk.get(key);
+    if (!existing) {
+      bySourceChunk.set(key, hit);
+      order.push(key);
+      continue;
+    }
+    if (existing.provenance.layer === hit.provenance.layer) {
+      // Same layer producing two hits for the same source+chunk (e.g. a
+      // layer's own internal duplication) isn't this story's "matched both
+      // ways" case -- keep the first, don't synthesize also_matched.
+      continue;
+    }
+    const alsoMatched = new Set(existing.also_matched ?? []);
+    alsoMatched.add(hit.provenance.layer);
+    bySourceChunk.set(key, { ...existing, also_matched: [...alsoMatched] });
+  }
+
+  return order.map((key) => bySourceChunk.get(key)!);
+}
+
 export class MnemosyneClient {
   private readonly layers: LayerAdapter[];
+  private readonly cascadeNodes: CascadeNode[];
   private readonly logger: Logger;
   private readonly metrics: Metrics;
 
@@ -149,6 +251,12 @@ export class MnemosyneClient {
       if (override) return override;
       return registry.create(entry.name, entry.options ?? {}, ctx);
     });
+    // kw-02-ts-client-keyword-layer: collapses a configured vector+keyword
+    // pair into one parallel cascade step -- see buildCascadeNodes's doc
+    // comment. `this.layers` (above) stays the flat, ungrouped list, since
+    // getConfiguredLayers()/remember()'s by-name lookup still need to see
+    // every configured layer individually regardless of cascade pairing.
+    this.cascadeNodes = buildCascadeNodes(this.layers);
   }
 
   /** The resolved layer stack, in cascade order — for GET /layers (pl-03) and similar introspection. */
@@ -218,22 +326,30 @@ export class MnemosyneClient {
     //     that ends in failure surfaces the failure, not a stale "found
     //     nothing"); if it succeeded (even empty), a RecallSuccess with its
     //     (possibly empty) hits is returned.
-    for (let i = 0; i < this.layers.length; i++) {
-      const layerAdapter = this.layers[i]!;
-      const result = await this.queryLayer(layerAdapter, query, recallOptions);
+    // kw-02-ts-client-keyword-layer: iterates cascade STEPS, not raw
+    // layers -- a step is normally one layer ('single'), but when the
+    // resolved stack configures both 'vector' and 'keyword' those two
+    // collapse into one 'parallel-pair' step (see buildCascadeNodes). A
+    // stack that doesn't configure both produces one 'single' step per
+    // layer in the same order as before, so this loop's semantics for
+    // every existing (non-keyword-opted) consumer are unchanged: a
+    // 'single' step's RecallSuccess always carries `layers_queried:
+    // [thatLayer.layer]` and `layers_skipped: []` (every adapter's own
+    // recall() sets this), so spreading them below reproduces the old
+    // `layersQueried.push(layerAdapter.layer)` byte-for-byte.
+    for (let i = 0; i < this.cascadeNodes.length; i++) {
+      const node = this.cascadeNodes[i]!;
+      const { result, skips } = await this.queryCascadeNode(node, query, recallOptions);
       lastResult = result;
 
       if (!result.ok) {
         degraded = true;
-        layersSkipped.push({
-          layer: layerAdapter.layer,
-          reason: result.error.code ?? `${layerAdapter.layer}_unavailable`,
-          detail: result.error.message,
-        });
+        layersSkipped.push(...skips);
         continue;
       }
 
-      layersQueried.push(layerAdapter.layer);
+      layersQueried.push(...result.layers_queried);
+      layersSkipped.push(...result.layers_skipped);
       degraded = degraded || result.degraded;
       finalHits = result.hits;
 
@@ -243,11 +359,11 @@ export class MnemosyneClient {
       if (i > 0) {
         escalated = true;
       }
-      // zero hits, not the first layer's special-case pass-through — loop
-      // continues to the next layer (or ends naturally if this was last).
+      // zero hits, not the first step's special-case pass-through — loop
+      // continues to the next step (or ends naturally if this was last).
     }
 
-    if (this.layers.length === 0) {
+    if (this.cascadeNodes.length === 0) {
       // No layer configured at all — the loop never ran, lastResult/finalHits
       // are both still undefined. Distinct from "every configured layer
       // failed" below (that case has a real lastResult to surface).
@@ -411,6 +527,107 @@ export class MnemosyneClient {
     this.recordDegradation(result, recallOptions.scope);
 
     return result;
+  }
+
+  /**
+   * Runs one cascade step (see `CascadeNode`). A 'single' step is exactly
+   * today's per-layer query, wrapped so the caller gets a uniform
+   * `{ result, skips }` shape (`skips` here is always 0-or-1 entries,
+   * derived straight from `result.error` on failure — byte-identical to
+   * this class's pre-kw-02 `layersSkipped.push({...})` call).
+   *
+   * A 'parallel-pair' step (kw-02) queries 'vector' and 'keyword'
+   * CONCURRENTLY via `Promise.all` — never sequential escalation gated on
+   * hit count or score, per docs/qdrant-hybrid-retrieval-experiment.md's
+   * own finding that real matches and noise occupy nearly the same score
+   * band for this corpus, making "is this weak enough to escalate" logic
+   * unreliable here. Both are queried on EVERY recall() call that reaches
+   * this step, every time — not a zero-hit fallback.
+   */
+  private async queryCascadeNode(
+    node: CascadeNode,
+    query: string,
+    recallOptions: RecallOptions & { scope: Scope; intent: Intent },
+  ): Promise<{ result: RecallResult; skips: LayerSkip[] }> {
+    if (node.kind === 'single') {
+      const result = await this.queryLayer(node.adapter, query, recallOptions);
+      if (!result.ok) {
+        return {
+          result,
+          skips: [
+            {
+              layer: node.adapter.layer,
+              reason: result.error.code ?? `${node.adapter.layer}_unavailable`,
+              detail: result.error.message,
+            },
+          ],
+        };
+      }
+      return { result, skips: [] };
+    }
+
+    const [vectorResult, keywordResult] = await Promise.all([
+      this.queryLayer(node.vector, query, recallOptions),
+      this.queryLayer(node.keyword, query, recallOptions),
+    ]);
+
+    const skips: LayerSkip[] = [];
+    const layersQueried: Layer[] = [];
+    let hits: Hit[] = [];
+    let degraded = false;
+
+    if (vectorResult.ok) {
+      layersQueried.push(...vectorResult.layers_queried);
+      hits = hits.concat(vectorResult.hits);
+      degraded = degraded || vectorResult.degraded;
+    } else {
+      skips.push({
+        layer: 'vector',
+        reason: vectorResult.error.code ?? 'vector_unavailable',
+        detail: vectorResult.error.message,
+      });
+      degraded = true;
+    }
+
+    if (keywordResult.ok) {
+      layersQueried.push(...keywordResult.layers_queried);
+      hits = hits.concat(keywordResult.hits);
+      degraded = degraded || keywordResult.degraded;
+    } else {
+      skips.push({
+        layer: 'keyword',
+        reason: keywordResult.error.code ?? 'keyword_unavailable',
+        detail: keywordResult.error.message,
+      });
+      degraded = true;
+    }
+
+    if (layersQueried.length === 0) {
+      // Both failed outright -- surface vector's own RecallFailure so this
+      // step is treated exactly like any other failed cascade step (the
+      // outer loop marks it skipped via `skips` above and continues to the
+      // next configured layer, if any). Both failures are still visible
+      // individually via `skips` and via each queryLayer() call's own
+      // logging/metrics above, regardless of which one is surfaced as the
+      // step's raw RecallResult.
+      return { result: vectorResult, skips };
+    }
+
+    const merged: RecallSuccess = {
+      ok: true,
+      query,
+      scope: recallOptions.scope,
+      intent: recallOptions.intent,
+      hits: dedupeParallelHits(hits),
+      layers_queried: layersQueried,
+      layers_skipped: skips,
+      escalated: false,
+      degraded,
+    };
+    // `skips` is already folded into `merged.layers_skipped` above, so the
+    // outer loop (which reads `result.layers_skipped` on success) doesn't
+    // need a second copy here.
+    return { result: merged, skips: [] };
   }
 
   private recordRecallEnd(result: RecallResult, startedAt: number): void {
