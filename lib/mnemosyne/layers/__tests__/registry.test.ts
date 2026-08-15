@@ -81,7 +81,12 @@ describe('LayerRegistry', () => {
 
   it('"crossref-linker" being registered has zero effect on the unconfigured default layer stack', async () => {
     const { DEFAULT_LAYER_STACK_CONFIG } = await import('../config.js');
-    expect(DEFAULT_LAYER_STACK_CONFIG.layers.map((l) => l.name)).toEqual(['code-graph', 'vector', 'file']);
+    // cr-01-graphify-default-layer: the unconfigured default's first entry
+    // is 'graphify' now (was 'code-graph') -- see config.ts's doc comment.
+    // This test's actual point (registering a new, unrelated layer name
+    // has zero effect on the hardcoded default) is unaffected by that
+    // change, so only the asserted layer name itself needs updating.
+    expect(DEFAULT_LAYER_STACK_CONFIG.layers.map((l) => l.name)).toEqual(['graphify', 'vector', 'file']);
     expect(DEFAULT_LAYER_STACK_CONFIG.layers.map((l) => l.name)).not.toContain('crossref-linker');
   });
 });
