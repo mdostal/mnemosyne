@@ -147,15 +147,26 @@ export function assertValidPersona(candidate: unknown, expectedTier: Tier): asse
   }
 
   if (candidate.parentRefs !== undefined) {
+    // A parentRef's tier must be one of the GLOBAL-store tiers
+    // (PERSONA_STORE_BY_TIER, the single source of truth for the two-store
+    // split) -- a repo-local (code-architect) persona names its applicable
+    // global-store parent(s) (pf-11, horizontal-plan.md H5.1), never another
+    // repo-local persona. This is a pure shape check: whether a persona
+    // actually exists yet at the named (tier, scopeId) is deliberately NOT
+    // checked here -- that belongs to the fetch path (pf-12/pf-13), since a
+    // parent and its child can be authored in either order.
     const isValidParentRef = (r: unknown): boolean =>
       isPlainRecord(r) &&
       typeof r.tier === 'string' &&
       TIERS.includes(r.tier as Tier) &&
+      PERSONA_STORE_BY_TIER[r.tier as Tier] === 'global' &&
       typeof r.scopeId === 'string' &&
       r.scopeId.trim() !== '';
     if (!Array.isArray(candidate.parentRefs) || !candidate.parentRefs.every(isValidParentRef)) {
       throw new Error(
-        "Invalid persona: 'parentRefs', if present, must be an array of {tier, scopeId} pairs.",
+        "Invalid persona: 'parentRefs', if present, must be an array of {tier, scopeId} pairs " +
+          "whose tier is one of top-orchestrator, company-director, project-orchestrator -- a " +
+          'repo-local persona cannot name another repo-local persona as its parent.',
       );
     }
   }

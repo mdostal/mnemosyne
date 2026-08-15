@@ -1,7 +1,7 @@
 id: pf-11-parentrefs-schema-support
 epic: mnemosyne-persona-foundation
 title: parentRefs schema support + validation
-status: pending
+status: complete
 complexity: low
 methodology: tdd
 depends_on: [pf-09-cli-persona-seed-and-global-sync, pf-10-global-tier-fixture-regression]
