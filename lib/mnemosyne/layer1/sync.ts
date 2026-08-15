@@ -46,7 +46,14 @@ export interface SyncResult {
   created: boolean;
 }
 
-function buildManagedBody(tier: Tier, scopeId: string, repoRoot: string, level0Content: string): string {
+/**
+ * Exported (pf-04) so `bin/mnemosyne-persona.mjs`'s `--dry-run` path can
+ * compute the exact same managed-block body production sync would write,
+ * then feed it through `spliceManagedBlock` in memory -- without duplicating
+ * this assembly logic (and risking silent drift between the real write path
+ * and the dry-run preview if one changes and not the other).
+ */
+export function buildManagedBody(tier: Tier, scopeId: string, repoRoot: string, level0Content: string): string {
   const tierMarkdown = renderTierContentMarkdown(getPersonaContent(tier, scopeId, { repoRoot }));
   // Level 0 first, verbatim, ahead of tier content -- never reordered.
   return [level0Content.trim(), '', '---', '', tierMarkdown.trim()].join('\n');
