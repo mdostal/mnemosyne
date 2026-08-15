@@ -29,6 +29,13 @@ note_on_completion: >
   clean. docs/layer-architecture-v2-plan.md updated per cross_cutting note
   with a pointer to this implementation.
 
+  Independently verified (orchestrator, extra scrutiny given this story's
+  stated risk): reran vitest (135/135) and tsc myself, personally read the
+  non-inlining test's actual code (not just the report) -- confirmed it is
+  a real string-search assertion, not a mock or structural check, covering
+  two distinct parent tiers with distinctive unique markers, both at the
+  render level and end-to-end through a real syncHarnessFile write.
+
 description: |
   Implements horizontal-plan.md H5 (the core mechanism): getPersonaContent's
   repo-local rendering path renders a new "Parent context (query up)"
