@@ -46,10 +46,29 @@
 //                  marker in a hand-written global persona file must show
 //                  up in the synced harness content).
 //
+// Extended by pf-13-cli-persona-show (epic: same) to also cover:
+//   AC-show-parse    `persona show` argument parsing: missing tier/scope-id,
+//                     invalid tier, and a code-architect tier (repo-local,
+//                     out of scope for this global-store-only verb).
+//   AC-show-read     `persona show` prints a hand-authored global persona's
+//                     real content (distinctive marker text), and errors
+//                     clearly (non-zero exit) when no persona exists yet for
+//                     that scope -- no silent TIER_CONTENT fallback the way
+//                     `sync` has.
+//   AC-show-readonly zero filesystem writes anywhere under $HOME (recursive
+//                     directory snapshot, byte-for-byte, before vs. after) --
+//                     no harness file, no lock file, no persona file touched.
+//   AC-show-live     the on-demand, live-read contract: write a persona,
+//                     `show` it, edit the persona file DIRECTLY on disk (no
+//                     CLI/store call), `show` it again -- the second run's
+//                     output must reflect the edit, proving this is a live
+//                     read off disk on every invocation, not a cached or
+//                     synced copy.
+//
 // Usage: node test/persona-cli.mjs
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -119,6 +138,36 @@ async function writeFakeGlobalPersona(home, tier, scopeId, { displayName, scope,
       ...sections.flatMap((s) => [`  - heading: ${JSON.stringify(s.heading)}`, `    body: ${JSON.stringify(s.body)}`]),
     ].join("\n") + "\n";
   await writeFile(path.join(dir, `${scopeId}.yaml`), yamlText, "utf8");
+}
+
+/**
+ * Recursively snapshots every file under `root` as `{relativePath: sha256}}`
+ * -- pf-13's AC-show-readonly proof that `persona show` writes NOTHING
+ * anywhere reachable ($HOME in these tests), not just "the one file we
+ * thought to check." Sorted keys so two snapshots compare byte-for-byte via
+ * JSON.stringify regardless of directory-read ordering.
+ */
+async function snapshotTree(root) {
+  const out = {};
+  async function walk(dir) {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(full);
+      } else if (entry.isFile()) {
+        const content = await readFile(full);
+        out[path.relative(root, full)] = sha256(content.toString("binary"));
+      }
+    }
+  }
+  await walk(root);
+  return JSON.stringify(Object.keys(out).sort().map((k) => [k, out[k]]));
 }
 
 /** Runs the CLI as a real subprocess via tsx (directly, or through the bin/mnemosyne dispatcher). */
@@ -350,6 +399,117 @@ async function main() {
     await rm(repo, { recursive: true, force: true });
   }
 
+  // --- AC-show-parse: `persona show` argument parsing (pf-13) --------------
+  {
+    const home = await makeFakeHome();
+
+    const noArgs = await runCli(["show"], { home });
+    ok(noArgs.code !== 0, `show with no args -> non-zero exit (got ${noArgs.code})`);
+    ok(/tier.*scope-id.*required/i.test(noArgs.stderr), `show with no args -> clear stderr message -> ${short(noArgs.stderr)}`);
+
+    const missingScope = await runCli(["show", "project-orchestrator"], { home });
+    ok(missingScope.code !== 0, `show missing scope-id -> non-zero exit (got ${missingScope.code})`);
+
+    const invalidTier = await runCli(["show", "not-a-real-tier", "default"], { home });
+    ok(invalidTier.code !== 0, `show invalid tier -> non-zero exit (got ${invalidTier.code})`);
+    ok(/invalid tier/i.test(invalidTier.stderr), `show invalid tier -> clear stderr message -> ${short(invalidTier.stderr)}`);
+
+    const codeArchitect = await runCli(["show", "code-architect", "test-scope"], { home });
+    ok(codeArchitect.code !== 0, `show code-architect (repo-local, out of scope) -> non-zero exit (got ${codeArchitect.code})`);
+    ok(
+      /not a global tier/i.test(codeArchitect.stderr),
+      `show code-architect -> clear stderr message explaining it's repo-local, not this verb -> ${short(codeArchitect.stderr)}`,
+    );
+
+    await rm(home, { recursive: true, force: true });
+  }
+
+  // --- AC-show-read: `persona show` reads real content, errors when absent (pf-13) --------------
+  {
+    const home = await makeFakeHome();
+
+    const notFound = await runCli(["show", "project-orchestrator", "no-such-scope"], { home });
+    ok(notFound.code !== 0, `show unseeded scope -> non-zero exit (got ${notFound.code})`);
+    ok(/no global persona found/i.test(notFound.stderr), `show unseeded scope -> clear stderr message, no silent fallback -> ${short(notFound.stderr)}`);
+
+    await writeFakeGlobalPersona(home, "project-orchestrator", "acme-project", {
+      displayName: "Project Orchestrator",
+      scope: "SHOW_SCOPE_MARKER — Acme's own authored scope statement.",
+      sections: [{ heading: "Authored section", body: "SHOW_BODY_MARKER — real seeded content." }],
+    });
+
+    const result = await runCli(["show", "project-orchestrator", "acme-project"], { home });
+    ok(result.code === 0, `show seeded scope -> exit 0 (got ${result.code}, stderr=${short(result.stderr)})`);
+    ok(result.stdout.includes("SHOW_SCOPE_MARKER"), `show prints the persona's real scope text -> ${short(result.stdout)}`);
+    ok(result.stdout.includes("SHOW_BODY_MARKER"), `show prints the persona's real section body -> ${short(result.stdout)}`);
+    ok(result.stdout.includes("Authored section"), `show prints the persona's section heading -> ${short(result.stdout)}`);
+    ok(result.stdout.includes("tier: project-orchestrator"), `show prints the tier -> ${short(result.stdout)}`);
+    ok(result.stdout.includes("scopeId: acme-project"), `show prints the scopeId -> ${short(result.stdout)}`);
+
+    // Dispatcher wiring: `bin/mnemosyne persona show ...` reaches the same code.
+    const viaDispatcher = await runCli(["show", "project-orchestrator", "acme-project"], { home, viaDispatcher: true });
+    ok(viaDispatcher.code === 0, `bin/mnemosyne persona show ... -> exit 0 (got ${viaDispatcher.code}, stderr=${short(viaDispatcher.stderr)})`);
+    ok(viaDispatcher.stdout.includes("SHOW_SCOPE_MARKER"), `bin/mnemosyne persona show reaches the same real content -> ${short(viaDispatcher.stdout)}`);
+
+    await rm(home, { recursive: true, force: true });
+  }
+
+  // --- AC-show-readonly: zero filesystem writes anywhere (pf-13) -----------------------------
+  {
+    const home = await makeFakeHome();
+    await writeFakeGlobalPersona(home, "top-orchestrator", "readonly-scope", {
+      displayName: "Top Orchestrator",
+      scope: "Read-only proof scope.",
+      sections: [{ heading: "Section", body: "Body." }],
+    });
+
+    const before = await snapshotTree(home);
+    const result = await runCli(["show", "top-orchestrator", "readonly-scope"], { home });
+    ok(result.code === 0, `show (readonly proof) -> exit 0 (got ${result.code}, stderr=${short(result.stderr)})`);
+    const after = await snapshotTree(home);
+
+    ok(before === after, "show wrote ZERO files anywhere under $HOME (recursive snapshot identical before/after)");
+
+    const lockExists = await stat(
+      path.join(home, ".mnemosyne", "personas", "top-orchestrator", "readonly-scope.yaml.mnemosyne.lock"),
+    )
+      .then(() => true)
+      .catch(() => false);
+    ok(lockExists === false, "show did not create a lock file (read-only -- no withLock call in this path)");
+
+    await rm(home, { recursive: true, force: true });
+  }
+
+  // --- AC-show-live: live read reflects an edit made directly on disk (pf-13) ----------------
+  {
+    const home = await makeFakeHome();
+    await writeFakeGlobalPersona(home, "company-director", "live-scope", {
+      displayName: "Company Director",
+      scope: "LIVE_READ_ORIGINAL_MARKER — before the edit.",
+      sections: [{ heading: "Section", body: "original body text" }],
+    });
+
+    const first = await runCli(["show", "company-director", "live-scope"], { home });
+    ok(first.code === 0, `show (before edit) -> exit 0 (got ${first.code}, stderr=${short(first.stderr)})`);
+    ok(first.stdout.includes("LIVE_READ_ORIGINAL_MARKER"), `show (before edit) reflects the original content -> ${short(first.stdout)}`);
+    ok(!first.stdout.includes("LIVE_READ_EDITED_MARKER"), `show (before edit) does not yet contain the post-edit marker`);
+
+    // Edit the persona file DIRECTLY on disk -- no CLI call, no store function, no sync of any kind.
+    await writeFakeGlobalPersona(home, "company-director", "live-scope", {
+      displayName: "Company Director",
+      scope: "LIVE_READ_EDITED_MARKER — after a direct on-disk edit.",
+      sections: [{ heading: "Section", body: "edited body text" }],
+    });
+
+    const second = await runCli(["show", "company-director", "live-scope"], { home });
+    ok(second.code === 0, `show (after edit) -> exit 0 (got ${second.code}, stderr=${short(second.stderr)})`);
+    ok(second.stdout.includes("LIVE_READ_EDITED_MARKER"), `show (after edit) reflects the new content -> ${short(second.stdout)}`);
+    ok(!second.stdout.includes("LIVE_READ_ORIGINAL_MARKER"), `show (after edit) no longer contains the pre-edit content`);
+    ok(first.stdout !== second.stdout, "show's output actually changed between the two runs -- proves a live read, not a cached/synced copy");
+
+    await rm(home, { recursive: true, force: true });
+  }
+
   // --- AC-help: --help output distinguishes write-target from content-source (pf-09) ------------
   {
     const help = await runCli(["--help"]);
@@ -360,6 +520,7 @@ async function main() {
       /global persona store/i.test(helpText) && /code-architect/.test(helpText),
       `persona --help explicitly distinguishes global-tier content (global store) from code-architect (--repo) -> ${short(helpText)}`,
     );
+    ok(/show <tier> <scope-id>/.test(helpText), `persona --help mentions the show subcommand -> ${short(helpText)}`);
   }
 }
 

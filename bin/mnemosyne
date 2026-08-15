@@ -5,6 +5,7 @@
 #        bin/mnemosyne reindex <scope> [--dir <path>] [--url <base-url>]
 #        bin/mnemosyne persona sync --repo <path> --tier <tier> --scope-id <id> [--dry-run]
 #        bin/mnemosyne persona seed [--root <path>] [--scope-id <id>]
+#        bin/mnemosyne persona show <tier> <scope-id>
 set -euo pipefail
 export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"

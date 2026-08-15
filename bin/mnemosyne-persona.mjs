@@ -70,6 +70,38 @@
 //   --scope-id ID    (seed only) overrides the "default" seed scopeId --
 //                     see mnemosyne-persona-seed.mjs; not required.
 //
+//   show TIER SCOPE_ID   pf-13-cli-persona-show: the on-demand fetch surface
+//                     an agent uses after following pf-12's rendered
+//                     "Parent context (query up)" pointer -- prints that
+//                     persona's real, current content. A THIN, READ-ONLY
+//                     wrapper over pf-06's persona-store-global.ts
+//                     `readGlobalPersona` -- no new store-access logic here,
+//                     no fallback-to-TIER_CONTENT (that's `sync`'s/
+//                     `getPersonaContent`'s behavior, not this verb's: `show`
+//                     either returns the real persona or errors, it never
+//                     silently substitutes hardcoded content). Positional
+//                     args (TIER then SCOPE_ID), not flags -- matches this
+//                     subcommand's acceptance criteria
+//                     (`mnemosyne persona show project-orchestrator default`).
+//                     Only valid for the 3 GLOBAL tiers (top-orchestrator/
+//                     company-director/project-orchestrator) --
+//                     PERSONA_STORE_BY_TIER is the single source of truth for
+//                     that split (persona.ts); a code-architect scopeId is
+//                     rejected with a clear error before any disk access,
+//                     since that tier's content lives in the repo-local store
+//                     (persona-store-repo-local.ts), which this verb does not
+//                     read. Genuinely read-only: the only fs call reachable
+//                     from `readGlobalPersona` is `readFileSync`
+//                     (persona-store-global.ts) -- no `writeFileSync`,
+//                     no `mkdirSync`, no `withLock` (locking guards
+//                     read-splice-WRITE sequences, lock.ts; a bare read never
+//                     takes one) anywhere in this code path. Also a LIVE read
+//                     every time -- persona-store-global.ts reads fresh off
+//                     disk on every call, no module-level caching -- so an
+//                     edit made to a persona file between two `show` runs is
+//                     reflected on the very next run, no repo-local re-sync
+//                     required.
+//
 // Must be launched via `node_modules/.bin/tsx`, not plain `node` (see
 // bin/mnemosyne's dispatcher for this verb). Unlike bin/mnemosyne-reindex.mjs
 // (a thin HTTP client with zero TypeScript imports), this file imports
@@ -88,6 +120,7 @@ import { HARNESS_TARGETS } from "../lib/mnemosyne/layer1/harness.ts";
 import { DEFAULT_LEVEL0_PATH, readLevel0Content } from "../lib/mnemosyne/layer1/level0.ts";
 import { TIERS } from "../lib/mnemosyne/layer1/tiers.ts";
 import { PERSONA_STORE_BY_TIER } from "../lib/mnemosyne/layer1/persona.ts";
+import { readGlobalPersona } from "../lib/mnemosyne/layer1/persona-store-global.ts";
 import { run as runPersonaSeed } from "./mnemosyne-persona-seed.mjs";
 
 const USAGE_SYNC = [
@@ -105,7 +138,17 @@ const USAGE_SEED = [
   "  into the global persona store, skipping any tier already present (idempotent).",
 ].join("\n");
 
-const USAGE = `${USAGE_SYNC}\n${USAGE_SEED}`;
+const USAGE_SHOW = [
+  "usage: mnemosyne persona show <tier> <scope-id>",
+  "  Prints that persona's real, current content -- a read-only, live read straight off the",
+  "  global persona store (~/.mnemosyne/personas). No harness file is touched or written, no",
+  "  lock is taken, and nothing is cached: an edit to the persona file is reflected on the very",
+  "  next `show` run, no repo-local sync required.",
+  "  Only valid for the 3 global tiers (top-orchestrator, company-director, project-orchestrator)",
+  "  -- code-architect personas live in the repo-local store, which this verb does not read.",
+].join("\n");
+
+const USAGE = `${USAGE_SYNC}\n${USAGE_SEED}\n${USAGE_SHOW}`;
 
 export function parseArgs(argv) {
   const args = { subcommand: undefined, repo: undefined, tier: undefined, scopeId: undefined, dryRun: false };
@@ -243,6 +286,71 @@ async function runSync(args, { log, warn }) {
   return { ok: true, results };
 }
 
+/**
+ * Renders a persona's real content as plain text for `show`'s stdout.
+ * Deliberately NOT `getPersonaContent`/`reinjectMandateSections` --
+ * `mandateSections`/`parentContextSections` are render-time additions
+ * `sync.ts` layers on for the harness-file managed block; `show` prints the
+ * persona record itself (design_decisions: the harness-agnostic fetch
+ * contract a future adapter would call), not a harness-file rendering of it.
+ */
+export function formatPersonaShow(persona) {
+  const lines = [
+    `tier: ${persona.tier}`,
+    `scopeId: ${persona.scopeId}`,
+    `displayName: ${persona.displayName}`,
+    `scope: ${persona.scope}`,
+    "",
+  ];
+  for (const section of persona.sections) {
+    lines.push(`## ${section.heading}`, section.body, "");
+  }
+  return lines.join("\n").replace(/\n+$/, "\n");
+}
+
+/**
+ * `persona show <tier> <scope-id>` -- pf-13. Positional args, not flags (see
+ * USAGE_SHOW). Read-only by construction: the only fs call reachable from
+ * here is `readGlobalPersona`'s own `readFileSync`
+ * (persona-store-global.ts) -- no write function, no `withLock`, is called
+ * anywhere in this function or anything it calls. Also a live read every
+ * time: `readGlobalPersona` reads fresh off disk on every call (no
+ * module-level caching anywhere in persona-store-global.ts), so an edit made
+ * to the persona file between two `show` invocations is reflected on the
+ * very next one.
+ */
+function runShow(argv, { log, warn }) {
+  const [tier, scopeId] = argv;
+  if (!tier || !scopeId) {
+    warn("mnemosyne persona show: <tier> and <scope-id> are both required");
+    warn(USAGE_SHOW);
+    return { ok: false };
+  }
+  if (!TIERS.includes(tier)) {
+    warn(`mnemosyne persona show: invalid tier '${tier}'. Valid tiers: ${TIERS.join(", ")}.`);
+    return { ok: false };
+  }
+  if (PERSONA_STORE_BY_TIER[tier] !== "global") {
+    warn(
+      `mnemosyne persona show: tier '${tier}' is not a global tier -- 'show' only reads from the ` +
+        "global persona store (~/.mnemosyne/personas). code-architect personas live in the repo-local " +
+        "store (persona-store-repo-local.ts), which this verb does not read.",
+    );
+    return { ok: false };
+  }
+
+  let persona;
+  try {
+    persona = readGlobalPersona(tier, scopeId);
+  } catch (e) {
+    warn(`mnemosyne persona show: ${e.message}`);
+    return { ok: false };
+  }
+
+  log(formatPersonaShow(persona));
+  return { ok: true, persona };
+}
+
 export async function run(argv, { log = console.log, warn = console.error } = {}) {
   if (argv[0] === "--help" || argv[0] === "-h") {
     log(USAGE);
@@ -254,6 +362,10 @@ export async function run(argv, { log = console.log, warn = console.error } = {}
     // its own arg parsing (--root/--scope-id) and its own reporting of which of the 3 global tiers
     // were newly seeded vs. already present. Nothing about that logic is reimplemented here.
     return runPersonaSeed(argv.slice(1), { log, warn });
+  }
+
+  if (argv[0] === "show") {
+    return runShow(argv.slice(1), { log, warn });
   }
 
   const args = parseArgs(argv);
