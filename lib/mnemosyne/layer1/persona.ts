@@ -24,6 +24,7 @@
 import { existsSync } from 'node:fs';
 import { MANDATE_SECTIONS, TIER_CONTENT, TIERS, type Tier, type TierContent, type TierContentSection } from './tiers.js';
 import { readRepoLocalPersona, repoLocalPersonaPath } from './persona-store-repo-local.js';
+import { DEFAULT_GLOBAL_PERSONA_ROOT, globalPersonaPath, readGlobalPersona } from './persona-store-global.js';
 
 /**
  * Which of the two storage levels (design-discussion.md §3a) a given tier's
@@ -160,9 +161,20 @@ export function assertValidPersona(candidate: unknown, expectedTier: Tier): asse
   }
 }
 
-/** Context `getPersonaContent` needs to resolve a scoped persona -- currently just the repo root the repo-local store lives under. */
+/**
+ * Context `getPersonaContent` needs to resolve a scoped persona. `repoRoot`
+ * is the repo-local store's root (required by every call, even a
+ * global-tier one, since callers like sync.ts always have a repo root handy
+ * and today's call sites never omit it). `globalPersonaRoot` is an optional
+ * override of the global store's root (persona-store-global.ts's
+ * `DEFAULT_GLOBAL_PERSONA_ROOT`, `~/.mnemosyne/personas`, when omitted) --
+ * exists purely so tests can point the global-tier dispatch path at a temp
+ * directory instead of the real `$HOME`, mirroring the `root` parameter
+ * persona-store-global.ts's own functions already accept.
+ */
 export interface PersonaContentContext {
   repoRoot: string;
+  globalPersonaRoot?: string;
 }
 
 /**
@@ -181,25 +193,52 @@ function reinjectMandateSections(base: Omit<TierContent, 'mandateSections'>): Ti
 }
 
 /**
+ * Shared fallback-and-warn safety net for BOTH persona-store dispatch paths
+ * (repo-local's `code-architect`, pf-02; global's three tiers, pf-07) -- one
+ * implementation so a fix to this behavior (e.g. the warning's wording, or
+ * whether it fires at all) applies to both paths without a second patch
+ * (pf-07-getpersonacontent-global-dispatch.yaml's design_decisions). Not
+ * silent -- an empty store falling back unnoticed is exactly what
+ * horizontal-plan.md H2.1 flags as a risk, and what pf-08's seed script
+ * later relies on this warning to surface. `expectedPath` is whatever path
+ * the caller actually checked (`repoLocalPersonaPath`'s or
+ * `globalPersonaPath`'s result), named in the warning so an operator can go
+ * look at exactly that path.
+ */
+function fallbackToTierContentWithWarning(
+  tier: Tier,
+  scopeId: string,
+  storeKind: PersonaStoreKind,
+  expectedPath: string,
+): TierContent {
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[mnemosyne/layer1] No ${storeKind} persona found for tier '${tier}', scopeId '${scopeId}' ` +
+      `(expected at ${expectedPath}) -- falling back to the hardcoded TIER_CONTENT['${tier}']. ` +
+      'Seed a real persona for this scope to replace this fallback.',
+  );
+  return TIER_CONTENT[tier];
+}
+
+/**
  * Resolves the actual content to render for one tier + scope -- replaces the
  * old bare-tier `getTierContent(tier)` assumption (design-discussion.md
  * §3a; pf-02). Dispatch keys off `PERSONA_STORE_BY_TIER`, the single source
  * of truth for the two-store split, not a duplicated if/else:
  *
- *   - `tier === 'code-architect'` (repo-local store): if a persona exists on
- *     disk for `scopeId` under `ctx.repoRoot`, renders THAT persona's
- *     content, with `MANDATE_SECTIONS` explicitly re-injected (personas
- *     never store their own mandate). If none exists yet, falls back to the
- *     hardcoded `TIER_CONTENT['code-architect']` and logs/warns that the
- *     fallback fired -- NOT silent, so an empty repo-local store doesn't go
- *     unnoticed (also the safety net pf-08's seed script relies on later).
- *   - every other tier (global store): returns `TIER_CONTENT[tier]`
- *     unchanged -- identical to today's `getTierContent` behavior. The
- *     global store's storage backend now exists (persona-store-global.ts,
- *     pf-06), but wiring it into THIS dispatch function is deliberately
- *     deferred to pf-07 -- pf-06 only builds and wires the storage backend
- *     into `PERSONA_STORE_BY_TIER`, it does not change how content gets
- *     resolved. Zero regression risk for global tiers in this slice.
+ *   - `tier === 'code-architect'` (repo-local store, pf-02): if a persona
+ *     exists on disk for `scopeId` under `ctx.repoRoot`, renders THAT
+ *     persona's content, with `MANDATE_SECTIONS` explicitly re-injected
+ *     (personas never store their own mandate). If none exists yet, falls
+ *     back via `fallbackToTierContentWithWarning`.
+ *   - every other tier (global store, pf-07): same shape, against
+ *     persona-store-global.ts's `globalPersonaPath`/`readGlobalPersona`
+ *     instead -- if a persona exists on disk for `scopeId` under
+ *     `ctx.globalPersonaRoot` (defaulting to `DEFAULT_GLOBAL_PERSONA_ROOT`,
+ *     `~/.mnemosyne/personas`, when omitted), renders it, mandate
+ *     re-injected the same way. If none exists yet, falls back via the same
+ *     shared `fallbackToTierContentWithWarning` helper the repo-local path
+ *     uses -- not a second, drifted copy of the fallback logic.
  *
  * `getTierContent(tier)`'s old bare-tier signature is fully removed by this
  * story (tiers.ts no longer exports it) -- this is the one and only
@@ -210,25 +249,25 @@ export function getPersonaContent(tier: Tier, scopeId: string, ctx: PersonaConte
     throw new Error(`Unknown tier: ${String(tier)}. Valid tiers are: ${TIERS.join(', ')}.`);
   }
 
-  if (PERSONA_STORE_BY_TIER[tier] !== 'repo-local') {
-    // Global tiers -- the global store's backend exists (persona-store-global.ts, pf-06), but
-    // wiring it into dispatch here is pf-07's job, not this story's. Unchanged path, identical
-    // to today's getTierContent(tier).
-    return TIER_CONTENT[tier];
+  if (PERSONA_STORE_BY_TIER[tier] === 'global') {
+    const globalRoot = ctx.globalPersonaRoot ?? DEFAULT_GLOBAL_PERSONA_ROOT;
+    const personaPath = globalPersonaPath(tier, scopeId, globalRoot);
+    if (!existsSync(personaPath)) {
+      return fallbackToTierContentWithWarning(tier, scopeId, 'global', personaPath);
+    }
+
+    const persona = readGlobalPersona(tier, scopeId, globalRoot);
+    return reinjectMandateSections({
+      tier: persona.tier,
+      displayName: persona.displayName,
+      scope: persona.scope,
+      sections: persona.sections,
+    });
   }
 
   const personaPath = repoLocalPersonaPath(ctx.repoRoot, scopeId);
   if (!existsSync(personaPath)) {
-    // Not silent -- an empty repo-local store falling back unnoticed is
-    // exactly what horizontal-plan.md H2.1 flags as a risk, and what pf-08's
-    // seed script later relies on this warning to surface.
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[mnemosyne/layer1] No repo-local persona found for tier '${tier}', scopeId '${scopeId}' ` +
-        `(expected at ${personaPath}) -- falling back to the hardcoded TIER_CONTENT['${tier}']. ` +
-        'Seed a real persona for this scope to replace this fallback.',
-    );
-    return TIER_CONTENT[tier];
+    return fallbackToTierContentWithWarning(tier, scopeId, 'repo-local', personaPath);
   }
 
   const persona = readRepoLocalPersona(ctx.repoRoot, scopeId);
