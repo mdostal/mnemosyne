@@ -1,10 +1,33 @@
 id: pf-12-pointer-rendering-query-up
 epic: mnemosyne-persona-foundation
 title: Pointer rendering in getPersonaContent (query-up, not copy-down)
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
 depends_on: [pf-11-parentrefs-schema-support]
+
+note_on_completion: >
+  Implemented 2026-08-15. TDD: 4 new tests written first against
+  lib/mnemosyne/layer1/__tests__/persona.test.ts and confirmed failing
+  (no "Parent context" rendering existed yet), then getPersonaContent's
+  repo-local dispatch path (persona.ts) was extended with
+  buildParentContextSections, which builds pointer-only {tier, scopeId} +
+  fetch-instruction sections purely from the persona's own parentRefs field
+  -- no code path reads the parent's actual store. tiers.ts's TierContent
+  gained a parentContextSections extension point rendered by
+  renderTierContentMarkdown under its own "Parent context (query up)"
+  heading, mirroring mandateSections's existing pattern. The non-inlining
+  guarantee is proven by a real string-search test: two real parent personas
+  (project-orchestrator + company-director) written to a real temp global
+  store, each carrying a distinctive marker string in their sections body:
+  rendered output is asserted to contain the parent tier/scopeId pointers
+  and NOT contain either marker string, both headings, or either parent's
+  body text -- checked both at the getPersonaContent+renderTierContentMarkdown
+  level and end-to-end through a real syncHarnessFile CLAUDE.md write. A
+  fourth test confirms no "Parent context" section renders at all when
+  parentRefs is absent. All 135 lib/mnemosyne/layer1 tests pass; tsc --noEmit
+  clean. docs/layer-architecture-v2-plan.md updated per cross_cutting note
+  with a pointer to this implementation.
 
 description: |
   Implements horizontal-plan.md H5 (the core mechanism): getPersonaContent's
