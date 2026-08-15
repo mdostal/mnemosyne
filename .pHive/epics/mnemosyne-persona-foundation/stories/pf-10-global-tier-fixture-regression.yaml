@@ -33,6 +33,10 @@ note_on_completion: >
   of a bare substring. This was a test-authoring bug, not a Slice 2
   production bug.
 
+  Independently verified (orchestrator): reran vitest (126/126) and tsc
+  myself in the worktree before merging; note above checked against real
+  diff, accurate.
+
 description: |
   Extends pf-05's integration test suite (Slice 1) to cover global-tier sync,
   and adds an explicit regression test proving Slice 1's repo-local/
