@@ -1,8 +1,19 @@
 id: pf-01-persona-schema-repo-local-store
 epic: mnemosyne-persona-foundation
 title: Persona YAML schema + repo-local store
-status: pending
+status: complete
 complexity: medium
+
+note_on_completion: >
+  Merged 2026-08-15 (commit 2014618). Real TDD (tests written and confirmed
+  failing before implementation), independently verified: reran vitest and
+  tsc myself in the worktree, not just trusted the agent report. Found and
+  fixed one real discrepancy before merge -- parentRefs was implemented as
+  string[] but horizontal-plan.md H5.1 specifies {tier, scopeId}[] pairs;
+  corrected the type, validation, and both affected tests, reran to confirm
+  60/60 passing. Final: 4 new files (persona.ts, persona-store-repo-local.ts,
+  2 test files), zero changes to sync.ts/tiers.ts/block.ts/level0.ts as
+  scoped. All acceptance criteria met.
 methodology: tdd
 depends_on: []
 
