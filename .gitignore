@@ -46,3 +46,5 @@ config/minerva.local.yaml
 !.pHive/epics/mnemosyne-crossrepo-defaults/**
 !.pHive/epics/mnemosyne-keyword-recall/
 !.pHive/epics/mnemosyne-keyword-recall/**
+!.pHive/epics/mnemosyne-persona-foundation/
+!.pHive/epics/mnemosyne-persona-foundation/**
