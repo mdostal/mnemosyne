@@ -22,6 +22,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { parse, stringify } from 'yaml';
+import { withLock } from './lock.js';
 import { PERSONA_STORE_BY_TIER, assertValidPersona, type Persona } from './persona.js';
 import type { Tier } from './tiers.js';
 
@@ -61,8 +62,14 @@ export function writeRepoLocalPersona(repoRoot: string, candidate: unknown): str
   assertValidPersona(candidate, tier);
 
   const filePath = repoLocalPersonaPath(repoRoot, candidate.scopeId);
+  // The lock file itself lives alongside filePath, so its directory must exist before we can
+  // even attempt to acquire the lock -- create it up front, outside the locked section.
   mkdirSync(path.dirname(filePath), { recursive: true });
-  writeFileSync(filePath, stringify(candidate), 'utf8');
+  // A manual persona edit racing a sync (or two writes racing each other) is the same class of
+  // TOCTOU risk as syncHarnessFile's read-splice-write -- serialize writes to this path too.
+  withLock(filePath, () => {
+    writeFileSync(filePath, stringify(candidate), 'utf8');
+  });
   return filePath;
 }
 
