@@ -28,6 +28,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { syncHarnessFile } from '../sync.js';
 import { BLOCK_END, BLOCK_START } from '../block.js';
 import { writeGlobalPersona } from '../persona-store-global.js';
+import { writeRepoLocalPersona } from '../persona-store-repo-local.js';
+import type { Persona } from '../persona.js';
 import { TIER_CONTENT, type Tier } from '../tiers.js';
 // Pure, side-effect-free CLI helper reused directly rather than
 // reimplemented -- see bin/mnemosyne-persona.mjs's own doc comment for why
@@ -791,4 +793,142 @@ describe('Slice 1 regression (pf-10): repo-local code-architect sync still works
     expect(geminiAfterSecond.split(BLOCK_START)).toHaveLength(3);
     expect(geminiAfterSecond.split(BLOCK_END)).toHaveLength(2);
   }, 20_000);
+});
+
+/**
+ * pf-14-copydown-regression-full-suite: the STANDING anti-copy-down
+ * regression test the epic closes on. pf-12's own test (persona.test.ts,
+ * "Parent context (query up) pointer rendering") proved the guarantee once,
+ * against one hand-built persona/fixture pair. This block proves the same
+ * guarantee holds across the FULL real-world fixture corpus this file
+ * maintains (`FIXTURES` above -- every marker shape: no-markers,
+ * mixed-formatting, partial-marker append-mode, and the company-director-
+ * flavored fixture), each synced through the real `mnemosyne persona sync`
+ * CLI subprocess (not an in-process call -- same reasoning as this file's
+ * other CLI-subprocess tests: a fresh process is required for a fake HOME to
+ * actually redirect `DEFAULT_GLOBAL_PERSONA_ROOT`), against a code-architect
+ * persona whose `parentRefs` name all three global-store parent tiers at
+ * once.
+ *
+ * docs/layer-architecture-v2-plan.md:35 -- "Cross-project impact is still
+ * answered by querying UP the hierarchy, never held locally at [the code
+ * tier]." A real, distinctive secret string lives in each parent's actual
+ * `sections` body; the decisive assertion in every case below is that NONE
+ * of those secrets ever appear in the synced target file, no matter which
+ * real-world fixture shape it started from.
+ */
+describe('standing copy-down regression (pf-14): parent persona content never becomes a copy, across the FULL real-world fixture corpus', () => {
+  type GlobalParentTier = Exclude<Tier, 'code-architect'>;
+  const GLOBAL_PARENT_TIERS: GlobalParentTier[] = ['top-orchestrator', 'company-director', 'project-orchestrator'];
+
+  // One distinctive, unlikely-to-collide secret per parent tier -- shared
+  // across every fixture case below. If ANY synced output for ANY fixture
+  // ever contains one of these, the pointer mechanism has degraded into
+  // copy-down for that fixture.
+  const PARENT_SECRETS: Record<GlobalParentTier, string> = {
+    'top-orchestrator': 'PF14-COPYDOWN-TOPORCH-SECRET-a1b2c3d4e5f6',
+    'company-director': 'PF14-COPYDOWN-COMPANYDIR-SECRET-b2c3d4e5f6a1',
+    'project-orchestrator': 'PF14-COPYDOWN-PROJORCH-SECRET-c3d4e5f6a1b2',
+  };
+
+  function parentPersona(tier: GlobalParentTier, scopeId: string): Persona {
+    return {
+      tier,
+      scopeId,
+      displayName: `pf-14 regression parent — ${tier} (${scopeId})`,
+      scope: `pf-14 copy-down regression fixture parent scope statement for ${tier}/${scopeId}.`,
+      sections: [
+        {
+          heading: `${tier} distinctive section`,
+          body: `Real parent body content that must NEVER be copied down into a child sync: ${PARENT_SECRETS[tier]}`,
+        },
+      ],
+    };
+  }
+
+  it.each(Object.entries(FIXTURES))(
+    "'%s' real-world fixture: a code-architect persona with parentRefs to all three global parent tiers renders pointer-only sections -- none of the three real parents' distinctive body content appears anywhere in the synced output, idempotently",
+    async (fixtureName, fixturePath) => {
+      const home = await makeFakeHome(`PF14_COPYDOWN_L0_MARKER_${fixtureName}`);
+      const globalRoot = path.join(home, '.mnemosyne', 'personas');
+      const repo = await makeTempRoot('mnemosyne-layer1-integration-pf14-copydown-');
+      const scopeId = `pf14-copydown-${fixtureName}`;
+
+      // Seed all three real global parents (one per global-store tier) --
+      // real writeGlobalPersona calls against a real (temp) global store.
+      for (const tier of GLOBAL_PARENT_TIERS) {
+        writeGlobalPersona(parentPersona(tier, `pf14-${tier}-parent`), globalRoot);
+      }
+
+      // Real repo-local code-architect persona naming ALL THREE as parents.
+      writeRepoLocalPersona(repo, {
+        tier: 'code-architect',
+        scopeId,
+        displayName: 'pf-14 copy-down regression code-architect persona',
+        scope: 'pf-14 copy-down regression scope statement -- ordinary repo-local content.',
+        sections: [{ heading: 'Repo notes', body: 'Ordinary repo-local content, not a secret, not a parent pointer.' }],
+        parentRefs: GLOBAL_PARENT_TIERS.map((tier) => ({ tier, scopeId: `pf14-${tier}-parent` })),
+      } satisfies Persona);
+
+      const targetPath = path.join(repo, 'CLAUDE.md');
+      const original = await copyFixtureTo(fixturePath, targetPath);
+
+      const first = await runCli(['sync', '--repo', repo, '--tier', 'code-architect', '--scope-id', scopeId], home);
+      expect(first.code, `cli sync stderr: ${first.stderr}`).toBe(0);
+
+      const written = await readFile(targetPath, 'utf8');
+      const trimmedOriginal = original.replace(/\n+$/, '');
+      // The real-world fixture's own human content survives untouched, exactly
+      // like every other sync in this file.
+      expect(written.startsWith(trimmedOriginal)).toBe(true);
+
+      // Pointer presence: all three parents named by tier + scopeId.
+      for (const tier of GLOBAL_PARENT_TIERS) {
+        expect(written).toContain('Parent context (query up)');
+        expect(written).toContain(tier);
+        expect(written).toContain(`pf14-${tier}-parent`);
+      }
+
+      // THE non-inlining proof, across the full real-world fixture corpus:
+      // none of the three real parents' distinctive secret body text -- or
+      // their section headings -- appears ANYWHERE in the synced output.
+      for (const tier of GLOBAL_PARENT_TIERS) {
+        expect(written).not.toContain(PARENT_SECRETS[tier]);
+        expect(written).not.toContain(`${tier} distinctive section`);
+      }
+
+      // partialMarker is the one fixture that already carries a stray,
+      // unmatched BLOCK_START of its own (append-mode fallback, see the
+      // gemini-md-partial-marker.md describe block above) -- the real
+      // managed block sync adds is still exactly one BLOCK_START/BLOCK_END
+      // pair, so its BLOCK_START count is 3 (stray + real), not 2, while
+      // BLOCK_END stays 2 (only the real block ever has one) same as every
+      // other fixture.
+      const expectedStartCount = fixtureName === 'partialMarker' ? 3 : 2;
+      expect(written.split(BLOCK_START)).toHaveLength(expectedStartCount);
+      expect(written.split(BLOCK_END)).toHaveLength(2);
+
+      // Idempotent second run: pointer-only guarantee holds on re-sync too,
+      // human content and non-inlining both still intact.
+      const second = await runCli(['sync', '--repo', repo, '--tier', 'code-architect', '--scope-id', scopeId], home);
+      expect(second.code, `cli sync (2nd run) stderr: ${second.stderr}`).toBe(0);
+      const writtenTwice = await readFile(targetPath, 'utf8');
+      expect(writtenTwice.startsWith(trimmedOriginal)).toBe(true);
+      expect(writtenTwice.split(BLOCK_START)).toHaveLength(expectedStartCount);
+      expect(writtenTwice.split(BLOCK_END)).toHaveLength(2);
+      for (const tier of GLOBAL_PARENT_TIERS) {
+        expect(writtenTwice).not.toContain(PARENT_SECRETS[tier]);
+      }
+    },
+    20_000,
+  );
+
+  it('every fixture used by this standing regression is drawn from the same FIXTURES map the rest of this file maintains -- the corpus really is the full real-world corpus, not a hand-picked subset', () => {
+    // Guards against the regression test silently narrowing in scope over
+    // time (e.g. a future fixture added to FIXTURES but never wired into the
+    // it.each above) -- this equality only holds if the two stay in sync.
+    expect(Object.keys(FIXTURES).sort()).toEqual(
+      ['noMarkers', 'mixedFormatting', 'partialMarker', 'companyDirector'].sort(),
+    );
+  });
 });
