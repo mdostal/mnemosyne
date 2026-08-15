@@ -1,9 +1,22 @@
 id: pf-05-realworld-fixtures-integration-tests
 epic: mnemosyne-persona-foundation
 title: Real-world fixture corpus + integration test suite (Slice 1)
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-15 (commit 4e61333), closing Slice 1. Took 3 dispatch
+  attempts due to two transient "machine went to sleep" API interruptions
+  (not the work's fault) -- resolved by starting caffeinate before the third
+  attempt. Independently verified: reran vitest (85/85) and tsc myself,
+  confirmed the partial-marker fixture genuinely has an unclosed BLOCK_START
+  with no BLOCK_END. Found and fixed a real, epic-wide bug in block.ts:
+  spliceManagedBlock/extractManagedBlockBody used indexOf (first marker
+  pair) instead of lastIndexOf (most recent pair) -- a stray unclosed marker
+  ahead of a real pair would silently delete human content on a second sync.
+  This benefits every story that calls through block.ts, not just this one.
+  All acceptance criteria met.
 depends_on: [pf-03-file-locking, pf-04-cli-persona-sync-dry-run]
 
 description: |
