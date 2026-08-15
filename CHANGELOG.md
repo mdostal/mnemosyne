@@ -2,6 +2,74 @@
 
 All notable changes to Mnemosyne are documented here.
 
+## [0.6.0] — 2026-08-15
+
+Full `mnemosyne-persona-foundation` epic (`pf-01`..`pf-14`) — Epic 1 of 2 in the
+persona work (`mnemosyne-persona-wizard`, Epic 2, is unbuilt and separate: no
+LLM-interview wizard or UI ships in this release). Data-driven, two-tier persona
+storage replaces the old hardcoded `TIER_CONTENT` map as the source of Layer 1's
+tier content, with the old hardcoded path kept fully working as a non-regressive
+fallback. Shipped the same way as prior epics: every story independently
+verified with real tests (including real subprocess CLI invocations and real
+cross-process locking) before merging.
+
+### Added
+
+- **Data-driven, two-tier persona storage** — `top-orchestrator`,
+  `company-director`, and `project-orchestrator` personas now live in a new
+  GLOBAL store (`~/.mnemosyne/personas/<tier>/<scopeId>.yaml`, not repo-scoped,
+  not git-committed); `code-architect` personas live in a new REPO-LOCAL store
+  (`<repoRoot>/.mnemosyne/personas/<scopeId>.yaml`, git-committed alongside the
+  code it describes). `getPersonaContent` is the single content-resolution
+  entry point `sync.ts` now calls, dispatching on the tier/store split; when no
+  persona is seeded yet for a given tier/scopeId it falls back to the original
+  hardcoded `TIER_CONTENT`, with a loud (non-silent) warning, so a bare install
+  needs no seeding step to keep working.
+- **Query-up pointer rendering, never copy-down** — a `code-architect` persona
+  can name parent-tier context via `parentRefs` (`{tier, scopeId}` pairs). The
+  rendered output for such a persona includes a "Parent context (query up)"
+  section naming each parent's tier and scopeId plus a fetch instruction — it
+  never inlines the parent's actual content. Verified by real tests against
+  real parent personas written to a real (temp) global store: the parent's
+  distinctive body text is proven absent from the rendered/synced output, for
+  every tier combination and, since this release, across the full real-world
+  fixture corpus (not just one example).
+- **`mnemosyne persona sync` / `seed` / `show` CLI verbs**
+  (`bin/mnemosyne-persona.mjs`, `bin/mnemosyne-persona-seed.mjs`) — `sync`
+  writes the resolved persona content into a repo's harness file(s)
+  (`CLAUDE.md`/`AGENTS.md`/`GEMINI.md`), with `--dry-run` support (zero
+  filesystem writes, byte-identical preview to a real run); `seed` populates
+  the global store from the old hardcoded `TIER_CONTENT`, proven
+  byte-for-byte equivalent (modulo wrapping) to the pre-migration rendered
+  output — a non-regressive cutover, not a rewrite; `show <tier> <scope-id>`
+  is the on-demand fetch surface a `parentRefs` pointer instructs an agent to
+  use.
+- **Advisory file locking** (`lib/mnemosyne/layer1/lock.ts`) — a
+  zero-third-party-dependency exclusive lock (`fs.writeFileSync(..., { flag:
+  'wx' })`, with stale-lock takeover) now guards every persona-store write and
+  every `syncHarnessFile` read-splice-write sequence. Closes a real,
+  design-discussion-documented TOCTOU race: two overlapping sync invocations
+  against the same file, previously uncoordinated between their read and their
+  final write, could corrupt or duplicate the managed block. Verified with a
+  real two-OS-process race test against a real-world fixture, not a synthetic
+  counter file: the two invocations' critical sections provably never overlap
+  in wall-clock time, and no lock file is left behind afterward.
+
+### Fixed
+
+- `block.ts`'s managed-block splice (`spliceManagedBlock`/
+  `extractManagedBlockBody`) paired the FIRST `BLOCK_START` with the FIRST
+  `BLOCK_END` (`indexOf`) instead of the LAST well-formed pair
+  (`lastIndexOf`). A file that had accumulated a stray, never-closed
+  `BLOCK_START` ahead of the real block (e.g. an interrupted manual paste)
+  would have that stray marker wrongly treated as the real block's start on
+  the next sync, silently deleting every human-authored line trapped between
+  it and the real end marker. Found via a real-world fixture built specifically
+  to exercise this shape (`gemini-md-partial-marker.md`); fixed by switching
+  both functions to `lastIndexOf`. This fix benefits every consumer of
+  `block.ts`, not just persona sync — it is the general-purpose managed-block
+  splicing module every harness-file sync in this project shares.
+
 ## [0.5.0] — 2026-08-15
 
 Full `mnemosyne-keyword-recall` epic (`kw-01`..`kw-03`) — closes a real, confirmed gap
