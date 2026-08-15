@@ -1,9 +1,20 @@
 id: pf-08-seed-migration-script
 epic: mnemosyne-persona-foundation
 title: Seed/migration script for the 3 global tiers
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-15 (commit 9dd4a7d). This is the design docs' own
+  "single highest-blast-radius risk in the epic" -- given extra scrutiny.
+  Independently verified: reran vitest (117/117) and tsc myself, read the
+  actual byte-for-byte equivalence test (real strict .toBe() string equality
+  between today's hardcoded rendering and the seeded+rehydrated rendering,
+  not a fuzzy check), AND independently ran the seed script myself by hand
+  against a fresh empty temp dir -- confirmed 3 correct files, no
+  mandateSections key present, idempotent skip-on-rerun, no code-architect
+  directory ever created. All acceptance criteria met, high confidence.
 depends_on: [pf-07-getpersonacontent-global-dispatch]
 
 description: |
