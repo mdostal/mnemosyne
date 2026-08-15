@@ -10,6 +10,7 @@
  * `client.ts`). It only answers "given a name, build me that layer."
  */
 import { CodeGraphLayerAdapter } from './CodeGraphLayerAdapter.js';
+import { CrossRepoLinkerAdapter } from './CrossRepoLinkerAdapter.js';
 import { FileLayerAdapter } from './FileLayerAdapter.js';
 import { GraphifyLayerAdapter } from './GraphifyLayerAdapter.js';
 import type { LayerAdapter } from './LayerAdapter.js';
@@ -86,5 +87,24 @@ export function registerBuiltinLayers(registry: LayerRegistry): void {
       ...adapterOptions,
       repoRoot: adapterOptions?.repoRoot ?? ctx.rootDirectory ?? process.cwd(),
     });
+  });
+  // "crossref-linker" (cr-02-crossrepo-identifier-linker): a NEW, OPTIONAL
+  // layer, genuinely different from every layer above -- multi-repo by
+  // design (see CrossRepoLinkerAdapter.ts), so unlike "graphify"/"file" it
+  // does NOT default `options.repos` from ctx.rootDirectory: a single
+  // rootDirectory is structurally insufficient for a layer whose entire
+  // purpose is finding relationships BETWEEN repos, so the caller must
+  // always pass `repos` explicitly (loud failure at construction time
+  // otherwise). Never invoked unless a consumer's MNEMOSYNE_LAYERS config
+  // explicitly includes "crossref-linker" -- registration alone has zero
+  // effect on any other layer/config.
+  registry.register('crossref-linker', (options) => {
+    // Unlike every other factory above, `repos` is a REQUIRED field (loud
+    // failure at construction otherwise) so `Record<string, unknown>`
+    // doesn't structurally satisfy CrossRepoLinkerAdapterOptions -- the
+    // `unknown` hop below is the same "caller-supplied config, trust but
+    // let the constructor's own validation catch a bad shape" pattern as
+    // every other registry factory, just spelled out for a required field.
+    return new CrossRepoLinkerAdapter(options as unknown as ConstructorParameters<typeof CrossRepoLinkerAdapter>[0]);
   });
 }

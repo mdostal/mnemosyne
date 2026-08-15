@@ -1,10 +1,59 @@
 id: cr-04-single-layer-config-proof
 epic: mnemosyne-crossrepo-defaults
 title: Prove single-layer-only configs (pure vector, pure file) work end-to-end
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
 depends_on: []
+
+note: |
+  Real subprocess-level proof added (test/single-layer-config.mjs, wired into
+  `npm test` and `npm run test:single-layer-config`): 4 scenarios, each a real
+  `tsx lib/mnemosyne/server.ts` subprocess against a real single-entry
+  MNEMOSYNE_LAYERS config -- vector-only, file-only, graphify-only (la-02),
+  and crossref-linker-only (cr-02, landed on this branch before this story's
+  final push, so its case is a real full proof, not a skip). "No cross-layer
+  leakage" is proven by process/output inspection, not response-shape
+  inference: a fake `swarm-memory` CLI binary logs every invocation to a
+  sentinel file (0 invocations during the file-only run proves no Qdrant/
+  vector call is ever attempted; exactly 4 invocations during the vector-only
+  run accounts for every real call made); a nonexistent MNEMOSYNE_ROOT_DIR
+  during the vector-only run proves the file layer is never even constructed
+  (it would otherwise surface a distinct failure); GET /layers is confirmed
+  to report exactly the one configured layer (never the full default set)
+  for all four configs.
+
+  client.ts's cascade (`this.layers`, built strictly from the resolved
+  LayerStackConfig) was ALREADY structurally correct going in -- no adapter
+  secretly assumes another layer is present, and the pl-01 registry only
+  ever constructs what's actually configured. This story is mostly pure
+  verification of that.
+
+  It DID surface one real, fixed bug: lib/mnemosyne/server.ts's POST
+  /remember route-level `LAYERS` validation Set was stale relative to
+  interfaces.ts's `Layer` union -- it was missing 'graphify' (la-02),
+  'hive-memory' (pl-02), and 'crossref-linker' (cr-02). Explicitly targeting
+  any of those three via `POST /remember {layer: "..."}` against a config
+  where that layer WAS actually configured got wrongly rejected with a 400
+  "invalid_layer" (implying the layer name itself was unrecognized) instead
+  of client.ts's correct, more informative 200 `{ok:false, error:
+  {code:"layer_not_writable"}}` (that layer is real and configured, it just
+  doesn't implement remember()). Fixed by adding all three names to the
+  Set, with a comment tying it back to interfaces.ts's Layer union so it
+  doesn't drift again. Confirmed via a failing-test-first TDD cycle: the new
+  test caught this before the fix (server.ts unchanged) and passes after.
+
+  Full test suite: `npm test` chain still stops early at the known,
+  pre-existing, unrelated better-sqlite3/CodeGraphLayerAdapter native-binding
+  crash inside test/http-api.mjs's default-stack POST /recall call (already
+  documented in that file's own comments) -- not worsened by this story.
+  Ran the remaining pieces individually to confirm no regressions: all of
+  test/single-layer-config.mjs, test/git-hooks.mjs,
+  test/install-git-hooks.mjs, and test/lifecycle-compliance-audit.mjs pass
+  clean, and `vitest run lib/mnemosyne lib/minerva benchmarks src/planning
+  src/config src/runners` reports 393/396 tests passing (30/31 files) --
+  the one non-passing file is the same known CodeGraphLayerAdapter crash,
+  confirmed by name in the vitest output.
 
 description: |
   Mnemosyne's core selling point, stated explicitly by the operator across this

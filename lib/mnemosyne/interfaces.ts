@@ -39,6 +39,16 @@
  * DEFAULT_LAYER_STACK_CONFIG doc comment for the exact rules). Still
  * requires an external binary (`uv tool install graphifyy`, recommended not
  * required) the way `hive-memory` above does not.
+ * `crossref-linker` (cr-02-crossrepo-identifier-linker) is a sixth live,
+ * OPTIONAL layer: a MULTI-repo shared-identifier cross-referencer (schema/
+ * type DEFINITION sites vs. QUERY/USAGE sites, e.g. a Sanity document type
+ * defined in one repo and queried via GROQ in another) -- unlike every
+ * other layer here, it is not scoped to a single repoRoot, since finding
+ * relationships BETWEEN repos is its entire purpose (see
+ * CrossRepoLinkerAdapter.ts). Ships because Graphify's AST-based cross-repo
+ * merge (la-09/cr-01 findings) provably finds zero edges when the real
+ * cross-repo tie is a network API or shared SaaS backend rather than a
+ * shared imported package.
  */
 export type Layer =
   | 'meta'
@@ -48,7 +58,8 @@ export type Layer =
   | 'vector'
   | 'file'
   | 'hive-memory'
-  | 'graphify';
+  | 'graphify'
+  | 'crossref-linker';
 
 /**
  * The caller-specified boundary for a recall/remember call. Deliberately a
