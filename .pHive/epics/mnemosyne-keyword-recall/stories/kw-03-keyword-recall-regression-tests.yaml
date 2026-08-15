@@ -1,0 +1,77 @@
+id: kw-03-keyword-recall-regression-tests
+epic: mnemosyne-keyword-recall
+title: Regression tests for both implementations, including the real PAN-8968 case
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [kw-01-js-server-parallel-keyword, kw-02-ts-client-keyword-layer]
+
+description: |
+  kw-01 and kw-02 each ship with their own test-spec-driven tests (TDD, written first). This
+  story adds a separate, higher-rigor, cross-implementation regression layer proving the actual
+  real-world case this whole epic exists to fix, against BOTH implementations, with a permanent
+  fixture so this can never silently regress again.
+
+  Build a realistic fixture (a small, hermetic, synthetic note corpus -- NOT dependent on the
+  operator's real live Qdrant data, which could change/be deleted over time) reproducing the
+  EXACT shape of the real defect: multiple entries that are semantically near-identical
+  (same template, e.g. "COMPLETED: ticket X merged to dev") but differ only in an exact
+  identifier (ticket IDs like "TEST-1001", "TEST-1002", etc.) -- the precise condition under
+  which dense embeddings fail and keyword search succeeds, reproduced deterministically rather
+  than depending on the operator's real corpus staying in a particular state.
+
+  Test against this fixture:
+  1. A query for one specific exact ID resolves to the CORRECT entry via the merged
+     keyword+vector path, in BOTH the JS server (real subprocess, real HTTP call) and the TS
+     client (real recall() call).
+  2. A purely conceptual query (no literal overlap with any fixture entry's exact wording)
+     still correctly surfaces the right semantic match, proving the fix didn't regress plain
+     semantic recall in either implementation.
+  3. Both implementations produce behaviorally CONSISTENT results for the same fixture and
+     query set -- not necessarily byte-identical (different response envelopes), but the same
+     real answer should be findable via both, given the "kept in sync" convention this repo
+     already documents for its two parallel implementations.
+
+acceptance_criteria:
+  - "Given the synthetic near-identical-except-for-ID fixture, when queried for one exact ID via the real JS server's POST /recall, then the correct entry is present in the response"
+  - "Given the same fixture, when queried for the same exact ID via the real TS client's recall() with 'keyword' configured, then the correct entry is present in the response"
+  - "Given a purely conceptual query against the same fixture, when queried via both implementations, then each correctly surfaces its real semantic match -- proving no regression to plain semantic recall"
+  - "Given the fixture is regenerated between test runs, when the suite runs twice, then results are deterministic (no flakiness from ordering/timing)"
+
+steps:
+  - id: research
+    description: Read kw-01's and kw-02's actual shipped implementations in full (not just their story specs) before building this regression layer -- confirm their real merge/dedupe behavior and response shapes precisely.
+    agent: researcher
+  - id: implement
+    description: Build the synthetic fixture and the cross-implementation regression tests exercising both real implementations (not mocked).
+    agent: developer
+    depends_on: [research]
+  - id: review
+    description: Confirm the fixture genuinely reproduces the near-identical-except-ID failure shape (not a trivial case either implementation would already handle), confirm both implementations are actually exercised for real, not stubbed.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-keyword-recall (based on dev).
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: src/engine.mjs
+      purpose: "kw-01's shipped implementation -- read the real merge/dedupe logic, not the story spec, before writing fixtures against it"
+    - path: lib/mnemosyne/client.ts
+      purpose: "kw-02's shipped implementation, same caveat"
+    - path: docs/qdrant-hybrid-retrieval-experiment.md
+      purpose: "The original real-corpus finding this fixture reproduces synthetically"
+
+files_to_modify:
+  - file: test/keyword-recall-regression.mjs
+    change: "New: JS-side real subprocess regression test against the synthetic fixture"
+  - file: lib/mnemosyne/__tests__/keyword-recall-regression.test.ts
+    change: "New: TS-side regression test against the same fixture shape"
+
+risks:
+  - severity: low
+    description: "A fixture too different from the real corpus's actual failure shape (e.g. obviously-different IDs a naive implementation would still get right) would not actually test the hard case"
+    mitigation: "Deliberately mirror the real PAN-8968/PAN-7909 near-collision shape (short prefix + sequential-looking numbers, same surrounding template text) rather than using obviously-distinct synthetic IDs"
