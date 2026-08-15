@@ -1,9 +1,20 @@
 id: pf-13-cli-persona-show
 epic: mnemosyne-persona-foundation
 title: "CLI: persona show"
-status: pending
+status: complete
 complexity: low
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-15 (commit 4655786; took a re-dispatch to fix a dispatch
+  framing issue where the first attempt misread the team-of-one instructions
+  as "brief a separate teammate" and did no real work -- resolved with
+  explicit "YOU are the builder" language). Real TDD with a genuine red/green
+  proof. Independently verified: reran vitest (135/135), persona-cli tests,
+  tsc clean. Confirmed genuinely read-only (recursive $HOME snapshot proves
+  zero writes anywhere) and a real live read (edit persona file directly,
+  second show run reflects the edit, no repo-local sync needed). All
+  acceptance criteria met.
 depends_on: [pf-12-pointer-rendering-query-up]
 
 description: |
