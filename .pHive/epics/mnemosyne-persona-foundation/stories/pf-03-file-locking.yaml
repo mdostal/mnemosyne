@@ -1,9 +1,23 @@
 id: pf-03-file-locking
 epic: mnemosyne-persona-foundation
 title: File locking around sync + persona-store writes
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-15 (commit 4310c52, merged after pf-04 with a clean
+  auto-merge on sync.ts). Real TDD, independently verified: reran vitest
+  (76/76) and tsc myself. Notably strong: a real cross-process concurrency
+  test (two actual OS child processes racing a read-splice-write), stale-lock
+  steal via a real rewound mtime, fail-loud on a live non-stale lock timeout,
+  and a token-based ownership check on release closing most of a TOCTOU gap
+  around a stolen lock (documented residual risk: POSIX has no atomic
+  delete-if-content-matches). Builder validated its own test rigor by
+  temporarily no-opping withLock and confirming the tests fail, then
+  reverted. Rerun combined with pf-04 (both touch sync.ts) confirms clean
+  integration: 76/76 vitest + all persona-cli tests pass together. All
+  acceptance criteria met.
 depends_on: [pf-02-getpersonacontent-signature-threading]
 
 description: |
