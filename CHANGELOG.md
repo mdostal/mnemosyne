@@ -2,6 +2,55 @@
 
 All notable changes to Mnemosyne are documented here.
 
+## [0.4.0] — 2026-08-14
+
+Full `mnemosyne-crossrepo-defaults` epic (`cr-01`..`cr-04`) — Graphify promoted to
+the default code-graph layer, and a new pluggable layer for the one real
+cross-repo signal Graphify's own merge can't see. Shipped via the same
+overnight autonomous execute/verify loop as `v0.3.0`; every story independently
+verified (real tests, real subprocess proof, real diffs read) before merging.
+
+### Added
+
+- **Graphify is now the default code-graph layer** (both the TS client and the
+  zero-dep JS server) — `la-10`'s real A/B benchmark found the old in-house
+  `code-graph` layer's backing store held zero nodes from a real target repo at
+  all (22 nodes total, from an unrelated repo), while Graphify indexed the real
+  codebase. The promotion is a **soft default**: when nothing is explicitly
+  configured and the `graphify` binary isn't installed, it falls back to the old
+  `code-graph` layer with a loud warning rather than hard-failing — a bare
+  install still needs no external binary. An *explicit* `MNEMOSYNE_LAYERS`
+  request for `graphify` still fails loudly if the binary is missing, exactly as
+  before — no silent downgrade for a deliberate choice. `code-graph` stays fully
+  registered and selectable.
+- **Cross-repo shared-identifier linker** (`"crossref-linker"`, a new optional
+  layer) — real research this release, not speculation: Graphify's own
+  cross-repo graph merge (`graphify global`/`merge-graphs`) was tested against
+  three separate real repo pairings and found **zero** cross-repo edges every
+  time whenever the real relationship was a network API or shared external SaaS
+  backend rather than a shared imported package. This layer closes that gap for
+  one real, validated case — cross-referencing schema/type *definition* sites
+  against *query/usage* sites by shared string identifier. Ships with one
+  built-in scheme (`"sanity"`), proven against a real link a hand-written
+  prototype found and this layer now detects automatically: a Sanity document
+  type defined in one repo, queried via GROQ in another. Multi-repo by design
+  (every other layer scopes to one `repoRoot`; this one takes a list) — never
+  invoked unless a consumer explicitly configures it.
+- **Single-layer configs, proven not assumed** — real subprocess tests confirm
+  pure-vector-only, pure-file-only, graphify-only, and crossref-linker-only
+  `MNEMOSYNE_LAYERS` configs each work standalone with zero cross-layer
+  leakage (verified via process/output inspection, not just response shape).
+  Mnemosyne's customizable-layer promise is now backed by real tests, not just
+  registry code that was assumed to behave correctly.
+
+### Fixed
+
+- `POST /remember`'s layer-name validation was stale against the real `Layer`
+  union — explicitly targeting an already-shipped optional layer by name (e.g.
+  `graphify` or `crossref-linker`) was wrongly rejected as `invalid_layer`
+  instead of the correct `layer_not_writable` for a real, live, recall-only
+  layer. Found via the single-layer-config proof work above.
+
 ## [0.3.0] — 2026-08-14
 
 Full `mnemosyne-layer-architecture-v2` epic (`la-00`..`la-11`) — flight-aware memory,
