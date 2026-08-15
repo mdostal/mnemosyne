@@ -1,0 +1,90 @@
+id: kw-02-ts-client-keyword-layer
+epic: mnemosyne-keyword-recall
+title: TS client — new KeywordLayerAdapter + always-parallel cascade wiring
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: []
+
+description: |
+  TS-side parity for kw-01's fix. Read `lib/mnemosyne/layers/VectorLayerAdapter.ts` in full
+  first: it already shells out to `swarm-memory recall <query> --json` via `execFile` (a
+  well-established, already-proven pattern in this codebase). Build a new
+  `KeywordLayerAdapter.ts` mirroring that EXACT pattern (same command resolution via
+  `SWARM_MEMORY_BIN`/`swarm-memory` default, same error-handling shape, same loud-failure
+  conventions) but calling `swarm-memory grep <query> --json` instead of `recall`.
+
+  Do NOT confuse this with `FileLayerAdapter.ts` -- that is LOCAL-filesystem-only grep (reads
+  files under a configured root directory on disk), a genuinely different, much narrower
+  mechanism than `swarm-memory grep`, which searches the full remote Qdrant-indexed corpus the
+  same way `VectorLayerAdapter` does. `KeywordLayerAdapter` is a new, third thing -- not a
+  variant of either existing adapter.
+
+  Register the new adapter in `lib/mnemosyne/layers/registry.ts` under the name `"keyword"`.
+
+  Cascade wiring in `lib/mnemosyne/client.ts`: per kw-01's design (read that story's shipped
+  implementation once available for the exact merge/dedupe approach, keep both implementations
+  behaviorally consistent) -- run `keyword` ALONGSIDE `vector` for every `recall()` call (not as
+  a zero-hit escalation), merge results, dedupe exact source+chunk matches found both ways, keep
+  the DEFAULT_LAYER_STACK_CONFIG resolution and existing single-layer-config pluggability
+  completely intact: a consumer who does NOT include `"keyword"` in their `MNEMOSYNE_LAYERS`
+  config must be entirely unaffected (this epic does not add `keyword` to the default stack --
+  that is an explicit, separate future decision once this ships and gets real dogfooding
+  evidence, matching how `graphify` itself was proven via A/B benchmark before being promoted to
+  default in a later cycle this session, not the same cycle it was built in).
+
+  CRITICAL CONSTRAINT (carried through every story this session): Mnemosyne stays a customizable
+  layer tool. This story adds an available, opt-in layer -- it must not change behavior for any
+  consumer not explicitly configuring `"keyword"`.
+
+acceptance_criteria:
+  - "Given MNEMOSYNE_LAYERS includes both 'vector' and 'keyword', when recall() is called with a real ticket-ID-shaped query, then the correct exact-match hit is present in the merged result even if vector alone would miss it -- verified against real swarm-memory grep output, not mocked"
+  - "Given MNEMOSYNE_LAYERS does NOT include 'keyword', when recall() is called, then the keyword layer is never constructed or queried at all -- zero effect, matching this epic's pluggability constraint"
+  - "Given the exact same source+chunk is found by both vector and keyword, when results are merged, then it appears once, not duplicated"
+  - "Given swarm-memory is not on PATH, when a consumer explicitly configures 'keyword', then KeywordLayerAdapter fails loudly and actionably at the appropriate point, matching VectorLayerAdapter's existing loud-failure conventions -- never a silent empty result"
+
+steps:
+  - id: research
+    description: Read VectorLayerAdapter.ts and FileLayerAdapter.ts in full, and client.ts's current cascade logic, before writing anything. Also check kw-01's shipped merge/dedupe approach (if landed by the time this story starts) to keep both implementations consistent.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for KeywordLayerAdapter (mirroring VectorLayerAdapter.test.ts's real-subprocess-against-swarm-memory rigor) and for the always-parallel cascade merge/dedupe in client.ts, plus a pluggability test confirming zero effect when 'keyword' is not configured.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement lib/mnemosyne/layers/KeywordLayerAdapter.ts, register it in registry.ts, wire the always-parallel merge into client.ts's cascade.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the real ticket-ID case resolves correctly, confirm zero effect on unconfigured/non-keyword consumers, confirm loud failure on a missing swarm-memory binary.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-keyword-recall (based on dev).
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: lib/mnemosyne/layers/VectorLayerAdapter.ts
+      purpose: "The exact shell-out pattern to mirror (execFile, command resolution, error handling)"
+    - path: lib/mnemosyne/layers/FileLayerAdapter.ts
+      purpose: "NOT the pattern to follow -- local-filesystem-only, a different mechanism, do not confuse the two"
+    - path: lib/mnemosyne/client.ts
+      purpose: "Where the always-parallel cascade merge gets wired in"
+    - path: docs/qdrant-hybrid-retrieval-experiment.md
+      purpose: "The real experiment + recommendation this story implements"
+
+files_to_modify:
+  - file: lib/mnemosyne/layers/KeywordLayerAdapter.ts
+    change: "New: shells out to swarm-memory grep --json, mirrors VectorLayerAdapter's pattern"
+  - file: lib/mnemosyne/layers/registry.ts
+    change: "Register 'keyword' as a new builtin layer name"
+  - file: lib/mnemosyne/client.ts
+    change: "Always-parallel keyword+vector cascade with merge/dedupe, only when both are configured"
+
+risks:
+  - severity: low
+    description: "Diverging from kw-01's JS-side merge/dedupe semantics would leave the two implementations behaviorally inconsistent, undermining the 'two parallel implementations, kept in sync' convention this repo already documents"
+    mitigation: "Explicitly read kw-01's shipped code before finalizing this story's merge logic, even though the two are dispatched to run concurrently -- reconcile any drift during this story's own review step, not left for a later story"
