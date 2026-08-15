@@ -21,7 +21,9 @@
  * Story: pf-01-persona-schema-repo-local-store (epic: mnemosyne-persona-foundation)
  */
 
-import { TIERS, type Tier, type TierContentSection } from './tiers.js';
+import { existsSync } from 'node:fs';
+import { MANDATE_SECTIONS, TIER_CONTENT, TIERS, type Tier, type TierContent, type TierContentSection } from './tiers.js';
+import { readRepoLocalPersona, repoLocalPersonaPath } from './persona-store-repo-local.js';
 
 /**
  * Which of the two storage levels (design-discussion.md §3a) a given tier's
@@ -156,4 +158,80 @@ export function assertValidPersona(candidate: unknown, expectedTier: Tier): asse
       );
     }
   }
+}
+
+/** Context `getPersonaContent` needs to resolve a scoped persona -- currently just the repo root the repo-local store lives under. */
+export interface PersonaContentContext {
+  repoRoot: string;
+}
+
+/**
+ * Re-injects `MANDATE_SECTIONS` as an explicit, named step -- mirrors
+ * tiers.ts's `tier()` builder helper (tiers.ts, `mandateSections: [...MANDATE_SECTIONS]`),
+ * which does the same thing inline for the hardcoded `TIER_CONTENT` map.
+ * `mandateSections` is always the shared, code-owned `MANDATE_SECTIONS`
+ * constant, spread fresh on every call so callers can never mutate the
+ * shared array by reference. Personas themselves are never allowed to carry
+ * their own `mandateSections` (`assertValidPersona` rejects mere presence of
+ * the key) -- this is the one place that value gets attached, at render
+ * time, for a repo-local persona hit.
+ */
+function reinjectMandateSections(base: Omit<TierContent, 'mandateSections'>): TierContent {
+  return { ...base, mandateSections: [...MANDATE_SECTIONS] };
+}
+
+/**
+ * Resolves the actual content to render for one tier + scope -- replaces the
+ * old bare-tier `getTierContent(tier)` assumption (design-discussion.md
+ * §3a; pf-02). Dispatch keys off `PERSONA_STORE_BY_TIER`, the single source
+ * of truth for the two-store split, not a duplicated if/else:
+ *
+ *   - `tier === 'code-architect'` (repo-local store): if a persona exists on
+ *     disk for `scopeId` under `ctx.repoRoot`, renders THAT persona's
+ *     content, with `MANDATE_SECTIONS` explicitly re-injected (personas
+ *     never store their own mandate). If none exists yet, falls back to the
+ *     hardcoded `TIER_CONTENT['code-architect']` and logs/warns that the
+ *     fallback fired -- NOT silent, so an empty repo-local store doesn't go
+ *     unnoticed (also the safety net pf-08's seed script relies on later).
+ *   - every other tier (global store, not built until pf-06/pf-07): returns
+ *     `TIER_CONTENT[tier]` unchanged -- identical to today's
+ *     `getTierContent` behavior. Zero regression risk for global tiers in
+ *     this slice.
+ *
+ * `getTierContent(tier)`'s old bare-tier signature is fully removed by this
+ * story (tiers.ts no longer exports it) -- this is the one and only
+ * content-resolution entry point `sync.ts` calls now.
+ */
+export function getPersonaContent(tier: Tier, scopeId: string, ctx: PersonaContentContext): TierContent {
+  if (!TIER_CONTENT[tier]) {
+    throw new Error(`Unknown tier: ${String(tier)}. Valid tiers are: ${TIERS.join(', ')}.`);
+  }
+
+  if (PERSONA_STORE_BY_TIER[tier] !== 'repo-local') {
+    // Global tiers -- the global store doesn't exist until pf-06/pf-07.
+    // Unchanged path, identical to today's getTierContent(tier).
+    return TIER_CONTENT[tier];
+  }
+
+  const personaPath = repoLocalPersonaPath(ctx.repoRoot, scopeId);
+  if (!existsSync(personaPath)) {
+    // Not silent -- an empty repo-local store falling back unnoticed is
+    // exactly what horizontal-plan.md H2.1 flags as a risk, and what pf-08's
+    // seed script later relies on this warning to surface.
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[mnemosyne/layer1] No repo-local persona found for tier '${tier}', scopeId '${scopeId}' ` +
+        `(expected at ${personaPath}) -- falling back to the hardcoded TIER_CONTENT['${tier}']. ` +
+        'Seed a real persona for this scope to replace this fallback.',
+    );
+    return TIER_CONTENT[tier];
+  }
+
+  const persona = readRepoLocalPersona(ctx.repoRoot, scopeId);
+  return reinjectMandateSections({
+    tier: persona.tier,
+    displayName: persona.displayName,
+    scope: persona.scope,
+    sections: persona.sections,
+  });
 }
