@@ -95,8 +95,10 @@ describe('assertValidPersona', () => {
     expect(() => assertValidPersona(candidate, 'code-architect')).toThrow(/sections/i);
   });
 
-  it('accepts an optional parentRefs array of strings', () => {
-    const candidate = validPersona({ parentRefs: ['acme-corp', 'project-x'] });
+  it('accepts an optional parentRefs array of {tier, scopeId} pairs', () => {
+    const candidate = validPersona({
+      parentRefs: [{ tier: 'project-orchestrator', scopeId: 'project-x' }],
+    });
     expect(() => assertValidPersona(candidate, 'code-architect')).not.toThrow();
   });
 
@@ -110,8 +112,24 @@ describe('assertValidPersona', () => {
     expect(() => assertValidPersona(candidate, 'code-architect')).toThrow(/parentRefs/i);
   });
 
-  it('rejects a parentRefs array containing non-strings', () => {
-    const candidate = { ...validPersona(), parentRefs: ['acme-corp', 42] };
+  it('rejects a parentRefs array containing bare strings instead of {tier, scopeId} pairs', () => {
+    const candidate = { ...validPersona(), parentRefs: ['acme-corp', 'project-x'] };
+    expect(() => assertValidPersona(candidate, 'code-architect')).toThrow(/parentRefs/i);
+  });
+
+  it('rejects a parentRefs entry with an invalid tier', () => {
+    const candidate = {
+      ...validPersona(),
+      parentRefs: [{ tier: 'not-a-real-tier', scopeId: 'project-x' }],
+    };
+    expect(() => assertValidPersona(candidate, 'code-architect')).toThrow(/parentRefs/i);
+  });
+
+  it('rejects a parentRefs entry with an empty scopeId', () => {
+    const candidate = {
+      ...validPersona(),
+      parentRefs: [{ tier: 'project-orchestrator', scopeId: '' }],
+    };
     expect(() => assertValidPersona(candidate, 'code-architect')).toThrow(/parentRefs/i);
   });
 

@@ -55,13 +55,14 @@ describe('writeRepoLocalPersona / readRepoLocalPersona', () => {
 
   it('round-trips a persona with an optional parentRefs array unchanged', async () => {
     const root = await makeTempRepoRoot();
-    const persona = validCodeArchitectPersona({ parentRefs: ['acme-corp', 'project-x'] });
+    const parentRefs = [{ tier: 'project-orchestrator' as const, scopeId: 'project-x' }];
+    const persona = validCodeArchitectPersona({ parentRefs });
 
     writeRepoLocalPersona(root, persona);
     const readBack = readRepoLocalPersona(root, persona.scopeId);
 
     expect(readBack).toEqual(persona);
-    expect(readBack.parentRefs).toEqual(['acme-corp', 'project-x']);
+    expect(readBack.parentRefs).toEqual(parentRefs);
   });
 
   it('writes to <repoRoot>/.mnemosyne/personas/<scopeId>.yaml as real YAML, not JSON', async () => {

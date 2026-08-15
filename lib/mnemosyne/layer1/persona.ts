@@ -68,9 +68,11 @@ export interface Persona {
    * persona can query UP into its parent's store on demand (design-
    * discussion.md Risks table: "query up, never copy down"). Unused until
    * pf-11/pf-12 (Slice 3) — present now, harmless if unused, per
-   * horizontal-plan.md H1.1.
+   * horizontal-plan.md H1.1 and H5.1 (`{tier, scopeId}[]` pairs, not bare
+   * strings — a parent is identified by both which tier's store to look in
+   * and which scopeId within it).
    */
-  parentRefs?: string[];
+  parentRefs?: { tier: Tier; scopeId: string }[];
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -142,8 +144,16 @@ export function assertValidPersona(candidate: unknown, expectedTier: Tier): asse
   }
 
   if (candidate.parentRefs !== undefined) {
-    if (!Array.isArray(candidate.parentRefs) || !candidate.parentRefs.every((r) => typeof r === 'string')) {
-      throw new Error("Invalid persona: 'parentRefs', if present, must be an array of strings.");
+    const isValidParentRef = (r: unknown): boolean =>
+      isPlainRecord(r) &&
+      typeof r.tier === 'string' &&
+      TIERS.includes(r.tier as Tier) &&
+      typeof r.scopeId === 'string' &&
+      r.scopeId.trim() !== '';
+    if (!Array.isArray(candidate.parentRefs) || !candidate.parentRefs.every(isValidParentRef)) {
+      throw new Error(
+        "Invalid persona: 'parentRefs', if present, must be an array of {tier, scopeId} pairs.",
+      );
     }
   }
 }
