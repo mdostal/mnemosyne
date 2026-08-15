@@ -41,8 +41,18 @@ export function spliceManagedBlock(existingFileContent: string | null, managedBo
     return `${block}\n`;
   }
 
-  const startIdx = existingFileContent.indexOf(BLOCK_START);
-  const endIdx = existingFileContent.indexOf(BLOCK_END);
+  // lastIndexOf, not indexOf (pf-05 fix): a file can accumulate a STRAY,
+  // never-closed BLOCK_START ahead of the real, well-formed pair -- e.g. an
+  // interrupted manual paste that left a lone begin marker (exactly the
+  // partial-marker fixture's shape), followed later by a normal append-mode
+  // sync that adds the real pair after it. Pairing the FIRST BLOCK_START
+  // with the FIRST BLOCK_END would then wrongly treat the stray leading
+  // marker as the real block's start and silently delete every human line
+  // sitting between it and the real end marker on the next sync. Always
+  // targeting the LAST start/end pair means Mnemosyne only ever touches the
+  // block it (or a previous sync) actually wrote, never an earlier stray.
+  const startIdx = existingFileContent.lastIndexOf(BLOCK_START);
+  const endIdx = existingFileContent.lastIndexOf(BLOCK_END);
 
   if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
     const before = existingFileContent.slice(0, startIdx);
@@ -58,8 +68,11 @@ export function spliceManagedBlock(existingFileContent: string | null, managedBo
 
 /** Returns the current managed-block body, or `null` if no block is present. */
 export function extractManagedBlockBody(fileContent: string): string | null {
-  const startIdx = fileContent.indexOf(BLOCK_START);
-  const endIdx = fileContent.indexOf(BLOCK_END);
+  // lastIndexOf, not indexOf -- same reasoning as spliceManagedBlock above:
+  // always resolve to the real (most recently synced) block, never a stray
+  // leading marker.
+  const startIdx = fileContent.lastIndexOf(BLOCK_START);
+  const endIdx = fileContent.lastIndexOf(BLOCK_END);
   if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) {
     return null;
   }
