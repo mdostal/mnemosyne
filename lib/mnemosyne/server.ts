@@ -52,6 +52,11 @@ const LAYERS: ReadonlySet<Layer> = new Set([
   'hive-memory',
   'graphify',
   'crossref-linker',
+  // 'keyword' (kw-02-ts-client-keyword-layer): opt-in only, never part of
+  // DEFAULT_LAYER_STACK_CONFIG, but a real, valid layer name once a
+  // consumer's MNEMOSYNE_LAYERS configures it -- same reasoning as every
+  // other optional layer in this set (see comment above).
+  'keyword',
 ]);
 
 const client = new MnemosyneClient({ rootDirectory: ROOT_DIRECTORY });

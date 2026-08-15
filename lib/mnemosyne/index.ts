@@ -5,6 +5,8 @@ export { FileLayerAdapter } from './layers/FileLayerAdapter.js';
 export type { FileLayerAdapterOptions } from './layers/FileLayerAdapter.js';
 export { VectorLayerAdapter } from './layers/VectorLayerAdapter.js';
 export type { VectorLayerAdapterOptions } from './layers/VectorLayerAdapter.js';
+export { KeywordLayerAdapter } from './layers/KeywordLayerAdapter.js';
+export type { KeywordLayerAdapterOptions } from './layers/KeywordLayerAdapter.js';
 export type { LayerAdapter, RecallOptions } from './layers/LayerAdapter.js';
 
 export type {

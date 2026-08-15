@@ -1,0 +1,72 @@
+name: mnemosyne-keyword-recall
+title: Always-parallel keyword recall — close the exact-identifier gap
+target_codebase: .
+methodology: tdd
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: dev
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [architecture, bugfix]
+  roster: [researcher, technical-writer]
+  per_tag_reasoning:
+    architecture: "Changes recall()'s escalation semantics in both implementations (JS zero-dep server, TS client) -- a real cross-cutting behavior change, not a new isolated layer"
+    bugfix: "The underlying keyword capability (swarm-memory grep) already works correctly end-to-end -- the actual defect is recall()'s escalation-only-on-zero-hits logic silently never trying it when vector search returns confident-looking but wrong hits"
+  confidence: high
+  gate_decisions: {}
+
+notes: |
+  Formalized 2026-08-15 from `docs/qdrant-hybrid-retrieval-experiment.md`'s real hands-on finding:
+  a query for a real ticket ID ("PAN-8968") returns zero correct hits from pure semantic search
+  (dense embeddings cannot distinguish "PAN-8968" from "PAN-7909" -- structurally similar,
+  semantically indistinguishable), while keyword search finds it instantly and exactly.
+
+  Investigated before writing this epic (do not re-derive): `swarm-memory grep <query> --json`
+  ALREADY correctly finds PAN-8968-style exact matches against the live production Qdrant
+  collections today -- confirmed by running it directly. The JS zero-dep server's own
+  `engine.mjs` already wraps this as `grep()` (labeled the "file" layer). The actual, sole defect:
+  `recall()`'s escalation logic in `engine.mjs` only calls `grep()` when vector search returns
+  ZERO hits or errors -- confirmed via a live `POST /recall` call for "PAN-8968" against the real
+  running server: `layers_attempted: ["vector", "code-graph"]`, five wrong hits returned (other
+  PAN-XXXX tickets, scores 0.53-0.56), grep/file never attempted, because vector "succeeded" by
+  returning *something*. No new keyword-search infrastructure is needed -- the fix is escalation
+  logic, not a new layer.
+
+  Per the experiment's own recommendation, explicitly NOT hybrid score-fusion (no blending
+  semantic+keyword into one relevance number -- `config.toml`'s own comment notes real matches
+  and nonsense queries land in nearly the same 0.50-0.56 score band for this corpus, so
+  score-based cleverness about "is this weak" is not reliable here). The fix: run keyword
+  ALONGSIDE vector for every query (not sequential escalation gated on hit count), merge both
+  result sets with clear per-hit provenance (`match_type`/`layer`), and let the real answer be
+  present in the response instead of silently dropped because vector "found something first."
+
+  TS client parity: `lib/mnemosyne/layers/VectorLayerAdapter.ts` already shells out to
+  `swarm-memory recall --json` (same CLI, same subprocess pattern as the JS server's
+  `VectorLayerAdapter`/`engine.mjs`) -- a new `KeywordLayerAdapter.ts` mirroring that exact
+  pattern but calling `swarm-memory grep --json` is low-risk and symmetric, not a new mechanism.
+  `FileLayerAdapter.ts` (TS) is LOCAL-filesystem-only grep, a genuinely different, narrower
+  mechanism than the JS side's swarm-memory-CLI-backed keyword search against the full remote
+  Qdrant corpus -- do not confuse the two or try to reuse FileLayerAdapter for this.
+
+  Goal per the operator: real, dogfoodable this week -- via the actual running JS server
+  (`node src/server.mjs`, the instance in active use all session), not just a library-level fix
+  nobody exercises day to day.
+
+stories:
+  - id: kw-01-js-server-parallel-keyword
+    title: JS zero-dep server — always run keyword alongside vector, merge results
+    complexity: medium
+    depends_on: []
+
+  - id: kw-02-ts-client-keyword-layer
+    title: TS client — new KeywordLayerAdapter + always-parallel cascade wiring
+    complexity: medium
+    depends_on: []
+
+  - id: kw-03-keyword-recall-regression-tests
+    title: Regression tests for both implementations, including the real PAN-8968 case
+    complexity: medium
+    depends_on: [kw-01-js-server-parallel-keyword, kw-02-ts-client-keyword-layer]

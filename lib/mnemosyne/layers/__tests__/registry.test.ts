@@ -89,4 +89,24 @@ describe('LayerRegistry', () => {
     expect(DEFAULT_LAYER_STACK_CONFIG.layers.map((l) => l.name)).toEqual(['graphify', 'vector', 'file']);
     expect(DEFAULT_LAYER_STACK_CONFIG.layers.map((l) => l.name)).not.toContain('crossref-linker');
   });
+
+  it('defaultRegistry() also has "keyword" (kw-02) registered', () => {
+    const registry = defaultRegistry();
+    expect(registry.has('keyword')).toBe(true);
+  });
+
+  it('creates a real KeywordLayerAdapter from the registry, resolvable purely by name', () => {
+    const registry = defaultRegistry();
+    // command: process.execPath -- always resolvable on PATH, matching the
+    // same "don't depend on the real swarm-memory CLI being installed"
+    // convention as the graphify/crossref-linker registry tests above.
+    const adapter = registry.create('keyword', { command: process.execPath });
+    expect(adapter.layer).toBe('keyword');
+  });
+
+  it('"keyword" being registered has zero effect on the unconfigured default layer stack (kw-02: opt-in only, never added to DEFAULT_LAYER_STACK_CONFIG by this story)', async () => {
+    const { DEFAULT_LAYER_STACK_CONFIG } = await import('../config.js');
+    expect(DEFAULT_LAYER_STACK_CONFIG.layers.map((l) => l.name)).toEqual(['graphify', 'vector', 'file']);
+    expect(DEFAULT_LAYER_STACK_CONFIG.layers.map((l) => l.name)).not.toContain('keyword');
+  });
 });

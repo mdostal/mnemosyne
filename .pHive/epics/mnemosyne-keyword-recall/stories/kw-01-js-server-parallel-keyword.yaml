@@ -1,0 +1,89 @@
+id: kw-01-js-server-parallel-keyword
+epic: mnemosyne-keyword-recall
+title: JS zero-dep server — always run keyword alongside vector, merge results
+status: complete
+note: "Fixed src/engine.mjs's recall(): replaced the zero-hit/error-gated escalation to grep() with Promise.allSettled([run(vectorArgs), grep(query, scope, opts)]) so vector and keyword always run in parallel (added latency is the max of the two, not their sum). New mergeVectorAndKeyword()/hitIdentity() merge both result sets per-scope, deduping same source+chunk hits (full_path||location||source + chunk_index, falling back to text when chunk_index is absent) -- the duplicate is kept once with match_type promoted to 'both' and provenance.matched_both=true, not silently dropped. Every hit now carries match_type ('semantic'|'keyword'|'both') alongside the unchanged provenance.layer ('vector'|'file'). layers_attempted is now unconditionally ['vector','file',...] on every successful call (previously only ['vector'] unless escalation fired). Preserved exactly: provenance.degraded=true marking when vector genuinely errors (now applied post-merge since keyword hits are the only survivors in that case), the throw-original-vectorError-when-both-fail contract, and opts.escalate passthrough to grep()'s own --escalate flag. Did not modify grep() itself (already correct) or lib/mnemosyne/* (kw-02's TS-side scope). TDD: test/parallel-keyword.mjs added (13 checks), run against pre-fix engine.mjs first and confirmed 8 failures reproducing the real defect (ticket-ID query's correct keyword hit missing, layers_attempted only ['vector','code-graph']), then all pass post-fix. Extended test/fixtures/fake-swarm-memory.mjs with KWTEST_TICKET/KWTEST_DUP/KWTEST_VECTOR_ERROR magic-query scenarios. Added test/parallel-keyword.mjs to package.json's test chain and a test:parallel-keyword script. Full suite verified: all JS test/*.mjs pass (npm test), vitest run lib/mnemosyne lib/minerva benchmarks src/planning src/config src/runners -> 402 tests passed, 1 pre-existing worker-crash error (confirmed identical -- 401/404 passed, same 1 error -- on the pre-fix commit via git stash, so unworsened; this is the documented better-sqlite3/CodeGraphLayerAdapter crash, also independently reproduced via test/http-api.mjs's POST /recall socket-close crash, byte-identical on stash vs not). Verified live: started PORT=8477 node src/server.mjs against the real production Qdrant corpus, confirmed via `swarm-memory grep PAN-8968 --json` that PAN-8968 is still indexed (work_root_memory, story-done note), then POST /recall {query:'PAN-8968', scope:'top', hits:5} returned total_hits:6 -- 5 wrong vector hits (scores 0.539-0.564, other PAN-#### tickets, match_type:semantic) PLUS the correct keyword hit (match_type:keyword, provenance.layer:file, text confirming 'PAN-8968: Require live Stripe prices in production'), layers_attempted:['vector','file','code-graph'] -- the exact defect from the story description is now fixed, verified against live data not a mock. Also verified a purely semantic query ('how do I fix flaky vitest worker crashes') still ranks 2 real semantic hits (scores 0.63-0.70) ahead of 3 keyword hits, confirming no degradation to conceptual queries. Updated SERVICE.md with the new parallel-keyword contract (match_type values, layers_attempted semantics)."
+complexity: medium
+methodology: tdd
+depends_on: []
+
+description: |
+  Real, confirmed defect in `src/engine.mjs`'s `recall()`: escalation to the keyword-capable
+  `grep()` function (already correct and working -- wraps `swarm-memory grep <query> --json`,
+  confirmed to find real ticket IDs like "PAN-8968" exactly and instantly against the live
+  production Qdrant collections) only fires when vector search returns ZERO hits or errors. A
+  query for a real, indexed ticket ID returns five WRONG hits from vector search (other
+  similarly-shaped ticket IDs, scores 0.53-0.56) and grep is never even attempted -- confirmed
+  live against the actual running server (`layers_attempted: ["vector", "code-graph"]`, no
+  "file"/grep). No new keyword-search capability is needed; `grep()` already works. This story
+  fixes the escalation logic only.
+
+  Design (per docs/qdrant-hybrid-retrieval-experiment.md's explicit recommendation): NOT hybrid
+  score-fusion. `~/.config/swarm-memory/config.toml`'s own comment notes real matches and
+  nonsense queries land in nearly the same 0.50-0.56 score band for this corpus -- score-based
+  "is this hit weak enough to escalate" logic is not reliable here, so don't build it. Instead:
+  run `grep()` (keyword) ALONGSIDE the existing vector recall for every call (in parallel, not
+  sequential-and-conditional), merge both result sets into one response with clear per-hit
+  provenance (`match_type`: "semantic" vs "keyword", `provenance.layer`: "vector" vs "file"
+  unchanged from today), dedupe hits that are the exact same source+chunk from both paths (keep
+  one, note it matched both ways), and report `layers_attempted`/`layers_queried` honestly
+  reflecting that both were genuinely tried on every call, not just the escalation-fallback ones.
+
+  Backward compatibility: `opts.escalate` (the existing explicit escalation flag passed to
+  `grep()`) and the zero-hit/error escalation path both still need to work exactly as before for
+  any caller not expecting the new parallel-keyword behavior to have surprised them -- this is
+  additive (a caller gets keyword hits merged in now where they didn't before), not a breaking
+  response-shape change. Read the existing zero-hit escalation code path (lines ~248-280 in
+  `engine.mjs` as of this story's writing) in full before touching it -- the new parallel-keyword
+  behavior REPLACES that path's reason for existing (it's now redundant, since keyword is always
+  tried), but confirm and preserve the vector-error-degradation-marker behavior for callers whose
+  vector layer is genuinely down, which is a distinct concern from "add keyword results."
+
+acceptance_criteria:
+  - "Given a query for a real ticket ID present in the corpus (e.g. matching this repo's own real PAN-8968 case), when POST /recall is called against a real running server, then the response includes the correct exact-match hit (via keyword) even though vector search alone would return only wrong, similarly-shaped hits -- verified against real data, not a mock"
+  - "Given a purely conceptual/paraphrased query with no literal keyword overlap with its best real match, when POST /recall is called, then semantic hits are still present and correctly ranked -- the parallel-keyword addition must not degrade or crowd out real semantic results"
+  - "Given the exact same source+chunk is found by both vector and keyword search, when results are merged, then it appears once in the response, not duplicated, with provenance indicating it matched both ways"
+  - "Given a query where vector search genuinely errors/is unavailable, when POST /recall is called, then the existing degraded-marker behavior for that failure mode still works exactly as before this story"
+  - "Given layers_attempted/layers_queried in the response, when any recall() call completes successfully, then it honestly reflects that both vector and keyword were attempted, not just whichever happened to 'win' first"
+
+steps:
+  - id: research
+    description: Read src/engine.mjs's recall() and grep() functions in full, and the real live-server test that demonstrated the gap (a POST /recall for a real ticket-ID-shaped query, e.g. this repo's own remembered PAN-8968 note), before changing anything.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests proving the current defect (ticket-ID query returns no keyword hit today) and the desired fixed behavior (parallel keyword+vector, correct merge, correct dedupe, correct degraded-marker preservation).
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement the parallel keyword+vector recall + merge/dedupe logic in engine.mjs. Update SERVICE.md if the /recall response shape or layers_attempted semantics changed in an observable way.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the real ticket-ID case now resolves correctly against a live server, confirm no regression to purely-semantic queries, confirm dedupe and degraded-marker behavior are both correct.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-keyword-recall (based on dev).
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: .
+  key_files:
+    - path: src/engine.mjs
+      purpose: "recall()'s escalation logic (the actual defect) and grep()'s already-working keyword implementation (do not modify grep() itself unless a real bug is found in it)"
+    - path: docs/qdrant-hybrid-retrieval-experiment.md
+      purpose: "The real experiment + recommendation this story implements -- read in full before designing the merge logic"
+
+files_to_modify:
+  - file: src/engine.mjs
+    change: "recall()'s cascade: always attempt grep() alongside vector, merge/dedupe results"
+
+design_decisions:
+  - decision: "Parallel attempt + merge, not sequential escalation gated on a relevance threshold"
+    rationale: "This corpus's own documented score calibration (config.toml) shows real matches and noise occupy nearly the same score band -- a threshold-based 'is this weak' heuristic would be unreliable by the operator's own prior calibration work, not just in theory"
+
+risks:
+  - severity: medium
+    description: "Always calling grep() adds latency to every recall() call, even ones where it finds nothing useful"
+    mitigation: "grep() was confirmed fast (near-instant) in live testing against this corpus; run it concurrently with the vector call (Promise.all-style), not after it, so the added latency is the max of the two, not their sum"

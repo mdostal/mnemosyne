@@ -44,3 +44,5 @@ config/minerva.local.yaml
 !.pHive/epics/mnemosyne-layer-architecture-v2/**
 !.pHive/epics/mnemosyne-crossrepo-defaults/
 !.pHive/epics/mnemosyne-crossrepo-defaults/**
+!.pHive/epics/mnemosyne-keyword-recall/
+!.pHive/epics/mnemosyne-keyword-recall/**
