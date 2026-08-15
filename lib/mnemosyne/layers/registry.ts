@@ -70,11 +70,16 @@ export function registerBuiltinLayers(registry: LayerRegistry): void {
   registry.register('code-graph', () => new CodeGraphLayerAdapter());
   registry.register('vector', (options) => new VectorLayerAdapter(options as ConstructorParameters<typeof VectorLayerAdapter>[0]));
   registry.register('file', (_options, ctx) => new FileLayerAdapter(ctx.rootDirectory ?? process.cwd()));
-  // "graphify" (la-02-graphify-adapter): a NEW layer name, registered
-  // alongside "code-graph" rather than replacing it -- la-10 does the A/B
-  // comparison before any retirement. rootDirectory flows through as
-  // graphify's repoRoot (the directory it indexes) when the caller doesn't
-  // override it via per-layer options.
+  // "graphify" (la-02-graphify-adapter): registered alongside "code-graph"
+  // rather than replacing it -- la-10's A/B benchmark gave a GO on
+  // eventually retiring 'code-graph' (docs/layer-architecture-v2-plan.md
+  // §7), which is what cr-01-graphify-default-layer used to promote
+  // 'graphify' to config.ts's DEFAULT_LAYER_STACK_CONFIG -- but retirement
+  // itself is a separate, later story; both stay registered here so either
+  // is explicitly selectable via MNEMOSYNE_LAYERS regardless of which one
+  // the unconfigured default currently resolves to. rootDirectory flows
+  // through as graphify's repoRoot (the directory it indexes) when the
+  // caller doesn't override it via per-layer options.
   registry.register('graphify', (options, ctx) => {
     const adapterOptions = options as ConstructorParameters<typeof GraphifyLayerAdapter>[0];
     return new GraphifyLayerAdapter({

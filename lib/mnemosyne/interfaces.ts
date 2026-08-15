@@ -28,10 +28,17 @@
  * a fourth live, OPTIONAL layer — plugin-hive's own knowledge graph +
  * per-agent/team memory files, read-only, not part of the default stack
  * unless explicitly configured (see layers/config.ts). `graphify`
- * (la-02-graphify-adapter) is a fifth live, OPTIONAL layer: a tree-sitter
- * AST code/doc graph (Graphify-Labs/graphify, PyPI `graphifyy`), registered
- * under a distinct name alongside `code-graph` rather than replacing it
- * (see GraphifyLayerAdapter.ts; la-10 does the later A/B retirement).
+ * (la-02-graphify-adapter) is a fifth live layer: a tree-sitter AST code/doc
+ * graph (Graphify-Labs/graphify, PyPI `graphifyy`), registered under a
+ * distinct name alongside `code-graph` rather than replacing it (see
+ * GraphifyLayerAdapter.ts). la-10's A/B benchmark (GO on eventual
+ * `code-graph` retirement) is what led cr-01-graphify-default-layer to
+ * promote `graphify` to the UNCONFIGURED default's first slot -- soft,
+ * PATH-availability-dependent, falling back to `code-graph` when the
+ * `graphify` binary isn't installed (see layers/config.ts's
+ * DEFAULT_LAYER_STACK_CONFIG doc comment for the exact rules). Still
+ * requires an external binary (`uv tool install graphifyy`, recommended not
+ * required) the way `hive-memory` above does not.
  */
 export type Layer =
   | 'meta'

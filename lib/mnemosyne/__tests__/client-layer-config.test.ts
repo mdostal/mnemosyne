@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MnemosyneClient } from '../client.js';
 import type { RecallResult } from '../interfaces.js';
+import { isCommandOnPath } from '../layers/GraphifyLayerAdapter.js';
 import { LayerRegistry } from '../layers/registry.js';
 
 function okLayer(layer: 'file' | 'vector' | 'code-graph', content: string) {
@@ -106,9 +107,18 @@ describe('MnemosyneClient — config-driven layer swap (pl-01)', () => {
   });
 
   it('an unconfigured client (no options at all) resolves the real default 3-layer stack in order', () => {
+    // cr-01-graphify-default-layer: the unconfigured default's first slot
+    // is 'graphify' when the `graphify` binary is actually resolvable on
+    // PATH (this sandbox has it installed), else it soft-falls-back to
+    // 'code-graph' (see layers/config.ts's resolveUnconfiguredDefault()) --
+    // this test exercises the REAL environment's real PATH, so it asserts
+    // whichever of the two is genuinely true here, exactly like the
+    // established `isGraphifyOnPath()` convention used elsewhere in this
+    // repo (e.g. GraphifyLayerAdapter.test.ts, test/graphify-bridge.mjs).
+    const graphifyAvailable = isCommandOnPath(process.env.GRAPHIFY_BIN || 'graphify');
     const client = new MnemosyneClient();
     const layers = client.getConfiguredLayers().map((l) => l.layer);
-    expect(layers).toEqual(['code-graph', 'vector', 'file']);
+    expect(layers).toEqual([graphifyAvailable ? 'graphify' : 'code-graph', 'vector', 'file']);
   });
 
   it('MNEMOSYNE_LAYERS env var is honored end-to-end through a real MnemosyneClient construction', () => {
