@@ -1,10 +1,38 @@
 id: pu-13-full-loop-e2e-regression
 epic: mnemosyne-persona-ux
 title: "Full-loop regression: agent-propose (CLI) -> UI review -> human-approve -> real commit"
-status: planned
+status: complete
 complexity: medium
 methodology: tdd
 depends_on: [pu-06-draft-persona-transport-tests, pu-09-draft-first-regression, pu-12-draft-review-approve-ui]
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 556d670). This is the epic's closing ticket --
+  pu-01 through pu-14 are now all complete. Independently verified: read
+  the full new test file (test/persona-full-loop-e2e.mjs) -- confirmed
+  every step is a real subprocess/HTTP call (real CLI interview via
+  runPersonaInterview + a genuine crawlBoundedContext() filesystem read +
+  a real `mnemosyne persona draft propose` subprocess; real HTTP against a
+  separately-spawned lib/mnemosyne/server.ts; a real recall() POST against
+  a real src/server.mjs + the pu-03 stateful fixture double proving 0 hits
+  during the pending-review window and >=1 hit after approval; a real HTTP
+  edit re-POST; a real HTTP approve POST verified via 3 independent reads
+  -- HTTP response, direct filesystem read of the persona store, direct
+  filesystem read of the remember()-written note file). Confirmed the
+  documented scoping decision (the edit step reuses the draft route's
+  full-candidate-overwrite mechanism rather than cloning ui/app.js's
+  current single-section v1 DOM field list, since pu-12's own test already
+  covers that specific DOM-field question) is honest and correctly
+  reasoned, not a shortcut. Reran the new test myself (27/27 passing) in
+  both the builder's worktree and the merged integration worktree. Ran
+  test/http-api.mjs myself and independently confirmed its 3 failures are
+  the same pre-existing, unrelated generic POST /remember default-layer
+  assertions documented since ml-04's completion note earlier this
+  session -- zero persona/draft-specific failures. Ran the epic's full
+  combined suite (npx vitest run lib/mnemosyne: 615/615 passing across 44
+  files) plus npx tsc --noEmit (clean) as the final regression gate in the
+  merged integration worktree. All acceptance criteria met. The
+  mnemosyne-persona-ux epic is now fully built.
 
 description: |
   Implements horizontal-plan.md H8's e2e component: the epic's own real
