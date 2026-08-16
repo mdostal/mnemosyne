@@ -1,10 +1,28 @@
 id: pu-08-draft-first-interview-flow
 epic: mnemosyne-persona-ux
 title: "Interview skill: draft-first write target + --commit-directly escape hatch"
-status: planned
+status: complete
 complexity: medium
 methodology: tdd
 depends_on: [pu-04-draft-persona-cli, pu-07-bounded-crawl-context]
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 637cc53). Independently verified: read
+  persona-draft-writer.mjs in full -- confirmed it never imports
+  writeGlobalPersona/writeRepoLocalPersona/writePersonaViaCli/
+  rememberInterviewSource directly (grep for `^import` confirms only
+  node:child_process/node:fs/node:os/node:path/node:url/node:util/yaml --
+  the only disk-touching path is spawning the real `mnemosyne persona draft
+  propose` subprocess). Confirmed via `git diff` against current origin that
+  persona-writer.mjs/persona-remember.mjs/their .d.mts files are
+  byte-for-byte unchanged (empty diff), so the pre-existing
+  --commit-directly/immediate-commit path is untouched by construction, not
+  just by claim. Note: this ticket's worktree branched from a stale base
+  (missing pu-05's already-merged commits) -- resolved by merging via commit
+  hash directly into the up-to-date integration worktree rather than a
+  branch-name merge. Reran tsc --noEmit (clean) and vitest
+  lib/mnemosyne/layer1 (239/239) myself in both the builder's worktree and
+  the merged integration worktree. All acceptance criteria met.
 
 description: |
   Implements horizontal-plan.md H6's write-target component: rewrites
