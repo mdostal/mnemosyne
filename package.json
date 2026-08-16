@@ -13,7 +13,8 @@
     "mnemosyne-install-git-hooks": "bin/mnemosyne-install-git-hooks",
     "mnemosyne-client-api": "bin/mnemosyne-client-api",
     "mnemosyne-mcp": "bin/mnemosyne-mcp.mjs",
-    "mnemosyne-audit-lifecycle": "bin/mnemosyne-audit-lifecycle"
+    "mnemosyne-audit-lifecycle": "bin/mnemosyne-audit-lifecycle",
+    "mnemosyne-file-index": "bin/mnemosyne-file-index.mjs"
   },
   "scripts": {
     "start": "node src/server.mjs",

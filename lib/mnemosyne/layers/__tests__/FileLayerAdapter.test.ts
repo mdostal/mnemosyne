@@ -229,9 +229,12 @@ describe('FileLayerAdapter — ml-07 area-scoped index narrowing', () => {
     expect(scoped.ok).toBe(true);
     const scopedFileCount = scanSpy.mock.calls.length;
 
-    // Whole tree has 8 fixture files + the manifest itself
-    // (.mnemosyne/file-index.json, area ""); docs/guides has exactly 2.
-    expect(fullFileCount).toBe(9);
+    // Whole tree has 8 fixture files; `.mnemosyne/` (the index/manifest
+    // storage directory itself) is excluded from every walk as of
+    // ml-08-file-store-index-rebuild (DEFAULT_IGNORED_DIRECTORIES in
+    // fileWalk.ts), so writing the manifest never makes it indexable
+    // content. docs/guides has exactly 2.
+    expect(fullFileCount).toBe(8);
     expect(scopedFileCount).toBe(2);
     expect(scopedFileCount).toBeLessThan(fullFileCount);
   });

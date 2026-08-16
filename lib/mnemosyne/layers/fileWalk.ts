@@ -18,6 +18,17 @@ export const DEFAULT_IGNORED_DIRECTORIES = new Set([
   'dist',
   'build',
   'coverage',
+  // The index/manifest storage directory itself (FileStoreIndex.ts's
+  // FILE_INDEX_RELATIVE_PATH lives at `<root>/.mnemosyne/file-index.json`).
+  // Without this, writing the manifest makes it indexable content: a
+  // SECOND build/rebuild over the same root would walk straight into it and
+  // add a self-referential entry for the manifest file itself, whose
+  // recorded sha256 would then differ from build to build purely because
+  // the manifest's own prior content changed -- surfaced by
+  // ml-08-file-store-index-rebuild's "rebuild == first build, same code
+  // path" acceptance criterion, which a self-indexing manifest would
+  // otherwise violate on every second run.
+  '.mnemosyne',
 ]);
 
 /**
