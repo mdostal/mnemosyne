@@ -1,10 +1,34 @@
 id: pw-16-fourth-transport-roundtrip
 epic: mnemosyne-persona-wizard
 title: 4th-transport (HTTP) round-trip test
-status: pending
+status: complete
 complexity: low
 methodology: tdd
 depends_on: [pw-15-post-persona-routes]
+
+note_on_completion: >
+  Extended test/persona-cross-transport.mjs (pw-08's own file) in place --
+  no new/parallel test harness. Reused its exact conventions: same fake-$HOME
+  isolation, same writeCandidateFile/cliShow/skillShow/mcpShow helpers, same
+  fixtureDir, same PASS/FAIL `ok()` reporter. Added transport D (HTTP):
+  spawns a real lib/mnemosyne/server.ts subprocess via tsx (same
+  spawn-and-wait-for-/health convention as test/http-api.mjs), on its own
+  port (8505) distinct from every other test file's port, pointed at the
+  same fakeHome tree every other transport in this file already uses.
+  Added 4 new round-trip blocks (AC 5-8): write via HTTP -> read via
+  CLI/skill-harness/MCP (all three reads stay BYTE-IDENTICAL to each other,
+  same as AC 1-3's pattern), and write via each of CLI/skill-harness/MCP ->
+  read via HTTP's GET /persona/:tier/:scopeId. HTTP's GET returns structured
+  JSON ({persona: {...}}), not the other three's formatted text, so its
+  round-trip assertions check exact field equality (tier/scopeId/
+  displayName/scope/sections) against the written candidate rather than
+  byte-identical strings. Ran the full extended file for real: all 8 AC
+  blocks plus the pre-existing AC4a/4b lock-race proofs pass (52 PASS, 0
+  FAIL). No divergence between the HTTP transport and the other three was
+  found -- pw-15's routes wrap writeGlobalPersona/readGlobalPersona exactly
+  as the other transports' underlying calls do, so this required zero
+  production-code changes. Also reran tsc --noEmit (clean) and
+  vitest lib/mnemosyne/layer1 (196/196, 14 files) myself.
 
 description: |
   Completes pw-08's cross-transport round-trip story, which deliberately

@@ -1,15 +1,31 @@
-// persona-cross-transport.mjs — pw-08-cross-transport-roundtrip.
+// persona-cross-transport.mjs — pw-08-cross-transport-roundtrip, extended by
+// pw-16-fourth-transport-roundtrip to add HTTP as a genuine 4th transport.
 //
 // This story is qualitatively different from pw-05/pw-06/pw-07 individually:
 // those each prove "this transport's write works in isolation." This file
 // proves the design discussion's explicit risk-table guardrail -- that the
 // CLI (bin/mnemosyne-persona.mjs, pw-05), the skill-harness
 // (bin/mnemosyne-skill-helper.mjs's personaCreateAction/personaShowAction,
-// pw-06), and MCP (bin/mnemosyne-mcp.mjs's persona_create/persona_show,
-// pw-07) all funnel through the SAME underlying writeGlobalPersona/
+// pw-06), MCP (bin/mnemosyne-mcp.mjs's persona_create/persona_show,
+// pw-07), and now HTTP (lib/mnemosyne/server.ts's GET/POST /persona/*,
+// pw-02/pw-15) all funnel through the SAME underlying writeGlobalPersona/
 // writeRepoLocalPersona + withLock (lib/mnemosyne/layer1/persona-store-
-// global.ts, persona-store-repo-local.ts, lock.ts) -- not three
+// global.ts, persona-store-repo-local.ts, lock.ts) -- not four
 // independently-plausible-looking write paths that have quietly diverged.
+//
+// pw-16: at pw-08 (Slice 2) time, HTTP had no /persona/* routes yet, so this
+// file's round-trip matrix deliberately only covered CLI/skill-harness/MCP.
+// pw-15 has since shipped POST /persona/:tier/:scopeId (GET already existed
+// from pw-02), so this file now completes the matrix: write via HTTP, read
+// back via CLI/skill-harness/MCP (AC 5), and write via each of the original
+// three, read back via HTTP's GET (AC 6-8). HTTP's GET /persona/:tier/:scopeId
+// returns a structured JSON `{persona: {...}}` body (server.ts), not the
+// formatted text CLI `show`/skill-harness/MCP produce -- so "content matches
+// exactly" for HTTP round-trips is asserted as exact field-for-field JSON
+// equality against the written candidate (displayName/scope/sections),
+// rather than the byte-identical-string check used among the three
+// text-producing transports (which do stay byte-identical to each other,
+// same as AC 1-3).
 //
 // Two things this file proves that no single-transport test can:
 //
@@ -70,21 +86,25 @@
 // test:persona-cross-transport` or `node test/persona-cross-transport.mjs`.
 //
 // $HOME is overridden to a real, throwaway temp directory for every
-// transport (CLI subprocess env, MCP subprocess transport env, and this
-// process's own process.env.HOME for the in-process skill-harness action
-// calls, whose execFileAsync inherits it) -- mirrors test/persona-cli.mjs's,
-// test/skill-harness.mjs's, and test/mcp-server-persona.mjs's own
-// fake-$HOME convention. Never touches the operator's real
-// ~/.mnemosyne/personas.
+// transport (CLI subprocess env, MCP subprocess transport env, the real
+// lib/mnemosyne/server.ts HTTP subprocess env, and this process's own
+// process.env.HOME for the in-process skill-harness action calls, whose
+// execFileAsync inherits it) -- mirrors test/persona-cli.mjs's,
+// test/skill-harness.mjs's, test/mcp-server-persona.mjs's, and
+// test/http-api.mjs's own fake-$HOME convention. Never touches the
+// operator's real ~/.mnemosyne/personas.
 //
-// Uses PORT 8504 -- distinct from every other test file's port
-// (8477/8479/8483/8487/8491/8492/8497/8498/8499/8500/8501/8502).
+// Uses PORT 8504 (MCP's swarm-memory ensureRunning target) and PORT_HTTP
+// 8505 (this file's own real lib/mnemosyne/server.ts subprocess, spawned
+// the same way test/http-api.mjs spawns it) -- both distinct from every
+// other test file's port
+// (8477/8479/8483/8487/8491/8492/8497/8498/8499/8500/8501/8502/31415).
 //
 // Usage: node test/persona-cross-transport.mjs
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -100,7 +120,10 @@ const ROOT = path.resolve(__dirname, "..");
 const TSX_BIN = path.join(ROOT, "node_modules", ".bin", "tsx");
 const PERSONA_CLI = path.join(ROOT, "bin", "mnemosyne-persona.mjs");
 const MCP_SERVER_PATH = path.join(ROOT, "bin", "mnemosyne-mcp.mjs");
+const HTTP_SERVER_PATH = path.join(ROOT, "lib", "mnemosyne", "server.ts");
 const PORT = 8504;
+const PORT_HTTP = 8505;
+const HTTP_BASE = `http://127.0.0.1:${PORT_HTTP}`;
 
 let fails = 0;
 const ok = (condition, message) => {
@@ -213,6 +236,42 @@ async function mcpShow(client, tier, scopeId) {
   return { isError: result.isError === true, ...toolResultJson(result) };
 }
 
+// --- transport D: HTTP (lib/mnemosyne/server.ts, real subprocess spawned
+// via tsx exactly like test/http-api.mjs -- POST/GET /persona/:tier/:scopeId,
+// pw-02/pw-15) ---------------------------------------------------------------
+
+/** POST /persona/:tier/:scopeId -- the request body IS the bare persona candidate (server.ts). */
+async function httpCreate(candidate) {
+  const res = await fetch(`${HTTP_BASE}/persona/${candidate.tier}/${candidate.scopeId}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(candidate),
+  });
+  const body = await res.json();
+  return { ok: res.status === 201, status: res.status, body };
+}
+
+/** GET /persona/:tier/:scopeId -- returns {persona: {...}} as structured JSON, not formatted text. */
+async function httpShow(tier, scopeId) {
+  const res = await fetch(`${HTTP_BASE}/persona/${tier}/${scopeId}`);
+  const body = await res.json();
+  return { ok: res.status === 200, status: res.status, persona: body.persona };
+}
+
+async function waitForHttpHealth(timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`${HTTP_BASE}/health`);
+      if (res.status === 200 || res.status === 503) return true;
+    } catch {
+      // not up yet
+    }
+    await sleep(100);
+  }
+  return false;
+}
+
 // --- main --------------------------------------------------------------
 
 async function main() {
@@ -235,7 +294,28 @@ async function main() {
   });
   const client = new Client({ name: "persona-cross-transport-test", version: "0.1.0" });
 
+  // pw-16: a real lib/mnemosyne/server.ts subprocess for the HTTP transport
+  // -- same tsx-spawn convention as test/http-api.mjs, same fake $HOME so
+  // its GET/POST /persona/* routes (global tier -- see globalPersonaPath())
+  // read/write inside the exact same fakeHome tree every other transport
+  // uses here, not a second isolated store.
+  const httpChild = spawn(TSX_BIN, [HTTP_SERVER_PATH], {
+    cwd: ROOT,
+    env: { ...process.env, MNEMOSYNE_PORT: String(PORT_HTTP), HOME: fakeHome },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let httpServerOutput = "";
+  httpChild.stdout.on("data", (c) => (httpServerOutput += c));
+  httpChild.stderr.on("data", (c) => (httpServerOutput += c));
+
   try {
+    const httpUp = await waitForHttpHealth(15_000);
+    ok(httpUp, "real lib/mnemosyne/server.ts HTTP subprocess started and is reachable");
+    if (!httpUp) {
+      console.error(httpServerOutput);
+      throw new Error("HTTP server never became reachable");
+    }
+
     // A generous connect timeout: bin/mnemosyne-mcp.mjs's main() calls
     // ensureRunning() (up to its own 90s startTimeoutMs) BEFORE it ever
     // connects the stdio transport, so a cold start on a not-yet-warm PORT
@@ -482,8 +562,145 @@ async function main() {
       }
       console.log(`  (info)  organic race outcome across ${REPETITIONS} repetitions: CLI won ${cliWins}, MCP won ${mcpWins}`);
     }
+
+    // =====================================================================
+    // AC 5 (pw-16) — write via HTTP (POST /persona/:tier/:scopeId), read
+    // back via CLI's show, MCP's persona_show, AND the skill-harness's
+    // persona-show. Mirrors AC 1-3's pattern exactly: the three text-based
+    // reads must still be BYTE-IDENTICAL to each other (same underlying CLI
+    // `show` text-output path, see file header), regardless of which
+    // transport performed the write.
+    // =====================================================================
+    {
+      const candidate = {
+        tier: "top-orchestrator",
+        scopeId: "xt-write-http",
+        displayName: "Top Orchestrator",
+        scope: "XT_WRITE_HTTP_SCOPE_MARKER — authored via POST /persona/:tier/:scopeId.",
+        sections: [{ heading: "Mandate", body: "XT_WRITE_HTTP_BODY_MARKER — real HTTP write." }],
+      };
+
+      const writeResult = await httpCreate(candidate);
+      ok(writeResult.ok, `write via HTTP (POST /persona/:tier/:scopeId) succeeded (${JSON.stringify(writeResult).slice(0, 200)})`);
+
+      const viaCli = await cliShow(candidate.tier, candidate.scopeId, { home: fakeHome });
+      ok(viaCli.ok, `read back via CLI show succeeded (${JSON.stringify(viaCli)})`);
+
+      const viaSkill = await skillShow(candidate.tier, candidate.scopeId);
+      ok(viaSkill.ok === true, `read back via skill-harness persona-show succeeded (${JSON.stringify(viaSkill).slice(0, 200)})`);
+
+      const viaMcp = await mcpShow(client, candidate.tier, candidate.scopeId);
+      ok(!viaMcp.isError && viaMcp.ok === true, `read back via MCP persona_show succeeded (${JSON.stringify(viaMcp).slice(0, 200)})`);
+
+      ok(
+        viaCli.stdout.includes("XT_WRITE_HTTP_SCOPE_MARKER") && viaCli.stdout.includes("XT_WRITE_HTTP_BODY_MARKER"),
+        "CLI read-back contains the HTTP-authored content's real markers",
+      );
+      ok(
+        viaSkill.output.includes("XT_WRITE_HTTP_SCOPE_MARKER") && viaSkill.output.includes("XT_WRITE_HTTP_BODY_MARKER"),
+        "skill-harness read-back contains the HTTP-authored content's real markers",
+      );
+      ok(
+        viaMcp.output.includes("XT_WRITE_HTTP_SCOPE_MARKER") && viaMcp.output.includes("XT_WRITE_HTTP_BODY_MARKER"),
+        "MCP read-back contains the HTTP-authored content's real markers",
+      );
+      ok(
+        viaCli.stdout === viaSkill.output && viaSkill.output === viaMcp.output,
+        "write-via-HTTP: CLI's, skill-harness's, and MCP's read-back text are all BYTE-IDENTICAL (same underlying read path)",
+      );
+    }
+
+    // =====================================================================
+    // AC 6 (pw-16) — write via CLI, read back via HTTP's
+    // GET /persona/:tier/:scopeId. HTTP's read returns structured JSON
+    // ({persona: {...}}), not formatted text, so "matches exactly" is
+    // asserted as exact field equality against the written candidate.
+    // =====================================================================
+    {
+      const candidate = {
+        tier: "company-director",
+        scopeId: "xt-read-http-via-cli",
+        displayName: "Company Director",
+        scope: "XT_READ_HTTP_VIA_CLI_SCOPE_MARKER — authored via CLI `persona create`.",
+        sections: [{ heading: "Mandate", body: "XT_READ_HTTP_VIA_CLI_BODY_MARKER — real CLI write." }],
+      };
+      const file = await writeCandidateFile(fixtureDir, "read-http-via-cli.yaml", candidate);
+
+      const writeResult = await cliCreate(file, { home: fakeHome });
+      ok(writeResult.ok, `write via CLI succeeded (${JSON.stringify(writeResult)})`);
+
+      const viaHttp = await httpShow(candidate.tier, candidate.scopeId);
+      ok(viaHttp.ok, `read back via HTTP GET /persona/:tier/:scopeId succeeded (status ${viaHttp.status})`);
+      ok(
+        viaHttp.persona?.tier === candidate.tier &&
+          viaHttp.persona?.scopeId === candidate.scopeId &&
+          viaHttp.persona?.displayName === candidate.displayName &&
+          viaHttp.persona?.scope === candidate.scope &&
+          JSON.stringify(viaHttp.persona?.sections) === JSON.stringify(candidate.sections),
+        `write-via-CLI: HTTP GET read-back matches the CLI-authored candidate field-for-field (got ${JSON.stringify(viaHttp.persona)})`,
+      );
+    }
+
+    // =====================================================================
+    // AC 7 (pw-16) — write via skill-harness, read back via HTTP's
+    // GET /persona/:tier/:scopeId.
+    // =====================================================================
+    {
+      const candidate = {
+        tier: "project-orchestrator",
+        scopeId: "xt-read-http-via-skill",
+        displayName: "Project Orchestrator",
+        scope: "XT_READ_HTTP_VIA_SKILL_SCOPE_MARKER — authored via personaCreateAction.",
+        sections: [{ heading: "Mandate", body: "XT_READ_HTTP_VIA_SKILL_BODY_MARKER — real skill-harness write." }],
+      };
+      const file = await writeCandidateFile(fixtureDir, "read-http-via-skill.yaml", candidate);
+
+      const writeResult = await skillCreate(file);
+      ok(writeResult.ok === true, `write via skill-harness succeeded (${JSON.stringify(writeResult).slice(0, 200)})`);
+
+      const viaHttp = await httpShow(candidate.tier, candidate.scopeId);
+      ok(viaHttp.ok, `read back via HTTP GET /persona/:tier/:scopeId succeeded (status ${viaHttp.status})`);
+      ok(
+        viaHttp.persona?.tier === candidate.tier &&
+          viaHttp.persona?.scopeId === candidate.scopeId &&
+          viaHttp.persona?.displayName === candidate.displayName &&
+          viaHttp.persona?.scope === candidate.scope &&
+          JSON.stringify(viaHttp.persona?.sections) === JSON.stringify(candidate.sections),
+        `write-via-skill-harness: HTTP GET read-back matches the skill-harness-authored candidate field-for-field (got ${JSON.stringify(viaHttp.persona)})`,
+      );
+    }
+
+    // =====================================================================
+    // AC 8 (pw-16) — write via MCP, read back via HTTP's
+    // GET /persona/:tier/:scopeId.
+    // =====================================================================
+    {
+      const candidate = {
+        tier: "top-orchestrator",
+        scopeId: "xt-read-http-via-mcp",
+        displayName: "Top Orchestrator",
+        scope: "XT_READ_HTTP_VIA_MCP_SCOPE_MARKER — authored via persona_create.",
+        sections: [{ heading: "Mandate", body: "XT_READ_HTTP_VIA_MCP_BODY_MARKER — real MCP write." }],
+      };
+      const file = await writeCandidateFile(fixtureDir, "read-http-via-mcp.yaml", candidate);
+
+      const writeResult = await mcpCreate(client, file);
+      ok(!writeResult.isError && writeResult.ok === true, `write via MCP succeeded (${JSON.stringify(writeResult).slice(0, 200)})`);
+
+      const viaHttp = await httpShow(candidate.tier, candidate.scopeId);
+      ok(viaHttp.ok, `read back via HTTP GET /persona/:tier/:scopeId succeeded (status ${viaHttp.status})`);
+      ok(
+        viaHttp.persona?.tier === candidate.tier &&
+          viaHttp.persona?.scopeId === candidate.scopeId &&
+          viaHttp.persona?.displayName === candidate.displayName &&
+          viaHttp.persona?.scope === candidate.scope &&
+          JSON.stringify(viaHttp.persona?.sections) === JSON.stringify(candidate.sections),
+        `write-via-MCP: HTTP GET read-back matches the MCP-authored candidate field-for-field (got ${JSON.stringify(viaHttp.persona)})`,
+      );
+    }
   } finally {
     await client.close().catch(() => {});
+    httpChild.kill();
     if (savedHome === undefined) delete process.env.HOME;
     else process.env.HOME = savedHome;
     await rm(fakeHome, { recursive: true, force: true });
