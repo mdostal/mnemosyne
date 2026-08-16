@@ -1,10 +1,25 @@
 id: ml-08-file-store-index-rebuild
 epic: mnemosyne-memory-levels
 title: "Level 4 sub-index rebuild trigger (CLI verb) + regression test"
-status: pending
+status: complete
 complexity: low
 methodology: tdd
 depends_on: [ml-07-file-store-index-query]
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 437725c). Independently verified: read the full
+  diff (bin/mnemosyne-file-index.mjs, fileWalk.ts, package.json) -- confirmed
+  it calls ml-06's writeFileStoreIndex directly with zero reimplementation,
+  confirmed writeFileStoreIndex always does a full from-scratch walk +
+  overwrite (no merge path, no first-build-vs-rebuild branching). Confirmed
+  and independently re-derived the real bug the builder found and fixed:
+  `.mnemosyne` was missing from DEFAULT_IGNORED_DIRECTORIES, causing a
+  second build to self-index its own manifest. Ran my own manual smoke test
+  against a real temp fixture directory (build, delete a file, add a new
+  file, rebuild) confirming the deleted file's entry is gone, the new file's
+  entry is present, and the manifest never contains a self-referential
+  .mnemosyne entry. Reran tsc --noEmit (clean) and vitest
+  lib/mnemosyne/layers (136/136) myself. All acceptance criteria met.
 
 description: |
   Closes the last gap in the Level 4 sub-index: an operator-triggered
