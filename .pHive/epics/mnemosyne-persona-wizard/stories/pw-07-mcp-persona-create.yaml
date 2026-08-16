@@ -1,9 +1,24 @@
 id: pw-07-mcp-persona-create
 epic: mnemosyne-persona-wizard
 title: "MCP: persona_create tool"
-status: pending
+status: complete
 complexity: low
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-15 (commit 738fe3c). Real TDD, independently verified:
+  reran mcp-server-persona.mjs (all PASS, including global-tier write,
+  repo-local write with content round-trip, bad-tier rejection, and
+  mandateSections smuggling rejected before any disk write), mcp-server.mjs
+  (tools/list count 11->12, confirmed), vitest lib/mnemosyne/layer1
+  (150/150), tsc clean. Registration matches persona_sync/persona_seed/
+  persona_show's exact shape; persona_create is a thin wrapAction() wrap of
+  pw-06's personaCreateAction, zero new business logic. Judgment call
+  (documented, agreed): the AC's "invalid arguments" case is exercised via a
+  bad-tier YAML-content test rather than a missing --file test, since --file
+  is a required zod string already correctly rejected at the MCP transport
+  layer before the handler runs (consistent with persona_sync's existing
+  required-arg behavior). All acceptance criteria met.
 depends_on: [pw-06-skill-harness-persona-create]
 
 description: |
