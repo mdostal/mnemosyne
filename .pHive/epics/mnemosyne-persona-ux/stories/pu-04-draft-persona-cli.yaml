@@ -1,9 +1,26 @@
 id: pu-04-draft-persona-cli
 epic: mnemosyne-persona-ux
 title: "CLI: mnemosyne persona draft propose|show|approve|discard"
-status: planned
+status: complete
 complexity: medium
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit bab5b32). Independently verified: read
+  runDraftApprove and formatDraftShow in full -- confirmed the
+  remember()-firing condition matches pu-03's HTTP route exactly (fires
+  only when the pre-strip draft carries a non-empty sourceSummary, uses
+  resolveRememberScope() -- imported directly since the CLI is tsx-launched
+  and can import .ts, unlike persona-remember.mjs's subprocess-wrapped
+  variant -- and fireRememberCall() for the actual transport). Confirmed
+  formatDraftShow's output is unmistakably distinct from formatPersonaShow
+  (banner-wrapped, literal "DRAFT" text top and bottom, never a bare field
+  list). Confirmed a failed approve leaves the draft active and writes
+  nothing to the real store. Reran node test/persona-cli.mjs myself (all
+  checks pass, including the real cross-transport-adjacent remember-firing
+  proof against a real src/server.mjs + fixture), tsc --noEmit (clean), and
+  vitest lib/mnemosyne/layer1 (230/230) myself. All acceptance criteria
+  met.
 depends_on: [pu-02-draft-persona-store]
 
 description: |
