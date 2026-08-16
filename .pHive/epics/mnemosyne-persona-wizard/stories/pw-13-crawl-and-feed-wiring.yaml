@@ -1,9 +1,33 @@
 id: pw-13-crawl-and-feed-wiring
 epic: mnemosyne-persona-wizard
 title: Crawl-and-feed - remember() wiring using resolved mapping
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 3e1d95e, built directly on the branch).
+  Independently verified: read persona-remember.mjs in full -- confirmed
+  resolveRememberScopeViaCli() spawns a real tsx subprocess calling a new
+  `mnemosyne persona resolve-remember-scope` CLI subcommand
+  (bin/mnemosyne-persona.mjs), which is a genuine pass-through to persona.ts's
+  real resolveRememberScope() (grep-confirmed: imports and calls it
+  directly, no hand-copied table). Confirmed fireRememberCall() spawns a
+  real `node bin/mnemosyne-skill-helper.mjs remember` subprocess (the real
+  rememberAction -> POST /remember -> engine.mjs's remember()). Confirmed
+  rememberInterviewSource() has no conditional no-op branch -- fires
+  unconditionally since buildRememberText() always produces non-empty text
+  given the non-blocking hard-fail rule's guarantee of 3 populated core
+  sections. Reran the new persona-interview-crawl-and-feed.test.ts myself
+  (5/5) -- confirmed it independently re-derives the expected scope via a
+  DIRECT import of persona.ts's real resolveRememberScope() and asserts the
+  subprocess-derived scope matches it exactly (not just internal
+  self-consistency), and confirmed both the global-tier and code-architect
+  max-skip cases (reusing pw-12's exact skip-all pattern) still fire a real
+  remember() call. Reran tsc --noEmit (clean) and the full vitest suite
+  (599/599, 45 files, no regressions) myself. Closes the epic's stated
+  release-gate "initial crawl and feeding" requirement. All acceptance
+  criteria met.
 depends_on: [pw-09-remember-scope-mapping, pw-12-interview-skill-skip-all-regression]
 
 description: |
