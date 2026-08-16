@@ -1,0 +1,125 @@
+id: pu-07-bounded-crawl-context
+epic: mnemosyne-persona-ux
+title: "Interview skill: bounded, capped crawl -> sourceSummary"
+status: planned
+complexity: medium
+methodology: tdd
+depends_on: []
+
+description: |
+  Implements horizontal-plan.md H6's crawl component: replaces
+  skills/mnemosyne-persona-interview's opportunistic step 2 ("load whatever
+  context is already in the conversation") with an explicit, named, CAPPED
+  source list and a resulting sourceSummary string. Direct operator mandate,
+  quoted verbatim in design-discussion.md §0 ask 2: "give it a way to crawl
+  and help build a short, reasonable context on there without overdoing it."
+  The cap is the concrete mechanism that makes "without overdoing it" a real,
+  testable constraint rather than a vibe.
+
+acceptance_criteria:
+  - "Given a repo path and (for global tiers) a company/project scope, when the bounded crawl runs, then it reads AT MOST the named source list -- repo README, package/project manifest, existing CLAUDE.md/AGENTS.md if present, the applicable parent persona's own summary via query-up (never its full sections content, preserving persona.ts's buildParentContextSections copy-down guarantee) -- and never reads anything outside that list"
+  - "Given the crawl completes, when its output is inspected, then it produces a single sourceSummary string bounded by an explicit, documented cap (e.g. a fixed max character/line count), never an unbounded dump of file contents"
+  - "Given a repo with none of the named sources present (no README, no manifest, no CLAUDE.md/AGENTS.md, no parent persona), when the crawl runs, then it still produces a valid (if minimal) sourceSummary and does not error -- matching this skill's existing non-blocking hard-fail philosophy (pw-10/12), extended to the crawl step"
+  - "Given a parent persona exists and is queried, when the crawl's sourceSummary is inspected, then it contains only the parent's own high-level summary/pointer, never the parent's full sections content verbatim -- the crawl step must not become a new, second copy-down path alongside the one persona.ts's buildParentContextSections already guards against"
+
+steps:
+  - id: research
+    description: >
+      Read skills/mnemosyne-persona-interview/SKILL.md step 2 in full (the
+      existing, unbounded 'load whatever's already known' behavior this
+      ticket replaces) and interview-engine.mjs's existing structure
+      (CORE_QUESTIONS/OPTIONAL_QUESTIONS/resolveAnswer/runPersonaInterview) as
+      the pure-function style this ticket's new crawl helper must match.
+      Read persona.ts's buildParentContextSections to confirm exactly what
+      "pointer-only, never copy-down" means for parent content, so the
+      crawl's own parent-summary read respects the identical boundary.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Write failing tests for: the named source list is read exhaustively but
+      never exceeded (a fixture repo with extra, irrelevant files confirms
+      those are never touched); the cap is enforced (a fixture with an
+      oversized README produces a truncated, capped sourceSummary, not a full
+      dump); the no-sources-present case still produces a valid, non-empty
+      sourceSummary; a parent-persona fixture's full sections content never
+      appears verbatim in the resulting sourceSummary (only a summary/pointer
+      does).
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Add a new, documented crawl step to SKILL.md (replacing the prose-only
+      step 2), plus a pure, testable helper (alongside interview-engine.mjs,
+      e.g. a new crawl-context.mjs) implementing the named source list, the
+      cap, and the parent-summary-only rule. Deliberately zero import from
+      persona-store-global.ts/persona-store-repo-local.ts for reading a
+      parent's FULL content -- only whatever summary-level data
+      getPersonaContent's own pointer-only rendering already exposes.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: >
+      Confirm the named source list in SKILL.md's prose matches the actual
+      implemented list in code exactly (no drift between documentation and
+      behavior). Confirm the cap is a real, enforced value (not just
+      documented intent) by re-running the oversized-README test case
+      directly.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: skills/mnemosyne-persona-interview/SKILL.md
+      purpose: "Step 2's current prose ('Load context BEFORE asking anything') -- what this ticket replaces with an explicit, named, capped crawl. Every other step (3-9) is unchanged by this ticket."
+    - path: skills/mnemosyne-persona-interview/interview-engine.mjs
+      purpose: "The existing pure-function style (CORE_QUESTIONS, resolveAnswer, runPersonaInterview) this ticket's new crawl helper matches -- zero import from persona.ts, produces plain data, testable in isolation."
+    - path: lib/mnemosyne/layer1/persona.ts
+      purpose: "buildParentContextSections -- the exact 'pointer-only, never copy-down' guarantee already code-enforced for a persona's parentRefs at render time; this ticket's crawl step must respect the identical boundary when reading a parent persona's own summary, not introduce a second, looser copy-down path."
+
+files_to_modify:
+  - file: skills/mnemosyne-persona-interview/SKILL.md
+    change: "Step 2 rewritten as an explicit, named, capped crawl step, documenting the source list and the cap."
+  - file: skills/mnemosyne-persona-interview/crawl-context.mjs
+    change: "New file. Pure helper implementing the named source list, the cap, and the sourceSummary output, mirroring interview-engine.mjs's dependency-light style."
+  - file: skills/mnemosyne-persona-interview/crawl-context.d.mts
+    change: "New file. Hand-written type companion, matching interview-engine.d.mts's own convention."
+  - file: lib/mnemosyne/layer1/__tests__/persona-interview-crawl.test.ts
+    change: "New file. Bounded-source-list, cap-enforcement, no-sources-present, and parent-summary-only-never-full-content coverage."
+
+design_decisions:
+  - decision: "The crawl is a fixed, small, NAMED source list with an explicit cap, not an open-ended 'read whatever seems relevant' instruction."
+    rationale: "design-discussion.md §3c, direct operator quote: 'a way to crawl and help build a short, reasonable context on there without overdoing it.' A named list + a real, enforced cap is the only way to make 'without overdoing it' testable rather than a matter of an individual agent's judgment on any given run."
+  - decision: "The parent persona's own content is read at summary/pointer level only, reusing persona.ts's existing buildParentContextSections boundary, never a second, independent copy-down path."
+    rationale: "The already-shipped, already-tested 'query up, never copy down' guarantee (pf-12) is explicitly out of scope to relitigate (design-discussion.md §0/§1) -- this ticket's crawl step must extend, not weaken, that guarantee."
+
+cross_cutting: []
+
+risks:
+  - severity: medium
+    description: "A poorly-chosen cap could either be too tight (sourceSummary too thin to be useful, defeating the point of crawling at all) or too loose (defeats 'without overdoing it')."
+    mitigation: "The cap is documented explicitly in SKILL.md as a named, reviewable value, not buried in code -- a future ticket can retune it with a clear single point of change, rather than it being an emergent property of prompt behavior."
+  - severity: low
+    description: "A future edit to SKILL.md's crawl-step prose could drift from the actual implemented source list in crawl-context.mjs without either side erroring."
+    mitigation: "The review step explicitly checks documentation/code parity as a named gate, matching the same discipline pu-05 applies to its SKILL.md action-table update."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-ux/docs/design-discussion.md
+    relevant_excerpt: |
+      §0 ask 2 (verbatim): "give it a way to crawl and help build a short,
+      reasonable context on there without overdoing it -- so we want to nail
+      that across where we work with an agent to say -- your context is high
+      level over these projects, here is a brief summary, here are the
+      repos, help me do the topmost understanding and metadata for this so
+      you can orchestrate."
+  - path: .pHive/epics/mnemosyne-persona-ux/docs/horizontal-plan.md
+    relevant_excerpt: |
+      H6 component 1: "a fixed, small source list... with an explicit
+      file-count/line cap, producing a short sourceSummary string. This is a
+      new, documented step in SKILL.md, with a corresponding pure helper...
+      implementing the cap deterministically, testable the same way
+      resolveAnswer()/runPersonaInterview() already are."

@@ -1,0 +1,115 @@
+id: pu-04-draft-persona-cli
+epic: mnemosyne-persona-ux
+title: "CLI: mnemosyne persona draft propose|show|approve|discard"
+status: planned
+complexity: medium
+methodology: tdd
+depends_on: [pu-02-draft-persona-store]
+
+description: |
+  Implements horizontal-plan.md H4's CLI component: the canonical
+  implementation layer for the draft mechanism, mirroring the wizard epic's
+  own Decision 2 (CLI-first, nothing downstream can be built before it).
+  This is the concrete surface the agent-assisted interview flow (pu-08)
+  proposes drafts through -- the same reasoning the interview skill's
+  SKILL.md already documents for why the CLI is its default write surface (a
+  live agent session always has shell-out, may not have an open MCP
+  connection) applies identically here.
+
+acceptance_criteria:
+  - "Given a persona-shaped YAML file, when `mnemosyne persona draft propose --file <path> [--repo <repo>]` is run, then pu-02's writeDraftPersona is called and the CLI prints the written draft's path on stdout, in a format a caller can parse (mirroring `create`'s own `created ... -> <path>` convention)"
+  - "Given an active draft exists at {tier, scopeId}, when `mnemosyne persona draft show <tier> <scope-id> [--repo <repo>]` is run, then it prints that draft's content, including its sourceSummary/proposedBy/proposedAt metadata if present, distinctly labeled as a DRAFT (never rendered indistinguishably from `persona show`'s real-store output)"
+  - "Given an active draft, when `mnemosyne persona draft approve <tier> <scope-id> [--repo <repo>]` is run, then it produces the same outcome pu-03's POST .../approve route produces (real commit via the unchanged write primitive, draft archived) -- verified by a direct filesystem read of both the committed file and the archived draft location, not just exit code 0"
+  - "Given an active draft, when `mnemosyne persona draft discard <tier> <scope-id> [--repo <repo>]` is run, then the draft is archived to the discarded/ subtree (never deleted) and `persona draft show` for the same identity afterward reports no active draft"
+  - "Given a candidate that fails structural sanity (bad tier) at propose time, or fails assertValidPersona at approve time, when the relevant subcommand is run, then it exits non-zero with a clear stderr message -- never a silent no-op or exit 0"
+
+steps:
+  - id: research
+    description: >
+      Read bin/mnemosyne-persona.mjs in full: the existing run() dispatcher
+      shape, how `create`/`sync`/`seed`/`show`/`resolve-remember-scope`
+      subcommands parse args and import lib/mnemosyne/layer1/*.ts directly
+      (tsx-launched, per that file's own doc comment on why a plain-node
+      process couldn't do this). This ticket's new `draft` subcommand group
+      follows the identical import/dispatch shape, not a new one.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Extend test/persona-cli.mjs's existing AC-tagged, real-subprocess-spawn
+      convention with a new AC-draft-propose/AC-draft-show/AC-draft-approve/
+      AC-draft-discard set: successful propose+show round-trip (global and
+      repo-local); approve producing the identical committed file `create`
+      would have produced for the same candidate (fs read, not exit-code-only);
+      approve-failure-leaves-draft-active; discard-then-show-reports-none;
+      non-zero exit + stderr message on structural/validation rejection.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Add `draft propose|show|approve|discard` subcommands to
+      bin/mnemosyne-persona.mjs's run() dispatcher, importing pu-02's
+      persona-draft-store.ts directly for propose/show/discard, and (for
+      approve) importing writeGlobalPersona/writeRepoLocalPersona directly --
+      the same functions `create` already imports, never a re-derived write
+      path.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: >
+      Confirm `draft approve`'s implementation is not a second copy of
+      pu-03's route logic with independent drift risk -- both call the exact
+      same lib/mnemosyne/layer1 functions (persona-draft-store.ts's
+      disposeDraftPersona, and writeGlobalPersona/writeRepoLocalPersona), just
+      from two different transport entry points. Confirm every subcommand's
+      output is clearly labeled DRAFT where relevant, distinguishable from
+      the real `persona show`'s output at a glance.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: bin/mnemosyne-persona.mjs
+      purpose: "The canonical CLI implementation layer -- existing create/sync/seed/show/resolve-remember-scope subcommands' exact dispatch and lib/mnemosyne/layer1/*.ts import shape this ticket's new draft subcommand group follows identically."
+    - path: lib/mnemosyne/layer1/persona-draft-store.ts
+      purpose: "pu-02's store functions this CLI wraps directly for propose/show/discard."
+    - path: skills/mnemosyne-persona-interview/persona-writer.mjs
+      purpose: "writePersonaViaCli's exact real-subprocess-spawn shape (tsx-launched, temp-file YAML, stdout-path-parsing) -- pu-08's later interview-skill wiring to this ticket's `draft propose` subcommand reuses this exact pattern, so this ticket's stdout format must stay parse-compatible with it."
+
+files_to_modify:
+  - file: bin/mnemosyne-persona.mjs
+    change: "New `draft propose|show|approve|discard` subcommands added to the existing run() dispatcher."
+  - file: test/persona-cli.mjs
+    change: "New AC-draft-* assertions extending the existing real-subprocess-spawn convention."
+
+design_decisions:
+  - decision: "`draft propose` (not `draft create`) as the verb naming, distinct from the real store's `create` verb."
+    rationale: "vertical-plan.md's Resolved Ambiguities #1: makes the semantic difference between 'write a real persona' and 'suggest one for review' unambiguous at every transport, consistent across CLI/skill-harness/MCP/HTTP."
+  - decision: "`draft show`'s output is explicitly, visibly labeled as a draft, never rendered in a form indistinguishable from the real `persona show`."
+    rationale: "design-discussion.md §4 lens 4 (agent-provenance/trust-calibration): a human (or another agent) inspecting CLI output must never mistake in-review content for committed, governing persona content, at any transport, not just in the browser UI."
+
+cross_cutting: []
+
+risks:
+  - severity: medium
+    description: "`draft approve`'s CLI implementation and pu-03's HTTP approve route could quietly diverge over time (e.g. one strips draft-only metadata slightly differently than the other) since they are two independent call sites into the same underlying functions."
+    mitigation: "pu-06's cross-transport tests explicitly prove CLI-approve and HTTP-approve produce byte-for-byte identical committed output for the same input draft -- this ticket's own review step is a first check, pu-06 is the real, independent proof."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-ux/docs/horizontal-plan.md
+    relevant_excerpt: |
+      H4: "CLI (bin/mnemosyne-persona.mjs): new draft propose --file <path>
+      [--repo <repo>], draft show <tier> <scope-id> [--repo <repo>], draft
+      approve <tier> <scope-id> [--repo <repo>], draft discard <tier>
+      <scope-id> [--repo <repo>] subcommands, added to the existing run()
+      dispatcher alongside create/sync/seed/show/resolve-remember-scope."
+  - path: .pHive/epics/mnemosyne-persona-wizard/docs/vertical-plan.md
+    relevant_excerpt: |
+      "Decision 2 ... the MCP tool cannot exist as working code before the
+      skill-harness action exists, which cannot exist as working code before
+      the CLI verb exists." -- the same chain this ticket is the first link
+      of for the draft mechanism.

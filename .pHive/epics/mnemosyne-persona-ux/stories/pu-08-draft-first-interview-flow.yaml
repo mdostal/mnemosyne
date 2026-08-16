@@ -1,0 +1,130 @@
+id: pu-08-draft-first-interview-flow
+epic: mnemosyne-persona-ux
+title: "Interview skill: draft-first write target + --commit-directly escape hatch"
+status: planned
+complexity: medium
+methodology: tdd
+depends_on: [pu-04-draft-persona-cli, pu-07-bounded-crawl-context]
+
+description: |
+  Implements horizontal-plan.md H6's write-target component: rewrites
+  skills/mnemosyne-persona-interview's step 7 to call pu-04's `mnemosyne
+  persona draft propose` by default instead of `mnemosyne persona create`,
+  attaching pu-07's sourceSummary to the proposed draft's metadata. A new
+  `--commit-directly` invocation flag reproduces the OLD (pre-epic) immediate-
+  commit behavior exactly, for backward compatibility. This is the concrete
+  mechanism making the operator's ask 2 real: "we need an interaction to
+  build that and then a human to approve it, rather than expecting a full
+  drill down in one text body" -- the skill now PROPOSES by default; it no
+  longer commits on completion.
+
+acceptance_criteria:
+  - "Given a completed interview run with no --commit-directly flag, when step 7 executes, then it calls pu-04's `mnemosyne persona draft propose` (never `persona create`) with the assembled candidate PLUS proposedBy: 'agent', proposedAt: <timestamp>, and pu-07's sourceSummary attached as draft-only metadata -- verified by a direct filesystem read confirming an ACTIVE DRAFT exists, and that the real persona store (writeGlobalPersona/writeRepoLocalPersona's on-disk targets) was NOT touched"
+  - "Given the exact same completed interview run WITH --commit-directly, when step 7 executes, then it calls `mnemosyne persona create` exactly as the pre-epic skill did, producing a committed persona byte-for-byte identical (modulo timestamps) to what the wizard epic's already-shipped persona-interview-output.test.ts already proves for that exact input"
+  - "Given step 8 (remember() crawl-and-feed), when the default (draft-first) path is used, then step 8 does NOT fire yet -- remember()-ing source material for a persona that hasn't been human-approved would prematurely index unreviewed content; step 8 is deferred until after approval (see design_decisions below for where this moves)"
+  - "Given --commit-directly is used, when step 8 executes, then it fires exactly as the pre-epic skill already does (unconditionally, immediately after the commit) -- unchanged behavior for the escape-hatch path"
+
+steps:
+  - id: research
+    description: >
+      Read skills/mnemosyne-persona-interview/SKILL.md step 7 (the current
+      immediate-write behavior via persona-writer.mjs's writePersonaViaCli)
+      and step 8 (persona-remember.mjs's rememberInterviewSource, fired
+      unconditionally right after) in full. Read
+      lib/mnemosyne/layer1/__tests__/persona-interview-output.test.ts and
+      persona-interview-crawl-and-feed.test.ts in full to know exactly what
+      behavior --commit-directly must reproduce byte-for-byte.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Write failing tests for: default path proposes a draft and does NOT
+      call persona create or remember() at all; --commit-directly reproduces
+      the exact pre-epic committed-file output AND fires remember()
+      unconditionally, matching the existing test files' own assertions
+      applied against the flagged path; the proposed draft's metadata
+      includes proposedBy/proposedAt/sourceSummary correctly.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Rewrite SKILL.md step 7 to branch on the new --commit-directly flag:
+      default calls pu-04's `draft propose` (via a new
+      persona-draft-writer.mjs sibling to persona-writer.mjs, reusing its
+      exact real-subprocess-spawn shape but targeting the draft CLI verb);
+      --commit-directly calls the existing, UNCHANGED
+      writePersonaViaCli()/persona-writer.mjs path. Move step 8's remember()
+      call to fire ONLY on the --commit-directly path in this ticket (the
+      default path's remember() timing is explicitly deferred to fire at
+      APPROVAL time instead, which is out of this ticket's scope --
+      see design_decisions and the OQ this surfaces).
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: >
+      Confirm --commit-directly's code path is LITERALLY the pre-epic code,
+      unchanged (persona-writer.mjs/persona-remember.mjs untouched, only
+      SKILL.md's prose and the new branch condition change) -- not a
+      reimplementation that happens to produce similar output. Confirm the
+      default path's persona-draft-writer.mjs never imports
+      writeGlobalPersona/writeRepoLocalPersona directly (only pu-04's CLI, a
+      real subprocess, same non-negotiable rule persona-writer.mjs itself
+      already follows).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: skills/mnemosyne-persona-interview/SKILL.md
+      purpose: "Steps 7-8 -- the immediate-write-then-remember() behavior this ticket changes the DEFAULT of, while preserving it exactly under --commit-directly."
+    - path: skills/mnemosyne-persona-interview/persona-writer.mjs
+      purpose: "writePersonaViaCli's exact real-subprocess-spawn shape -- reused unchanged for --commit-directly, and the template this ticket's new persona-draft-writer.mjs (targeting `draft propose` instead of `create`) mirrors for the default path."
+    - path: skills/mnemosyne-persona-interview/persona-remember.mjs
+      purpose: "rememberInterviewSource -- fires unconditionally today; this ticket restricts that firing to the --commit-directly path only, deferring the default path's remember() timing to approval (out of this ticket's own scope, flagged explicitly)."
+    - path: lib/mnemosyne/layer1/__tests__/persona-interview-output.test.ts
+      purpose: "The wizard epic's own real, disk-round-tripping proof of the pre-epic write behavior -- the exact bar --commit-directly must continue to clear byte-for-byte."
+
+files_to_modify:
+  - file: skills/mnemosyne-persona-interview/SKILL.md
+    change: "Steps 7-8 rewritten: default path proposes a draft (deferring remember() to approval time); --commit-directly reproduces the exact pre-epic behavior unchanged."
+  - file: skills/mnemosyne-persona-interview/persona-draft-writer.mjs
+    change: "New file. writeDraftPersonaViaCli() -- mirrors persona-writer.mjs's writePersonaViaCli() exactly, but spawns `mnemosyne persona draft propose` instead of `mnemosyne persona create`, and attaches proposedBy/proposedAt/sourceSummary metadata."
+  - file: skills/mnemosyne-persona-interview/persona-draft-writer.d.mts
+    change: "New file. Hand-written type companion, matching persona-writer.d.mts's own convention."
+  - file: lib/mnemosyne/layer1/__tests__/persona-interview-draft-output.test.ts
+    change: "New file. Proves the default (draft-propose) path and the --commit-directly (exact-old-behavior) path both work correctly and independently."
+
+design_decisions:
+  - decision: "The default write target becomes `draft propose`; `--commit-directly` reproduces the exact old behavior, rather than the old behavior being removed outright."
+    rationale: "design-discussion.md §9 judgment call #3: this is the concrete mechanism by which ask 2's 'a human to approve it, rather than expecting a full drill down in one text body' takes effect, while keeping the wizard epic's own already-shipped tests meaningful (they now exercise the flag explicitly) rather than silently deleting the behavior those tests exist to protect."
+  - decision: "remember()'s firing moves from 'unconditional, immediately after every commit' to 'only on the --commit-directly escape-hatch path' in THIS ticket -- the default (draft-first) path's remember() timing is deferred to fire at approval instead, tracked as this ticket's own explicit residual scope note, not silently dropped."
+    rationale: "Firing a real remember() call (indexing source material into searchable memory) for a persona that hasn't been human-approved yet would prematurely commit unreviewed content into the memory system the operator explicitly wants a human gate in front of. The natural place for the default path's remember() call to actually fire is pu-03's approve route/pu-04's approve CLI verb (once a human has confirmed the content is good) -- flagged here rather than silently implemented as a scope-creeping addition to pu-03/pu-04's own already-defined acceptance criteria; a follow-on ticket beyond pu-14 should wire this if not folded into pu-13's e2e proof."
+
+cross_cutting: []
+
+risks:
+  - severity: high
+    description: "Deferring remember()'s firing to approval time (rather than interview-completion time) is a genuine behavior change to when memory gets indexed, and this ticket's own scope explicitly does NOT wire the approval-time firing -- there is a real gap between 'draft approved' and 'source material remembered' that no ticket in this epic's current 14-story breakdown explicitly closes."
+    mitigation: "Named explicitly here rather than silently left implicit. pu-13's full-loop e2e regression should be reviewed at execution time to confirm whether it needs to also assert remember() fires post-approval, or whether that genuinely needs a 15th ticket -- flagged as a residual planning gap for the operator/orchestrator to resolve at execution kickoff, not resolved unilaterally in this planning pass since design-discussion.md OQ2 already establishes this session's general posture of not guessing past genuinely uncertain scope boundaries."
+  - severity: medium
+    description: "--commit-directly's code path could accidentally diverge from truly-unchanged pre-epic behavior if a future edit touches persona-writer.mjs/persona-remember.mjs for the default path's sake and inadvertently affects the shared files."
+    mitigation: "The new default-path writer is a SEPARATE file (persona-draft-writer.mjs), not a parameterized version of persona-writer.mjs -- --commit-directly's code path literally does not change, by construction, not by convention alone."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-ux/docs/design-discussion.md
+    relevant_excerpt: |
+      §9 judgment call #3: "The interview skill's default write target
+      becomes the new draft store; a --commit-directly flag reproduces the
+      exact old (pre-epic) behavior... pu-09's regression suite keeps the
+      wizard epic's own already-shipped tests meaningful."
+  - path: skills/mnemosyne-persona-interview/SKILL.md
+    relevant_excerpt: |
+      Step 8 (pre-epic): "It fires unconditionally, even for a
+      maximally-skipped interview... crawl-and-feed never silently no-ops
+      just because most questions were skipped" -- the exact unconditional
+      firing this ticket narrows to the --commit-directly path only,
+      explicitly flagged as a residual gap for the default path.

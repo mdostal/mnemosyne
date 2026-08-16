@@ -1,0 +1,105 @@
+id: pu-09-draft-first-regression
+epic: mnemosyne-persona-ux
+title: "Interview skill: draft-default / escape-hatch / max-skip regression proof"
+status: planned
+complexity: medium
+methodology: tdd
+depends_on: [pu-08-draft-first-interview-flow]
+
+description: |
+  Implements horizontal-plan.md H6's regression component: the concrete proof
+  that pu-08's default-path/escape-hatch split behaves exactly as designed,
+  and that the wizard epic's own non-blocking hard-fail rule (pw-10/pw-12 --
+  a maximally-skipped interview still produces a valid, writable record)
+  still holds for the new draft-propose path, not just the old commit path.
+  This is the epic's own backstop against silently regressing already-shipped
+  behavior while changing this skill's default.
+
+acceptance_criteria:
+  - "Given a full-answers interview run with no flag, when it completes, then a real filesystem check confirms an active draft exists at the correct home-rooted path and NO file was written to the real persona store (global or repo-local) as a side effect"
+  - "Given the identical full-answers interview inputs used by the wizard epic's own persona-interview-output.test.ts, when run WITH --commit-directly, then the resulting committed file is confirmed identical (modulo timestamps) to what that pre-existing test already proves for those inputs -- a direct byte-for-byte comparison, not a re-derived assertion"
+  - "Given a maximally-skipped interview run (pw-12's exact skip-all pattern) with no flag, when it completes, then it still produces a valid, reviewable ACTIVE DRAFT (not an error, not an empty/omitted draft) -- the non-blocking hard-fail rule extended to the draft-propose path"
+  - "Given the same maximally-skipped pattern run WITH --commit-directly, when it completes, then it reproduces pw-12's own already-proven max-skip-still-valid behavior exactly, unchanged"
+  - "Given the full wizard-epic test suite (persona-interview-skill.test.ts, persona-interview-output.test.ts, persona-interview-crawl-and-feed.test.ts) and this epic's new pu-02 through pu-08 test files, when run together, then all pass with zero regressions -- confirmed by actually re-running them, not assumed"
+
+steps:
+  - id: research
+    description: >
+      Read lib/mnemosyne/layer1/__tests__/persona-interview-skill.test.ts,
+      persona-interview-output.test.ts, and
+      persona-interview-crawl-and-feed.test.ts in full -- these are the exact
+      existing tests this ticket must prove still pass meaningfully (via
+      --commit-directly) and the exact fixtures/inputs this ticket reuses for
+      its own byte-for-byte comparison, rather than inventing new fixtures
+      that only coincidentally look similar.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Write the 5 acceptance-criteria-shaped test cases above as real,
+      executable tests, reusing the existing test files' own fixture inputs
+      wherever a direct comparison is required (full-answers,
+      --commit-directly case) so the comparison is genuinely apples-to-apples.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Write lib/mnemosyne/layer1/__tests__/persona-interview-draft-regression.test.ts
+      implementing the above. This ticket is primarily test-authorship --
+      any implementation gap it surfaces gets fixed in pu-08 (already merged
+      by this point per the dependency graph), not reopened here as new
+      production code.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: >
+      Re-run the FULL suite (this file, pu-02 through pu-08's own test
+      files, and every pre-existing wizard/foundation epic test file) and
+      confirm 100% pass, zero skips, zero pre-existing-failure exceptions
+      introduced by this epic. Confirm the byte-for-byte --commit-directly
+      comparison is against the REAL wizard-epic test's fixture, not a
+      hand-copied approximation of it.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/layer1/__tests__/persona-interview-skill.test.ts
+      purpose: "pw-10/pw-12's own full-answers/partially-skipped/max-skip proofs against the REAL assertValidPersona -- the exact bar the draft-propose path's own max-skip case (this ticket) must clear, applied to a draft instead of a commit."
+    - path: lib/mnemosyne/layer1/__tests__/persona-interview-output.test.ts
+      purpose: "pw-11's real disk-round-tripping proof of the pre-epic commit behavior -- the exact fixture/comparison this ticket's --commit-directly byte-for-byte assertion reuses."
+    - path: lib/mnemosyne/layer1/__tests__/persona-interview-crawl-and-feed.test.ts
+      purpose: "pw-13's real remember()-firing proof for the pre-epic unconditional-firing behavior -- confirms --commit-directly's step 8 still fires exactly as before (design-discussion.md OQ3 notwithstanding -- OQ3 only concerns the DEFAULT path's remember() timing, not --commit-directly's, which is unchanged)."
+
+files_to_modify:
+  - file: lib/mnemosyne/layer1/__tests__/persona-interview-draft-regression.test.ts
+    change: "New file. The 5 acceptance-criteria-shaped regression proofs above."
+
+design_decisions:
+  - decision: "This ticket reuses the wizard epic's own existing test fixtures for the --commit-directly comparison, rather than authoring new, superficially-similar fixtures."
+    rationale: "A comparison against a fresh fixture that merely LOOKS like the old test's input risks passing even if --commit-directly has subtly drifted from true byte-for-byte pre-epic behavior -- reusing the exact same fixture is the only way this proof is genuinely load-bearing rather than cosmetic."
+
+cross_cutting: []
+
+risks:
+  - severity: medium
+    description: "If pu-08's implementation has ANY subtle behavioral drift in the --commit-directly path (even something as small as an extra log line changing stdout parsing), this ticket's byte-for-byte comparison is the only thing standing between that drift and a silent regression shipping."
+    mitigation: "This is precisely why this ticket exists as its own story rather than being folded into pu-08's own steps -- a dedicated, independently-reviewed regression pass, not a self-check by the same implementation work."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-ux/docs/horizontal-plan.md
+    relevant_excerpt: |
+      H6 acceptance criteria: "a full interview run with no --commit-directly
+      flag produces an ACTIVE DRAFT... never a committed persona; the same
+      run with --commit-directly produces a committed persona identical
+      (modulo timestamps) to what the pre-epic skill would have produced."
+  - path: .pHive/epics/mnemosyne-persona-wizard/stories/pw-12-interview-skill-skip-all-regression.yaml
+    relevant_excerpt: |
+      The wizard epic's own precedent for this exact kind of dedicated
+      regression story -- max-skip-still-valid proven as its own ticket,
+      not folded into the mechanics ticket that could plausibly have
+      self-certified it instead.

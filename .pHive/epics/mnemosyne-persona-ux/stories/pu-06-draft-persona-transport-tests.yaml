@@ -1,0 +1,116 @@
+id: pu-06-draft-persona-transport-tests
+epic: mnemosyne-persona-ux
+title: Draft cross-transport round-trip + concurrency + leak-proof tests
+status: planned
+complexity: medium
+methodology: tdd
+depends_on: [pu-03-draft-persona-routes, pu-05-draft-persona-skill-harness-mcp]
+
+description: |
+  Implements horizontal-plan.md H5: the genuinely new proof none of pu-02
+  through pu-05's own per-component tests individually provide -- that every
+  transport (CLI, skill-harness, MCP, HTTP) funnels through the SAME
+  underlying persona-draft-store.ts / writeGlobalPersona / writeRepoLocalPersona
+  functions (the epic's own explicit "no second write path" risk), that
+  concurrent drafts don't race unsafely, and that a discarded/never-approved
+  draft never becomes reachable through any real-store read path -- the
+  concrete verification of this epic's core leak-prevention guarantee.
+
+acceptance_criteria:
+  - "Given every meaningful (propose-transport, approve-transport) pair among {CLI, skill-harness, MCP, HTTP}, when a draft is proposed via transport A and approved via transport B, then the committed file is byte-for-byte identical (modulo timestamps) regardless of which pair was used"
+  - "Given two different transports racing a propose against the SAME {tier, scopeId} draft identity, when both complete, then exactly one active draft exists afterward (the last writer wins cleanly, per withLock's existing file-scoped advisory semantics) -- never a corrupted/partially-written file, never two active drafts for one identity"
+  - "Given a draft that is discarded (never approved), when GET /persona (real store list), `mnemosyne persona show` (real store CLI), and getPersonaContent (in-process, via a direct unit call) are each checked, then all three report the discarded draft's {tier, scopeId} as NOT present -- proving the structural leak-prevention guarantee, not just asserting it"
+  - "Given a draft that IS approved, when the same three read paths above are checked immediately afterward, then all three now correctly report the newly-committed persona as present -- proving the approve path's commit is genuinely visible through the real store's existing read surfaces, not just returned in the approve response"
+
+steps:
+  - id: research
+    description: >
+      Read the wizard epic's test/persona-cross-transport.mjs in full as the
+      exact real-subprocess, fake-$HOME, multi-transport-pairing convention
+      this ticket extends for the draft mechanism. Read test/http-api.mjs's
+      existing subprocess-spawn convention for the HTTP leg. Confirm
+      getPersonaContent's exact fallback/read behavior (persona.ts) as the
+      precise thing the leak-proof test's third read path checks.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Enumerate every meaningful (propose-transport, approve-transport) pair
+      (CLI/skill-harness/MCP/HTTP x CLI/skill-harness/MCP/HTTP, deduplicated
+      where symmetric) as explicit test cases. Write the concurrency test
+      (two transports racing a propose for the same identity, via real
+      concurrent subprocess spawns, not simulated). Write the leak-proof test
+      (discard, then check all 3 real-store read paths; approve, then check
+      the same 3 paths report success).
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Write test/persona-draft-cross-transport.mjs implementing all of the
+      above against real subprocess-spawned servers/CLI invocations -- no
+      mocked transport boundary anywhere in this file, matching the rigor
+      test/persona-cross-transport.mjs already established for the real
+      write primitive.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: >
+      Confirm every test case in this file exercises a REAL subprocess or
+      real HTTP call (grep for any stub/mock of persona-draft-store.ts or the
+      real write functions -- there should be none). Confirm the concurrency
+      test is a genuine race (both writers dispatched before either
+      completes), not an accidentally-sequential pair of awaits that never
+      actually contends.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: >
+      Commit and push to feature branch. Run the full extended test suite
+      (persona-draft-store.test.ts, http-api.mjs, persona-cli.mjs,
+      mcp-server-persona.mjs, skill-harness-persona-draft.mjs, and this
+      file) together and confirm no regressions against the wizard/
+      foundation epics' own already-passing suites.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: test/persona-cross-transport.mjs
+      purpose: "The wizard epic's own real-subprocess, fake-$HOME, multi-transport-pairing test convention this ticket extends for the draft mechanism, not reinvents."
+    - path: test/http-api.mjs
+      purpose: "The existing 'spawn lib/mnemosyne/server.ts, hit it over real HTTP' convention this ticket's HTTP leg reuses."
+    - path: lib/mnemosyne/layer1/persona.ts
+      purpose: "getPersonaContent's exact real-store read/fallback behavior -- the third read path the leak-proof test checks directly, in-process, against a real discarded draft."
+    - path: lib/mnemosyne/layer1/lock.ts
+      purpose: "withLock's file-scoped advisory locking semantics -- what the concurrency test is actually proving holds for the NEW draft store, not assuming it does by analogy alone."
+
+files_to_modify:
+  - file: test/persona-draft-cross-transport.mjs
+    change: "New file. Cross-transport round-trip matrix, concurrency test, and leak-proof test for the draft mechanism."
+
+design_decisions:
+  - decision: "The leak-proof test checks all 3 real-store read paths (GET /persona, `persona show` CLI, and a direct in-process getPersonaContent call), not just one."
+    rationale: "design-discussion.md's risk table names this as a genuinely load-bearing risk ('a draft leaks into a live-render path... because the draft store lives too close to the real one') -- a single read-path check would leave the other two silently unverified, exactly the kind of gap this epic's own rigor bar (matching the wizard epic's own H5) exists to close."
+
+cross_cutting: []
+
+risks:
+  - severity: medium
+    description: "A full (propose-transport x approve-transport) matrix across 4 transports is a real combinatorial test-writing and -running cost -- risk of the suite becoming slow or brittle if not scoped carefully."
+    mitigation: "Deduplicate symmetric pairs where the underlying code path is provably identical (e.g. CLI-propose-then-CLI-approve is the same code path regardless of which specific {tier, scopeId} is used) rather than testing every possible combination exhaustively -- acceptance criteria require 'every meaningful pair,' not literally every permutation."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-ux/docs/horizontal-plan.md
+    relevant_excerpt: |
+      H5: "A proof that a discarded/never-approved draft never becomes
+      reachable through any read path the real store exposes (GET /persona,
+      mnemosyne persona show, getPersonaContent) -- the concrete
+      verification of H2/H3's 'structurally separate, never leaks into a
+      live-render path' guarantee."
+  - path: .pHive/epics/mnemosyne-persona-wizard/docs/horizontal-plan.md
+    relevant_excerpt: |
+      H5: "Architect-lens review finding... 'adds three independent,
+      never-before-exercised transport wrappers... none of which Epic 1's
+      existing unit tests cover, since those exercised the TS store functions
+      directly, not through a transport.'" -- the same risk class this
+      ticket closes for the draft mechanism's 4 transports.

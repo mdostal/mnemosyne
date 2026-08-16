@@ -1,0 +1,121 @@
+id: pu-13-full-loop-e2e-regression
+epic: mnemosyne-persona-ux
+title: "Full-loop regression: agent-propose (CLI) -> UI review -> human-approve -> real commit"
+status: planned
+complexity: medium
+methodology: tdd
+depends_on: [pu-06-draft-persona-transport-tests, pu-09-draft-first-regression, pu-12-draft-review-approve-ui]
+
+description: |
+  Implements horizontal-plan.md H8's e2e component: the epic's own real
+  release-gate proof, mirroring the wizard epic's own closing pattern
+  (pw-14/pw-16/pw-17's "closes the loop" proofs). Proves the complete,
+  actual interaction ask 2 exists to create -- a CLI-run interview proposes
+  a draft, the draft is genuinely visible and actionable through the real
+  browser UI (not just through the CLI/HTTP transports pu-06 already
+  proved), a human edits and approves it via the UI, and the real persona
+  ends up committed via the unchanged write primitive -- not each piece
+  proven only in isolation.
+
+  This ticket's execution-time scope should also resolve design-discussion.md
+  OQ3 (where remember()'s post-approval firing lives, if it's wired at all in
+  this epic) -- explicitly flagged in pu-08 as a residual gap this ticket is
+  the natural place to either close or explicitly defer further, not
+  silently ignore.
+
+acceptance_criteria:
+  - "Given a real subprocess-spawned lib/mnemosyne/server.ts and a real CLI-run interview (skills/mnemosyne-persona-interview, default draft-first path, pu-08), when the interview completes, then GET /persona/draft (pu-03) shows the newly-proposed draft, including its sourceSummary (pu-07)"
+  - "Given that draft, when a simulated UI interaction edits one field and re-submits (exercising pu-12's edit path against real HTTP, not a mocked fetch), then GET /persona/draft/:tier/:scopeId reflects the edit"
+  - "Given the edited draft, when a simulated UI interaction approves it (exercising pu-12's approve path against pu-03's real approve route), then a direct filesystem read confirms the real persona store now has the committed persona, and GET /persona (the real store's list route) includes it"
+  - "Given the same approval, when GET /persona/draft is checked afterward, then the approved draft no longer appears in the active list (archived, per pu-02's disposal design)"
+  - "Given this full loop, when design-discussion.md OQ3 (remember()'s post-approval firing) is considered, then this ticket's own execution either wires and proves it, or explicitly documents in its own note-on-completion why it was deferred further -- not silently skipped without a written decision"
+
+steps:
+  - id: research
+    description: >
+      Read pu-06's cross-transport tests (CLI/skill-harness/MCP/HTTP,
+      already-proven) and pu-09's interview-skill regression tests
+      (already-proven) as the two halves this ticket's e2e proof composes --
+      confirm exactly what each already covers so this ticket adds only the
+      genuinely new assertion (real UI-driven review/edit/approve against a
+      real CLI-originated draft), not a duplicate of either.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Write a single, real, end-to-end test exercising: CLI interview run
+      (default, no --commit-directly) -> real HTTP GET against the draft
+      routes -> a real HTTP PATCH-equivalent (re-POST) simulating the UI's
+      edit -> a real HTTP POST to the approve route simulating the UI's
+      approve click -> real filesystem + GET /persona verification of the
+      committed result -> real GET /persona/draft verification the draft is
+      gone from the active list. No mocked transport boundary anywhere.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Write test/persona-full-loop-e2e.mjs implementing the above against
+      real subprocess-spawned processes throughout. Investigate and resolve
+      design-discussion.md OQ3 as part of this ticket's own scope: either
+      wire remember()'s post-approval firing (if a clean, non-scope-creeping
+      place to do so is found -- e.g. a conditional branch in pu-03's approve
+      route keyed on the presence of sourceSummary/proposedBy metadata) and
+      add a corresponding assertion, or explicitly document in this ticket's
+      completion notes why that remains out of scope and should become a
+      15th, follow-on ticket instead.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: >
+      Confirm every step of the loop uses a REAL process/HTTP call, no
+      simulation shortcuts that would let this test pass even if the real UI
+      code (pu-12) were broken. Confirm OQ3 was genuinely resolved one way
+      or the other, not silently dropped.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: >
+      Commit and push to feature branch. Run the FULL suite across this
+      entire epic (pu-02 through pu-13's test files) together with the
+      foundation and wizard epics' own suites, confirming zero regressions
+      anywhere.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: test/persona-draft-cross-transport.mjs
+      purpose: "pu-06's already-proven cross-transport coverage -- this ticket composes with it, does not duplicate it."
+    - path: lib/mnemosyne/layer1/__tests__/persona-interview-draft-regression.test.ts
+      purpose: "pu-09's already-proven interview-skill draft-default behavior -- the CLI-side half this ticket's e2e test's first step exercises for real."
+    - path: skills/mnemosyne-persona-interview/persona-draft-writer.mjs
+      purpose: "pu-08's real draft-propose CLI wiring -- what this ticket's first e2e step actually invokes, end-to-end, not a stand-in."
+
+files_to_modify:
+  - file: test/persona-full-loop-e2e.mjs
+    change: "New file. The complete agent-propose -> UI-review-edit -> human-approve -> real-commit loop, against real subprocess-spawned processes throughout."
+
+design_decisions:
+  - decision: "This ticket's execution is explicitly the place OQ3 (remember()'s post-approval firing) gets resolved one way or the other, not left open indefinitely."
+    rationale: "design-discussion.md OQ3 and pu-08's own risk table both name this ticket as the natural point to decide -- deferring the decision through planning was itself a deliberate choice (not enough visibility to decide unilaterally at planning time), but deferring it through EXECUTION too would let a real gap ship silently."
+
+cross_cutting: []
+
+risks:
+  - severity: medium
+    description: "This ticket has 3 upstream dependencies spanning both of the epic's two independent tracks (backend/skill: pu-06, pu-09; UI: pu-12) -- it cannot start until both tracks converge, making it a real scheduling bottleneck if either track slips."
+    mitigation: "Named explicitly in horizontal-plan.md's Capability Dependencies diagram as the epic's true convergence point -- an execution pass should plan staffing with this bottleneck in mind, not discover it mid-epic."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-ux/docs/design-discussion.md
+    relevant_excerpt: |
+      OQ3: "Whoever executes pu-13 (the full-loop e2e regression) should
+      decide at that point whether closing this gap is in pu-13's own scope
+      or needs a 15th ticket; this planning pass deliberately does not
+      pre-decide that either way."
+  - path: .pHive/epics/mnemosyne-persona-wizard/stories/pw-17-personas-panel-write-form.yaml
+    relevant_excerpt: |
+      "This closes the epic (pw-01 through pw-17) with the write form
+      genuinely, not just nominally, functional from a real browser." -- the
+      exact "prove it's real, not just individually-tested" bar this
+      ticket's own e2e proof holds itself to.

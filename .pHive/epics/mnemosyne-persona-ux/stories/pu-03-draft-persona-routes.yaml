@@ -1,0 +1,130 @@
+id: pu-03-draft-persona-routes
+epic: mnemosyne-persona-ux
+title: "Draft /persona/draft/* HTTP routes on lib/mnemosyne/server.ts (list/read/propose/approve/discard)"
+status: planned
+complexity: medium
+methodology: tdd
+depends_on: [pu-02-draft-persona-store]
+
+description: |
+  Implements horizontal-plan.md H3: GET /persona/draft (list), GET
+  /persona/draft/:tier/:scopeId (read one), POST /persona/draft/:tier/:scopeId
+  (propose/overwrite), POST /persona/draft/:tier/:scopeId/approve (commit via
+  the real write primitive, unchanged), DELETE /persona/draft/:tier/:scopeId
+  (discard) on lib/mnemosyne/server.ts. This is the browser's entry point into
+  the human-review half of ask 2's crawl->propose->review->approve loop --
+  pu-02's store has no HTTP surface without this ticket.
+
+acceptance_criteria:
+  - "Given no active draft exists, when GET /persona/draft is called (global, default) or with ?repo=<path> (repo-local), then it returns every active draft pu-02's listDraftPersonas can see, in the same {tier, scopeId} shape GET /persona already uses"
+  - "Given a real subprocess-spawned lib/mnemosyne/server.ts, when POST /persona/draft/:tier/:scopeId is called with a persona-shaped body, then a direct filesystem read confirms pu-02's writeDraftPersona was actually called (the draft file exists at the correct home-rooted path) -- not just a 200/201 HTTP response"
+  - "Given an active draft that passes assertValidPersona, when POST /persona/draft/:tier/:scopeId/approve is called, then writeGlobalPersona/writeRepoLocalPersona is called with the draft-only metadata (proposedBy/proposedAt/sourceSummary) stripped, the resulting committed file is byte-for-byte what POST /persona/:tier/:scopeId would have produced for the same candidate, and the draft is archived (not deleted) via pu-02's disposeDraftPersona('approved')"
+  - "Given an active draft that does NOT pass assertValidPersona (e.g. missing displayName), when POST /persona/draft/:tier/:scopeId/approve is called, then it returns a 400 via the existing badRequest convention, nothing is written to the real store, and the draft remains active (not archived) so a human can go fix it"
+  - "Given an active draft, when DELETE /persona/draft/:tier/:scopeId is called, then it is archived via disposeDraftPersona('discarded') (never a bare filesystem delete) and no longer appears in GET /persona/draft's active listing"
+  - "Given a request to any /persona/draft/* route from one of UI_ORIGINS, when the response is inspected, then it carries the exact same Access-Control-Allow-Origin header applyPersonaCors already produces for /persona/* -- no second CORS implementation, and a request from an origin NOT in UI_ORIGINS gets no CORS header at all"
+
+steps:
+  - id: research
+    description: >
+      Read lib/mnemosyne/server.ts in full, specifically: the existing GET/POST
+      /persona/:tier/:scopeId dispatch (their url.pathname.startsWith('/persona/')
+      + segments.length !== 2 guards, lines 268-387), the OPTIONS /persona/*
+      preflight handler (lines 200-220) and confirm directly that its own
+      prefix check already structurally covers /persona/draft/* with zero
+      changes needed, and applyPersonaCors's exact implementation (lines
+      108-124) to be reused unchanged.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Extend test/http-api.mjs's existing subprocess-spawn convention with:
+      list/read/propose round-trips against a real spawned server; approve
+      success producing the identical committed file (direct fs read, not
+      response-only); approve failure on an invalid draft (draft stays
+      active, real store untouched); discard archiving the draft; CORS header
+      presence for an allowed origin and absence for a disallowed one, for
+      every new route.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Add the 5 new route branches to server.ts, checked BEFORE the existing
+      generic GET/POST /persona/:tier/:scopeId handlers in source order
+      (design-discussion.md §9 judgment call #7 -- not relied on as an
+      implicit side effect of the existing segments.length !== 2 guard).
+      Import pu-02's persona-draft-store.ts functions directly. The approve
+      route strips draft-only metadata fields before calling
+      writeGlobalPersona/writeRepoLocalPersona unchanged -- no re-implemented
+      validation. Reuse applyPersonaCors on every new route; confirm (do not
+      re-implement) that the existing OPTIONS handler already covers them.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: >
+      Confirm route-ordering: manually trace a request to
+      POST /persona/draft/top-orchestrator/acme/approve through server.ts's
+      actual branch order and confirm it is intercepted by the new draft
+      branch, never falls through to the generic /persona/:tier/:scopeId
+      handler. Confirm the approve path calls the real write functions with
+      zero re-implemented validation logic (grep for a second
+      assertValidPersona-shaped check -- there should be none in this
+      ticket's new code).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/server.ts
+      purpose: "The existing /persona/* route table, applyPersonaCors, the OPTIONS preflight handler, and the badRequest/sendJson conventions every new route in this ticket reuses exactly -- see especially lines 200-220 (preflight), 268-387 (existing GET/POST dispatch) as the shape/ordering this ticket's new branches must sit alongside correctly."
+    - path: lib/mnemosyne/layer1/persona-draft-store.ts
+      purpose: "pu-02's store functions this ticket's routes wrap directly -- writeDraftPersona/readDraftPersona/listDraftPersonas/disposeDraftPersona."
+    - path: lib/mnemosyne/layer1/persona-store-global.ts
+      purpose: "writeGlobalPersona -- the real, unchanged write function the approve route calls for global tiers, exactly as POST /persona/:tier/:scopeId already does."
+    - path: lib/mnemosyne/layer1/persona-store-repo-local.ts
+      purpose: "writeRepoLocalPersona -- the real, unchanged write function the approve route calls for code-architect, exactly as POST /persona/:tier/:scopeId already does."
+
+files_to_modify:
+  - file: lib/mnemosyne/server.ts
+    change: "New route branches: GET /persona/draft, GET /persona/draft/:tier/:scopeId, POST /persona/draft/:tier/:scopeId, POST /persona/draft/:tier/:scopeId/approve, DELETE /persona/draft/:tier/:scopeId -- checked before the existing generic /persona/:tier/:scopeId handlers."
+  - file: test/http-api.mjs
+    change: "New AC-tagged assertions for every new route, extending the existing real-subprocess-spawn convention."
+
+design_decisions:
+  - decision: "New draft-route branches are checked BEFORE the existing generic GET/POST /persona/:tier/:scopeId handlers in source order, not relied on to be harmlessly rejected by those handlers' own segment-count guard."
+    rationale: "design-discussion.md §9 judgment call #7: a 3-segment /persona/draft/:tier/:scopeId path happens to fail the existing handlers' segments.length !== 2 check today, but that is an implicit side effect, not a real guarantee -- explicit dispatch ordering is the actual guarantee this ticket relies on."
+  - decision: "Approve strips draft-only metadata (proposedBy/proposedAt/sourceSummary) and calls writeGlobalPersona/writeRepoLocalPersona completely unchanged -- no re-implemented validation at the route layer."
+    rationale: "The epic's own explicit 'no second write path' guardrail (design-discussion.md §5 risk table, horizontal-plan.md Cross-Cutting Concerns) -- assertValidPersona must remain the single real enforcement point, exercised for the first time only at this moment, never re-derived."
+  - decision: "CORS reuses applyPersonaCors and the existing OPTIONS handler completely unchanged -- confirmed structurally sufficient, not re-implemented."
+    rationale: "research-brief.md §4 and horizontal-plan.md Cross-Cutting Concerns: the wizard epic already paid the real cost of discovering and fixing a genuine preflight gap (pw-17's note-on-completion) -- this epic must not reopen or duplicate that already-solved problem."
+
+cross_cutting: []
+
+risks:
+  - severity: high
+    description: "A future, unrelated change to the existing generic /persona/:tier/:scopeId handlers' segment-count guard (e.g. relaxing it to accept 3 segments for some other reason) could silently make /persona/draft/* requests fall into the WRONG handler instead of 404ing harmlessly, since today's protection is incidental, not structural."
+    mitigation: "This ticket's own acceptance criteria require explicit branch ordering (draft routes checked first), not reliance on the generic handlers' guard -- the review step traces this by hand as an explicit gate, and the test suite exercises the draft routes directly rather than only asserting 'the generic handler doesn't also match.'"
+  - severity: medium
+    description: "The approve route is the one genuinely more consequential action this ticket adds (it commits real, governing persona content) -- yet server.ts's own stated posture is 'No authentication -- localhost-only for this slice.'"
+    mitigation: "Explicitly flagged as OQ2 in design-discussion.md §8, not silently decided -- this ticket inherits the existing no-auth posture as its default assumption but does not treat that as settled; operator sign-off is called out as needed before this ticket ships in a real execution pass."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-ux/docs/design-discussion.md
+    relevant_excerpt: |
+      §3b: "POST /persona/draft/:tier/:scopeId/approve reads the active
+      draft, strips draft-only metadata..., and passes the remaining
+      candidate straight into the SAME writeGlobalPersona/
+      writeRepoLocalPersona calls every other transport already uses...
+      Route ordering gotcha, confirmed by reading server.ts directly: ...the
+      new draft-route branches must still be checked BEFORE those generic
+      handlers in source order."
+  - path: .pHive/epics/mnemosyne-persona-wizard/stories/pw-17-personas-panel-write-form.yaml
+    relevant_excerpt: |
+      "REAL GAP FOUND AND FIXED before considering this ticket done: ...a
+      real browser sends an OPTIONS preflight first... Fixed by adding a
+      scoped OPTIONS handler for /persona/* that reuses applyPersonaCors
+      as-is (no second CORS implementation)." -- the precedent this ticket's
+      CORS acceptance criterion protects against regressing.

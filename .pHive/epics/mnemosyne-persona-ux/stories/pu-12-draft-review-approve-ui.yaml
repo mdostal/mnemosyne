@@ -1,0 +1,135 @@
+id: pu-12-draft-review-approve-ui
+epic: mnemosyne-persona-ux
+title: Draft review/approve UI (unifies agent-proposed and human-authored drafts)
+status: planned
+complexity: high
+methodology: tdd
+depends_on: [pu-01-multi-swarm-design-exploration, pu-03-draft-persona-routes, pu-10-personas-panel-redesign-shell]
+
+description: |
+  Implements horizontal-plan.md H7's draft-review component: the concrete
+  UI expression of ask 2's "a human to approve it, rather than expecting a
+  full drill down in one text body." Lists active drafts (both agent-
+  proposed and human-typed), shows a draft's proposed content plus its
+  sourceSummary when present (the direct UI expression of lens 4,
+  agent-provenance/trust-calibration), supports inline edits, and
+  Approve/Discard actions wired to pu-03's HTTP routes. Per
+  design-discussion.md §9 judgment call #4, pw-17's existing create/edit
+  form is retargeted to propose a draft (POST /persona/draft/:tier/:scopeId)
+  instead of writing directly -- ONE review/approve surface for both
+  authoring paths, not two.
+
+acceptance_criteria:
+  - "Given pw-17's existing #persona-form, when this ticket ships, then its submit handler POSTs to pu-03's POST /persona/draft/:tier/:scopeId (never the real POST /persona/:tier/:scopeId) -- a human typing a persona by hand now produces an active draft, not an immediate commit"
+  - "Given the new shell (pu-10), when this ticket ships, then it gains a drafts list (fetched via pu-03's GET /persona/draft), rendering EVERY active draft regardless of whether it was agent-proposed or human-typed, in one unified list -- not two separate lists"
+  - "Given an agent-proposed draft (has sourceSummary/proposedBy: 'agent' metadata), when it is shown in the drafts list or detail view, then its sourceSummary is rendered and visibly labeled as agent-proposed -- the concrete UI expression of lens 4 (agent-provenance/trust-calibration): a human must always be able to see WHAT the agent looked at before proposing this content"
+  - "Given a human-typed draft (no sourceSummary), when it is shown, then it renders without a sourceSummary section and without an incorrect 'agent-proposed' label -- the UI must not fabricate provenance that doesn't exist"
+  - "Given an active draft's detail view, when the operator edits its fields and re-submits, then it re-POSTs to the SAME draft identity (overwrite-in-place, matching pu-02's one-active-draft-per-identity design) via setStatus() pass/fail, matching every existing form's convention"
+  - "Given an active draft's detail view, when the operator clicks Approve, then it POSTs to pu-03's approve route, and on success the panel reflects both the draft's removal from the active list AND the newly-committed persona's appearance in the real persona list (loadPersonas(), pw-03's existing function) -- without a manual page reload"
+  - "Given an active draft's detail view, when the operator clicks Discard, then it DELETEs via pu-03's discard route, and on success the draft is removed from the active list immediately, with a clear confirmation step before the action fires (a meaningfully consequential action, even though non-destructive at the storage layer per pu-02's archive-by-move design)"
+  - "Given the drafts list/detail/approve/discard UI, when exercised via keyboard only, then every action is reachable and operable without a mouse -- lens 3 (accessibility)"
+
+steps:
+  - id: research
+    description: >
+      Read pu-01's chosen synthesized option's documentation of the
+      crawl->propose->approve interaction flow in full
+      (.pHive/design/mnemosyne-persona-ux/synthesized/, selection.md). Read
+      ui/index.html's existing #persona-form (pw-17, lines 227-265) and
+      ui/app.js's personaForm submit handler (lines 1297-1344) in full --
+      the exact code this ticket retargets. Read pu-03's draft route
+      response shapes exactly (GET /persona/draft, GET
+      /persona/draft/:tier/:scopeId, POST .../approve, DELETE ...).
+    agent: researcher
+  - id: test-spec
+    description: >
+      Write failing tests for: the retargeted form POSTs to the draft route,
+      not the real route; the drafts list renders both agent-proposed
+      (with sourceSummary) and human-typed (without) drafts correctly and
+      distinguishably; approve success updates both the drafts list and the
+      real persona list without a reload; discard requires confirmation and
+      removes the draft from the active list on success; keyboard operability
+      of every new interactive element.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Retarget #persona-form's submit handler to POST
+      /persona/draft/:tier/:scopeId. Add a drafts list section to the new
+      shell (pu-10), a loadDrafts() function following loadPersonas()'s
+      existing conventions (fetch, setStatus, render), a draft detail/edit
+      view, and Approve/Discard handlers calling pu-03's routes -- on
+      approve success, call BOTH a drafts-refresh AND loadPersonas() (never
+      duplicating loadPersonas()'s own logic, per pw-03's precedent).
+      Implement per pu-01's chosen option's documented interaction flow for
+      the review/edit/approve/discard experience specifically.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: >
+      Confirm the old #persona-form's direct-write behavior is genuinely
+      gone (grep confirms no remaining POST to /persona/:tier/:scopeId
+      anywhere in ui/app.js's form-submit code paths). Confirm
+      sourceSummary rendering never appears for a draft that has none
+      (no fabricated provenance). Confirm approve/discard both call pu-03's
+      real routes, not a client-side simulation. Confirm loadPersonas() is
+      reused on approve success, not reimplemented.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: ui/index.html
+      purpose: "#persona-form (pw-17, lines 227-265) -- the exact markup this ticket retargets from a direct-write form into a draft-propose form, and the base to extend with drafts-list/detail/approve/discard markup."
+    - path: ui/app.js
+      purpose: "personaForm's submit handler (pw-17, lines 1297-1344, POSTs directly to /persona/:tier/:scopeId today) -- retargeted by this ticket. loadPersonas() (pw-03) -- reused, called again on approve success, never duplicated."
+    - path: lib/mnemosyne/server.ts
+      purpose: "pu-03's draft route response shapes (GET /persona/draft, GET /persona/draft/:tier/:scopeId including proposedBy/proposedAt/sourceSummary metadata, POST .../approve, DELETE ...) -- the exact contracts this UI ticket's fetch calls must match."
+    - path: .pHive/design/mnemosyne-persona-ux/synthesized/
+      purpose: "pu-01's chosen synthesized option's documented interaction flow for crawl->propose->review->approve -- the source of truth for this ticket's specific list/detail/edit/approve/discard interaction design."
+
+files_to_modify:
+  - file: ui/index.html
+    change: "#persona-form retargeted (action semantics, not necessarily markup) to propose a draft; new drafts-list and draft-detail/edit sections added per pu-01's chosen option."
+  - file: ui/app.js
+    change: "personaForm's submit handler retargeted to POST /persona/draft/:tier/:scopeId; new loadDrafts()/approve/discard handlers added, reusing loadPersonas() on approve success."
+
+design_decisions:
+  - decision: "pw-17's existing create/edit form is retargeted into the draft-propose flow rather than building a second, parallel human-authoring path alongside a separate agent-draft-review path."
+    rationale: "design-discussion.md §9 judgment call #4: both a human typing a persona by hand and an agent proposing one via the bounded crawl (pu-07) produce the same shape of thing (an active draft at {tier, scopeId}) and should be reviewed/approved through the same UI, not two UIs a future maintainer has to keep in sync."
+  - decision: "sourceSummary is rendered and labeled ONLY when present -- never fabricated or implied for a human-typed draft."
+    rationale: "Lens 4 (agent-provenance/trust-calibration, design-discussion.md §4): the whole point of surfacing sourceSummary is honest provenance -- a UI that shows a generic 'agent-proposed' label regardless of actual origin would defeat the purpose of the lens it exists to satisfy."
+  - decision: "Discard requires an explicit confirmation step in the UI, even though the underlying storage action is non-destructive (archive-by-move, pu-02)."
+    rationale: "The UI-level consequence (a draft disappearing from the active list, requiring a filesystem-level lookup to recover) is real even if the storage-level action is reversible -- matching this UI's own existing precedent (the Operations panel's reindex action already requires an explicit window.confirm() for a real-but-non-catastrophic action)."
+
+cross_cutting: []
+
+risks:
+  - severity: high
+    description: "This ticket, alongside pu-10, is the epic's other highest-complexity UI story, and is the most structurally dependent ticket in the epic (3 upstream dependencies: pu-01, pu-03, pu-10) -- real risk of being blocked or delayed by any one of those three slipping."
+    mitigation: "The dependency graph (epic.yaml) makes this explicit rather than hidden -- an execution pass should treat this as the epic's real critical-path convergence point and staff accordingly, not discover the bottleneck mid-execution."
+  - severity: medium
+    description: "Retargeting pw-17's already-shipped, already-tested form is a real behavior change to existing, working code -- a mistake here doesn't just fail to add a feature, it could regress the wizard epic's own already-verified write path if the retargeting is done carelessly (e.g. accidentally leaving BOTH the old direct-write POST and the new draft POST wired to the same submit event)."
+    mitigation: "The review step's explicit grep-for-the-old-POST-call acceptance criterion exists specifically to catch this class of mistake -- not left as an implicit assumption that 'retargeting' was done cleanly."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-ux/docs/design-discussion.md
+    relevant_excerpt: |
+      §0 ask 2 (verbatim): "we need an interaction to build that and then a
+      human to approve it, rather than expecting a full drill down in one
+      text body." §9 judgment call #4: "Both a human typing a persona by
+      hand and an agent proposing one via the bounded crawl produce the same
+      shape of thing... and should be reviewed/approved through the same
+      UI, not two UIs."
+  - path: .pHive/epics/mnemosyne-persona-wizard/stories/pw-17-personas-panel-write-form.yaml
+    relevant_excerpt: |
+      The exact form/submit-handler this ticket retargets -- "POSTs the bare
+      candidate shape pw-15's route expects... On success, re-loads via
+      loadPersonas() (pw-03) -- no second rendering path." This ticket keeps
+      the "no second rendering path" discipline, redirecting only the POST
+      target and adding the review/approve layer in front of it.
