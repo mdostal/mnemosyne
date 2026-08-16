@@ -63,21 +63,55 @@ in kickoff-protocol.md" further down for the full mapping.
    - **Once a repo exists** (`code-architect`): `repo` is required; the
      interview authors into that repo's `.mnemosyne/personas/` store.
 
-2. **Load context BEFORE asking anything** (this is what makes step 3
-   adaptive, not a fixed script): read whatever is already known --
-   - `TIER_CONTENT[tier]` (`lib/mnemosyne/layer1/tiers.ts`) for this tier's
-     canonical `displayName` and one-line `scope` statement. Since the tier's
-     canonical responsibility statement already exists in code, default
-     `displayName`/`scope` from it and do **not** ask a redundant "what does
-     this tier do" question -- ask instead about what THIS persona instance
-     (this `scopeId`) specifically knows, which `TIER_CONTENT` cannot answer.
-   - An existing persona at this `{tier, scopeId}`, if one is already on
-     disk (`persona-show` / `persona show`) -- if re-authoring, treat its
-     current `sections` as context so a re-run does not force the operator
-     to repeat themselves.
-   - Any other already-known material handy in the conversation (e.g. a
-     project profile, prior discussion) that plainly answers one of the
-     questions below.
+2. **Run the bounded, capped crawl BEFORE asking anything** (this is what
+   makes step 3 adaptive, not a fixed script) -- design-discussion.md §3c, a
+   direct operator mandate quoted verbatim in §0 ask 2: *"give it a way to
+   crawl and help build a short, reasonable context on there without
+   overdoing it."* This is a fixed, NAMED, CAPPED source list, never an
+   open-ended "read whatever seems relevant" instruction --
+   [`crawl-context.mjs`](crawl-context.mjs)'s `crawlBoundedContext()` is the
+   reference implementation (pu-07), used directly by
+   `lib/mnemosyne/layer1/__tests__/persona-interview-crawl.test.ts`. It reads
+   **at most** these named sources, and never anything outside this list:
+   1. The repo's **README** (`README.md` / `README` / `readme.md`, first
+      match).
+   2. The repo's **package/project manifest** (`package.json` /
+      `pyproject.toml` / `Cargo.toml`, first match).
+   3. **`CLAUDE.md`**, if present.
+   4. **`AGENTS.md`**, if present.
+   5. The applicable **parent persona's own summary** -- `displayName` +
+      `scope` ONLY, read via a real `mnemosyne persona show <tier>
+      <scope-id>` CLI subprocess (pf-13) -- **never its full `sections`
+      content**. This preserves the already-established "query up, never
+      copy down" guarantee persona.ts's `buildParentContextSections`
+      already code-enforces at render time; the crawl step must not become a
+      second, looser copy-down path alongside it.
+
+   Every source is capped, and the caps are real, enforced values, not just
+   documented intent: at most `40` lines are read from the top of any one
+   file source (`MAX_LINES_PER_SOURCE`), each source's excerpt is further
+   capped at `1200` characters (`MAX_CHARS_PER_SOURCE`), and the whole
+   assembled result is capped at `4000` characters
+   (`MAX_SOURCE_SUMMARY_CHARS`) -- a future retune has one clear point of
+   change (`crawl-context.mjs`'s own exported constants), not an emergent
+   property of prompt behavior. The result is a single, short
+   **`sourceSummary`** string -- never an unbounded dump of file contents --
+   that:
+   - Informs which of step 3's questions can be adaptively skipped, exactly
+     like `TIER_CONTENT[tier]` (`lib/mnemosyne/layer1/tiers.ts`) and an
+     existing on-disk persona at this `{tier, scopeId}` (`persona-show` /
+     `persona show`) already do -- if re-authoring, that existing persona's
+     `sections` also count as already-known context so a re-run does not
+     force the operator to repeat themselves.
+   - Travels with the draft record so a later human reviewer can see *why*
+     the agent proposed what it proposed (design-discussion.md §3c), without
+     reading an exhaustive dump themselves.
+
+   When NONE of the named sources are present (no README, no manifest, no
+   `CLAUDE.md`/`AGENTS.md`, no parent persona), the crawl still produces a
+   valid, non-empty `sourceSummary` and never errors -- this skill's existing
+   non-blocking hard-fail philosophy (pw-10/pw-12), extended to the crawl
+   step.
 
 3. **Ask the adaptive question set, core first, skipping anything context
    already answered.** Mirrors kickoff-protocol.md Phase 3b's own table
@@ -321,7 +355,7 @@ mapping:
 
 | kickoff-protocol.md Phase 3b mechanic | This skill's reproduction |
 |---|---|
-| "Before asking, check what current-state discovery already surfaced. Do NOT re-ask items already answered" (Adaptive question set) | Step 2 loads context (`TIER_CONTENT`, existing persona, conversation) BEFORE step 3 asks anything; `interview-engine.mjs`'s `resolveAnswer()` checks `context` before `responses` |
+| "Before asking, check what current-state discovery already surfaced. Do NOT re-ask items already answered" (Adaptive question set) | Step 2 runs the bounded, capped crawl (`crawl-context.mjs`'s `crawlBoundedContext()`, pu-07) plus `TIER_CONTENT` and any existing on-disk persona, BEFORE step 3 asks anything; `interview-engine.mjs`'s `resolveAnswer()` checks `context` before `responses` |
 | 4 core questions + 2 optional follow-ups, "clearly marked optional; skip on empty reply or explicit no" | 3 core questions (knows / not_hold / parent) + 2 optional follow-ups (success / avoid), same skip semantics |
 | "Answered questions: write the operator's answer verbatim" | Step 4, `sections` entry body = the verbatim answer |
 | "Skipped/deferred questions: write `unknown`" (explicit marker, never silent omission) | Step 4, skipped CORE questions get the explicit `[not provided — skipped during interview]` marker |
@@ -368,6 +402,21 @@ criteria.
   lifecycle trigger.
 
 ## Helper scripts
+
+[`crawl-context.mjs`](crawl-context.mjs) (pu-07) -- step 2's reference
+implementation: `crawlBoundedContext()`, plus the named source-list constants
+(`README_CANDIDATES`, `MANIFEST_CANDIDATES`, `AGENT_FILE_CANDIDATES`) and cap
+constants (`MAX_LINES_PER_SOURCE`, `MAX_CHARS_PER_SOURCE`,
+`MAX_SOURCE_SUMMARY_CHARS`) documented above. Mirrors `interview-engine.mjs`'s
+dependency-light style as closely as a step that does real I/O can:
+deliberately imports nothing from `persona.ts`,
+`persona-store-global.ts`/`persona-store-repo-local.ts` -- the only way it
+ever learns about a parent persona is by spawning the real `mnemosyne
+persona show` CLI subprocess (the same precedent `persona-writer.mjs`'s
+`showPersonaViaCli` already established) and reading ONLY its `displayName`/
+`scope` summary lines, never its `sections` content. `crawl-context.d.mts`
+is its hand-written type companion (same convention as
+`interview-engine.d.mts`).
 
 [`interview-engine.mjs`](interview-engine.mjs) -- pure, dependency-free ESM
 functions implementing the adaptive-skip resolution, placeholder-vs-omit
@@ -436,3 +485,14 @@ hand-written type companion (same convention as `interview-engine.d.mts`).
   `resolveRememberScope()` (not a hardcoded/parallel scheme), and that a
   maximally-skipped interview (pw-12's exact skip-all pattern, both the
   global-tier and code-architect cases) still triggers a real call.
+- [`../../lib/mnemosyne/layer1/__tests__/persona-interview-crawl.test.ts`](../../lib/mnemosyne/layer1/__tests__/persona-interview-crawl.test.ts)
+  (pu-07) -- proves step 2's `crawlBoundedContext()` reads the named source
+  list exhaustively but never beyond it (extra, irrelevant repo files are
+  never touched), that the cap is a real, enforced value (an oversized
+  README is truncated, not fully dumped), that a repo with none of the named
+  sources present still yields a valid, non-empty `sourceSummary` without
+  erroring, that a parent persona's full `sections` content never appears
+  verbatim in the result (only its `displayName`/`scope` summary does, via a
+  real `mnemosyne persona show` CLI subprocess), and a structural check that
+  this file's crawl-step prose names the exact same source list and cap
+  values the code implements.
