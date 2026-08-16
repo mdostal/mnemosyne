@@ -1,10 +1,34 @@
 id: pu-06-draft-persona-transport-tests
 epic: mnemosyne-persona-ux
 title: Draft cross-transport round-trip + concurrency + leak-proof tests
-status: planned
+status: complete
 complexity: medium
 methodology: tdd
 depends_on: [pu-03-draft-persona-routes, pu-05-draft-persona-skill-harness-mcp]
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 16e4a92). Independently verified: grepped the
+  new test file for jest.mock/vi.mock/sinon/stub( and for any import of
+  writeDraftPersona/writeGlobalPersona/writeRepoLocalPersona/
+  disposeDraftPersona/readDraftPersona -- none found; the only production
+  import is getPersonaContent (a pure read, used once for the leak-proof
+  test's third read path), exactly as specified. Reran the full new test
+  file myself (npx tsx test/persona-draft-cross-transport.mjs) in both the
+  builder's worktree and the merged integration worktree -- 66/66 passing
+  both times, including the (propose-transport x approve-transport) parity
+  matrix, both concurrency scenarios (external-lock-block and organic
+  Promise.all race, confirmed genuinely concurrent via real timing/output
+  evidence in the run, not just claimed), and both leak-proof cases
+  (discard -> not reachable via any of 3 real-store read paths; approve ->
+  reachable via all 3, with no cross-contamination between a discarded and
+  a later-approved draft sharing the same identity). tsc --noEmit clean
+  both times. Confirmed via merge-base check the builder's worktree base
+  was STALE (missing pu-09/pu-10) -- resolved by merging via commit hash
+  into the up-to-date integration worktree. Note: the builder's first
+  dispatch stalled with zero committed progress (misread a backgrounded
+  test run as an external wait condition) and needed a resume nudge before
+  completing the real work documented above -- a dispatch-pattern issue,
+  not a defect in the delivered work itself. All acceptance criteria met.
 
 description: |
   Implements horizontal-plan.md H5: the genuinely new proof none of pu-02
