@@ -1,9 +1,28 @@
 id: ml-01-memory-level-taxonomy
 epic: mnemosyne-memory-levels
 title: Canonical memory-level taxonomy module (levels 0-4)
-status: pending
+status: complete
 complexity: low
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 0e5490e, built directly on the branch).
+  Independently verified: read lib/mnemosyne/memory-levels/levels.ts in full
+  -- confirmed the doc comment quotes the operator's exact words verbatim,
+  confirmed the disambiguation against both tiers.ts (orchestration axis)
+  and lib/mnemosyne/layers/ (retrieval-cascade axis) is explicit and
+  correct, confirmed via grep that "tier" never appears in any data field
+  (label/mechanism), only in disambiguation prose comments. Confirmed the
+  level-2/3/4 adapter-name mapping (graphify/code-graph, vector/keyword,
+  file) matches lib/mnemosyne/layers/registry.ts's real names. Reran the
+  19 new tests (19/19), tsc --noEmit (clean), and vitest lib/mnemosyne/layer1
+  (196/196) myself. One real infrastructure issue found and resolved during
+  verification: a stray leftover src/server.mjs process was squatting on
+  port 8541 (a hardcoded test port), caused by concurrent background-agent
+  test activity from other in-flight stories -- caused 4 unrelated
+  persona-interview-crawl-and-feed.test.ts failures on first run, confirmed
+  as pure port-collision flakiness (not a real regression) by killing the
+  stray process and reconfirming a clean pass. All acceptance criteria met.
 depends_on: []
 
 description: |
