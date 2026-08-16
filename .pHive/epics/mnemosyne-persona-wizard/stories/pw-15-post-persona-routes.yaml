@@ -1,9 +1,30 @@
 id: pw-15-post-persona-routes
 epic: mnemosyne-persona-wizard
 title: "POST /persona/* routes + validation-error surfacing"
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit d5e9a66, built directly on the branch).
+  Independently verified: read the actual route in lib/mnemosyne/server.ts
+  in full -- confirmed applyPersonaCors() is called (not reimplemented,
+  single definition in the file), confirmed writeGlobalPersona/
+  writeRepoLocalPersona are called directly with the URL :tier segment
+  only selecting which store function to call (never cross-checked against
+  the body's own tier -- that mismatch is correctly caught by the
+  underlying assertGlobalTier/assertRepoLocalTier guards, confirmed by
+  tracing writeGlobalPersona/writeRepoLocalPersona's own source). Reran the
+  extended test/http-api.mjs myself -- all new POST-route assertions pass,
+  including real-file-read-back verification, exact-error-string parity
+  checks against the underlying validators (proving no behavioral drift),
+  and CORS scoping tests matching pw-02's own allowed/disallowed origins;
+  only the 3 pre-existing/unrelated POST /remember failures remain (no new
+  failures). Reran tsc --noEmit (clean) and vitest lib/mnemosyne/layer1
+  (196/196, 14 files) myself. This is the 4th concurrent write-capable
+  transport (alongside CLI/MCP/skill-harness), going through the exact same
+  withLock'd write functions as the other three. All acceptance criteria
+  met.
 depends_on: [pw-08-cross-transport-roundtrip, pw-02-get-persona-routes-cors]
 
 description: |
