@@ -35,18 +35,40 @@
 //   node bin/mnemosyne-skill-helper.mjs graph-edges '{"node":"..."}'
 //   node bin/mnemosyne-skill-helper.mjs graph-impact <node> '{"depth":2}'
 //   node bin/mnemosyne-skill-helper.mjs graph-deps <node> '{"depth":2}'
+//   node bin/mnemosyne-skill-helper.mjs persona-sync '{"repo":"...","tier":"...","scopeId":"...","dryRun":false}'
+//   node bin/mnemosyne-skill-helper.mjs persona-seed '{"root":"...","scopeId":"..."}'
+//   node bin/mnemosyne-skill-helper.mjs persona-show <tier> <scopeId>
 //
 // PORT env (default 8477) — same convention as src/server.mjs / SERVICE.md.
+//
+// persona-* actions (mnemosyne-persona-mcp-tools) are a deliberate SECOND
+// exception to this file's "every action is a fetch() against the HTTP API"
+// rule (the first being none -- this is genuinely new). Layer 1 persona
+// sync/seed/show (bin/mnemosyne-persona.mjs, bin/mnemosyne-persona-seed.mjs)
+// has no HTTP route at all -- it operates directly against the filesystem
+// (repo-local/global persona stores, harness files) via TS imports, which is
+// why it's launched via tsx, not plain node (see bin/mnemosyne's dispatcher
+// and bin/mnemosyne-persona.mjs's own doc comment for the noEmit:true/no-
+// build-step constraint this works around). These three actions shell out to
+// that already-tested CLI as a subprocess instead -- same "wrap an existing,
+// separately-tested module, invent no new business logic here" principle
+// this file already follows for graph_*, just via a subprocess boundary
+// instead of fetch() because there is no HTTP surface to fetch().
 
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdir, open } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
 const BIN_PATH = path.join(REPO_ROOT, "bin", "mnemosyne");
+const TSX_BIN = path.join(REPO_ROOT, "node_modules", ".bin", "tsx");
+const PERSONA_CLI_PATH = path.join(REPO_ROOT, "bin", "mnemosyne-persona.mjs");
 
 export const DEFAULT_PORT = Number(process.env.PORT || 8477);
 const DEFAULT_LOG_DIR = path.join(homedir(), ".local", "share", "mnemosyne");
@@ -208,6 +230,57 @@ export const graphImpactAction = (port, node, { depth } = {}) =>
 export const graphDepsAction = (port, node, { depth } = {}) =>
   apiFetch(port, "GET", `/graph/deps/${encodeURIComponent(node)}${depth != null ? `?depth=${depth}` : ""}`);
 
+// --- persona-* actions: subprocess pass-throughs to bin/mnemosyne-persona.mjs
+// (tsx-launched, see file header) instead of fetch() -- no HTTP route exists
+// for Layer 1 persona sync/seed/show. `port` is accepted (unused) purely to
+// keep every action function's call signature uniform for the dispatcher
+// below; these three never touch the network.
+
+async function personaCliRun(args) {
+  try {
+    const { stdout, stderr } = await execFileAsync(TSX_BIN, [PERSONA_CLI_PATH, ...args]);
+    return { ok: true, output: stdout.trim(), stderr: stderr.trim() };
+  } catch (e) {
+    // bin/mnemosyne-persona.mjs's run() exits non-zero on a handled failure
+    // (bad args, unknown tier, etc.) after warn()-ing a clear message to
+    // stderr -- execFile throws on any non-zero exit, so that's surfaced
+    // here as ok:false with the real stderr, not re-thrown as a transport
+    // error the way a genuinely unexpected failure (e.g. tsx itself missing)
+    // still would be (e.code === "ENOENT" has no e.stdout/e.stderr to read).
+    if (e.stdout !== undefined || e.stderr !== undefined) {
+      return { ok: false, output: (e.stdout || "").trim(), stderr: (e.stderr || "").trim() };
+    }
+    throw e;
+  }
+}
+
+// personaSyncAction — writes resolved persona content into a repo's harness
+// files (or, with dryRun, computes the would-be diff with zero writes).
+export const personaSyncAction = (port, { repo, tier, scopeId, dryRun } = {}) =>
+  personaCliRun([
+    "sync",
+    ...(repo !== undefined ? ["--repo", repo] : []),
+    ...(tier !== undefined ? ["--tier", tier] : []),
+    ...(scopeId !== undefined ? ["--scope-id", scopeId] : []),
+    ...(dryRun ? ["--dry-run"] : []),
+  ]);
+
+// personaSeedAction — idempotently seeds the 3 global tiers from the
+// hardcoded TIER_CONTENT into the global persona store.
+export const personaSeedAction = (port, { root, scopeId } = {}) =>
+  personaCliRun([
+    "seed",
+    ...(root !== undefined ? ["--root", root] : []),
+    ...(scopeId !== undefined ? ["--scope-id", scopeId] : []),
+  ]);
+
+// personaShowAction — read-only, live fetch of a global-tier persona's real,
+// current content. Positional (tier, scopeId), matching the CLI's own
+// `persona show <tier> <scope-id>` shape, not a JSON-args object like the
+// other persona actions -- mirrors graphImpactAction/graphDepsAction's
+// (port, node, opts) shape for a single non-object positional argument.
+export const personaShowAction = (port, tier, scopeId) => personaCliRun(["show", tier, scopeId]);
+
 // --- CLI dispatcher -------------------------------------------------------
 
 const SIMPLE_ACTIONS = {
@@ -219,6 +292,9 @@ const SIMPLE_ACTIONS = {
   "graph-edges": (port, argJson) => graphEdgesAction(port, JSON.parse(argJson || "{}")),
   "graph-impact": (port, node, argJson) => graphImpactAction(port, node, JSON.parse(argJson || "{}")),
   "graph-deps": (port, node, argJson) => graphDepsAction(port, node, JSON.parse(argJson || "{}")),
+  "persona-sync": (port, argJson) => personaSyncAction(port, JSON.parse(argJson || "{}")),
+  "persona-seed": (port, argJson) => personaSeedAction(port, JSON.parse(argJson || "{}")),
+  "persona-show": (port, tier, scopeId) => personaShowAction(port, tier, scopeId),
 };
 const KNOWN_ACTIONS = ["ensure", ...Object.keys(SIMPLE_ACTIONS)];
 

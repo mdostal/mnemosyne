@@ -2,6 +2,33 @@
 
 All notable changes to Mnemosyne are documented here.
 
+## [0.7.0] — 2026-08-15
+
+Full MCP/skill-harness coverage for the persona CLI shipped in `v0.6.0` —
+`persona_sync`/`persona_seed`/`persona_show` are now real tools/actions
+whenever Mnemosyne is installed locally (MCP server or the Claude Code
+skill harness), not just a standalone CLI. Closes the gap where the new
+persona work was only reachable via `bin/mnemosyne persona ...` directly.
+
+### Added
+
+- **`persona_sync` / `persona_seed` / `persona_show` MCP tools**
+  (`bin/mnemosyne-mcp.mjs`) — the full Layer 1 persona surface is now
+  callable the same way `recall`/`remember`/`grep`/`graph_*` already are:
+  as real MCP tools over stdio, verified end-to-end with a real MCP client
+  against a real spawned server process (no mocks), including a real
+  `$HOME`-sandboxed round trip (seed a global persona, read it back via
+  `persona_show`, prove `persona_sync --dry-run` writes nothing).
+- **`persona-sync` / `persona-seed` / `persona-show` skill-harness
+  actions** (`bin/mnemosyne-skill-helper.mjs`, `skills/mnemosyne-standalone`)
+  — same three operations, reachable from a bare Claude Code session via
+  the existing skill harness. Unlike every other action in this file
+  (which `fetch()` the HTTP API), these are a deliberate, documented
+  exception: Layer 1 persona sync/seed/show has no HTTP route at all, so
+  they shell out to the already-tested `bin/mnemosyne-persona.mjs` CLI as a
+  subprocess instead — no swarm-memory/engine.mjs logic duplicated either
+  way.
+
 ## [0.6.0] — 2026-08-15
 
 Full `mnemosyne-persona-foundation` epic (`pf-01`..`pf-14`) — Epic 1 of 2 in the

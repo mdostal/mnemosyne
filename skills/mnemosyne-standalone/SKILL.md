@@ -1,6 +1,6 @@
 ---
 name: mnemosyne-standalone
-description: Drive a standalone Mnemosyne memory-god instance directly from a bare Claude Code session — no Pantheon host required. Starts the service if it isn't already running (health-checked first, never a second instance), then exposes recall, remember, grep, reindex, and graph-query as thin pass-throughs over Mnemosyne's own HTTP API. Use when an operator wants to recall/remember/search/reindex/inspect-the-graph via this repo's standalone Mnemosyne without wiring in Pantheon's L2 plugin lifecycle.
+description: Drive a standalone Mnemosyne memory-god instance directly from a bare Claude Code session — no Pantheon host required. Starts the service if it isn't already running (health-checked first, never a second instance), then exposes recall, remember, grep, reindex, graph-query, and Layer 1 persona sync/seed/show as thin pass-throughs over Mnemosyne's own HTTP API (or, for persona-*, the already-tested persona CLI). Use when an operator wants to recall/remember/search/reindex/inspect-the-graph/manage-personas via this repo's standalone Mnemosyne without wiring in Pantheon's L2 plugin lifecycle.
 ---
 
 # Mnemosyne Standalone
@@ -18,9 +18,10 @@ directly, inside *this* repo, by an operator who wants to talk to Mnemosyne
 by hand.
 
 **Input:** `$ARGUMENTS` names an action (`recall`, `remember`, `grep`,
-`reindex`, `graph-stats`, `graph-edges`, `graph-impact`, `graph-deps`, or
-bare `ensure` to just start/confirm the service) plus whatever arguments
-that action needs (see the table below).
+`reindex`, `graph-stats`, `graph-edges`, `graph-impact`, `graph-deps`,
+`persona-sync`, `persona-seed`, `persona-show`, or bare `ensure` to just
+start/confirm the service) plus whatever arguments that action needs (see
+the table below).
 
 ## Process
 
@@ -65,11 +66,17 @@ that action needs (see the table below).
 
 ## Actions
 
-Every action is a **thin pass-through** to the corresponding
-`src/server.mjs` route — same request shape, same response shape, no new
-business logic invented in the skill layer.
+Every `recall`/`remember`/`grep`/`reindex`/`graph-*` action is a **thin
+pass-through** to the corresponding `src/server.mjs` route — same request
+shape, same response shape, no new business logic invented in the skill
+layer. The three `persona-*` actions are a deliberate exception: Layer 1
+persona sync/seed/show has no HTTP route at all (it operates directly
+against the filesystem via TS imports), so they instead shell out to the
+already-tested `bin/mnemosyne-persona.mjs` CLI as a subprocess — same "wrap
+an existing, separately-tested module, invent nothing new here" principle,
+just via a subprocess boundary instead of `fetch()`.
 
-| Action | Helper invocation | Server route |
+| Action | Helper invocation | Underlying surface |
 |---|---|---|
 | `recall` | `node bin/mnemosyne-skill-helper.mjs recall '{"query":"...","scope":"...","hits":5}'` | `POST /recall` |
 | `remember` | `node bin/mnemosyne-skill-helper.mjs remember '{"text":"...","scope":"...","tag":"..."}'` | `POST /remember` |
@@ -79,6 +86,9 @@ business logic invented in the skill layer.
 | `graph-edges` | `node bin/mnemosyne-skill-helper.mjs graph-edges '{"node":"..."}'` | `GET /graph/edges` |
 | `graph-impact` | `node bin/mnemosyne-skill-helper.mjs graph-impact <node> '{"depth":2}'` | `GET /graph/impact/:node` |
 | `graph-deps` | `node bin/mnemosyne-skill-helper.mjs graph-deps <node> '{"depth":2}'` | `GET /graph/deps/:node` |
+| `persona-sync` | `node bin/mnemosyne-skill-helper.mjs persona-sync '{"repo":"...","tier":"...","scopeId":"...","dryRun":false}'` | `bin/mnemosyne-persona.mjs sync` (subprocess) |
+| `persona-seed` | `node bin/mnemosyne-skill-helper.mjs persona-seed '{"root":"...","scopeId":"..."}'` | `bin/mnemosyne-persona.mjs seed` (subprocess) |
+| `persona-show` | `node bin/mnemosyne-skill-helper.mjs persona-show <tier> <scopeId>` | `bin/mnemosyne-persona.mjs show` (subprocess) |
 | `ensure` | `node bin/mnemosyne-skill-helper.mjs ensure` | (no route — just the start-check itself) |
 
 `reindex`'s `collection` and at least one `paths[]` entry are required
@@ -86,15 +96,28 @@ business logic invented in the skill layer.
 "reindex everything" mode). `reindex` requires an explicit operator-named
 collection, exactly like the `/ui` Operations panel does.
 
+`persona-sync`'s `--repo` is always the harness-file write target for every
+tier; for the 3 global tiers (`top-orchestrator`/`company-director`/
+`project-orchestrator`) content comes from the global persona store
+(`~/.mnemosyne/personas`), never from `repo` — see
+`bin/mnemosyne-persona.mjs`'s own doc comment for the full write-target-
+vs-content-source distinction. `persona-show` only reads the 3 global tiers
+(`code-architect` personas live in a repo-local store this action does not
+read).
+
 ## What this skill is NOT
 
 - **Not a second engine.** It never imports `src/engine.mjs` and never
-  shells out to the `swarm-memory` CLI directly. Every action goes
-  *through* Mnemosyne's own HTTP API (`src/server.mjs`) — this preserves
-  the existing transport/engine split and every guardrail already enforced
-  in `engine.mjs` (loud failure, full provenance on every hit, no
-  collection wipe/delete verb anywhere). A skill that bypassed the API
-  would silently reopen every risk `s-02`/`s-05` already closed off.
+  shells out to the `swarm-memory` CLI directly. Every `recall`/`remember`/
+  `grep`/`reindex`/`graph-*` action goes *through* Mnemosyne's own HTTP API
+  (`src/server.mjs`) — this preserves the existing transport/engine split
+  and every guardrail already enforced in `engine.mjs` (loud failure, full
+  provenance on every hit, no collection wipe/delete verb anywhere). A
+  skill that bypassed the API would silently reopen every risk `s-02`/`s-05`
+  already closed off. `persona-*` actions are the one deliberate exception
+  (see "Actions" above) — there is no HTTP route to go through, so they
+  shell out to the separately-tested persona CLI instead; no swarm-memory
+  or engine.mjs logic is duplicated there either.
 - **Not a supervisor/daemon manager.** It starts the service once if
   needed and gets out of the way; it does not restart it on crash, does not
   manage multiple instances, and does not stop the service when the skill
@@ -105,8 +128,7 @@ collection, exactly like the `/ui` Operations panel does.
   browser UI; it does not reimplement any of the Lanes/Search/Graph/
   Operations panels itself.
 - **Not a config mutator.** `POST /lanes` (add-a-scope) and
-  `POST /cache/refresh` are intentionally not exposed as skill actions here
-  — this story's ask was recall/remember/grep/reindex/graph-query.
+  `POST /cache/refresh` are intentionally not exposed as skill actions here.
   Operators who need those two reach them via the `/ui` Operations/Lanes
   panels directly.
 
