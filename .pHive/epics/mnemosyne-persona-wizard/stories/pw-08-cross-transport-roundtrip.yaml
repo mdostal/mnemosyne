@@ -1,9 +1,29 @@
 id: pw-08-cross-transport-roundtrip
 epic: mnemosyne-persona-wizard
 title: Cross-transport write/read round-trip + concurrency test
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-15 (commit c821157, built directly on the branch, no
+  separate worktree). Real TDD, independently verified: reran
+  persona-cross-transport.mjs (41/41, including byte-exact read-back
+  equality across all 3 (write,read) transport pairs and a genuine
+  cross-transport concurrency proof -- CLI subprocess vs MCP tool call
+  racing the same target file, both a deterministic pre-placed-lock test
+  and 5 organic unstaged races with real alternating winners), tsc clean,
+  persona-cli.mjs/mcp-server-persona.mjs/mcp-server.mjs all green, vitest
+  lib/mnemosyne/layer1 150/150. Zero production-code changes needed --
+  confirms pw-05/pw-06/pw-07 share one write path and withLock is
+  genuinely transport-agnostic, exactly as predicted. Independently
+  confirmed the builder's flagged pre-existing, unrelated skill-harness.mjs
+  failure (a /remember response-shape drift: source_ref/status keys not in
+  that test's hardcoded expected-key list) predates this story -- diffed
+  test/skill-harness.mjs and src/server.mjs against the pw-03 merge
+  baseline (commit 39bb557) and confirmed neither file changed by pw-08;
+  all 19 persona-specific assertions in that file pass. All acceptance
+  criteria met.
 depends_on: [pw-07-mcp-persona-create]
 
 description: |
