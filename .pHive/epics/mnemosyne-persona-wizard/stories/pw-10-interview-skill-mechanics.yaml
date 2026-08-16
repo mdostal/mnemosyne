@@ -1,9 +1,33 @@
 id: pw-10-interview-skill-mechanics
 epic: mnemosyne-persona-wizard
 title: Interview skill - adaptive question sequencing
-status: pending
+status: complete
 complexity: high
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 8b5a50b, built directly on the branch). This
+  ticket was first attempted in a parallel two-teammate dispatch alongside
+  pw-09 and was silently dropped by that run (zero commit, zero files) --
+  caught via git log / filesystem check, not by trusting the agent's
+  self-report, and re-dispatched solo. Independently verified this second
+  attempt with extra scrutiny given that incident: read SKILL.md
+  end-to-end and cross-checked its mapping table line-by-line against the
+  real kickoff-protocol.md Phase 3b section
+  (~/.claude/plugins/cache/plugin-hive/plugin-hive/2.15.0/hive/references/kickoff-protocol.md:756-820)
+  myself -- adaptive skip, verbatim-answered/explicit-marker-skipped/
+  omit-if-optional-skipped persistence rule, and the non-blocking
+  hard-fail rule all faithfully reproduced (persona-shaped wording, same
+  mechanics). Read interview-engine.mjs's actual resolveAnswer()/
+  runPersonaInterview()/buildRememberText() implementation. Reran
+  vitest lib/mnemosyne/layer1/__tests__/persona-interview-skill.test.ts
+  myself (16/16) -- confirmed the max-skip case genuinely calls the REAL
+  assertValidPersona (imported from persona.ts, not a hand-rolled check).
+  Confirmed it uses pw-09's resolveRememberScope() for scope/tag mapping
+  (not a second invented scheme) and folds scopeId/tier into remembered
+  text per that resolver's own doc comment. Reran full vitest suite
+  (584/584, 42 files, no regressions) and tsc --noEmit (clean) myself.
+  All acceptance criteria met.
 depends_on: [pw-08-cross-transport-roundtrip]
 
 description: |
