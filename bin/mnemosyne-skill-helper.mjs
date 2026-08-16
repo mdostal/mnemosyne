@@ -39,23 +39,29 @@
 //   node bin/mnemosyne-skill-helper.mjs persona-seed '{"root":"...","scopeId":"..."}'
 //   node bin/mnemosyne-skill-helper.mjs persona-show <tier> <scopeId>
 //   node bin/mnemosyne-skill-helper.mjs persona-create '{"file":"...","repo":"...","root":"..."}'
+//   node bin/mnemosyne-skill-helper.mjs persona-draft-propose '{"file":"...","repo":"..."}'
+//   node bin/mnemosyne-skill-helper.mjs persona-draft-show <tier> <scopeId> '{"repo":"..."}'
+//   node bin/mnemosyne-skill-helper.mjs persona-draft-approve <tier> <scopeId> '{"repo":"..."}'
+//   node bin/mnemosyne-skill-helper.mjs persona-draft-discard <tier> <scopeId> '{"repo":"..."}'
 //
 // PORT env (default 8477) — same convention as src/server.mjs / SERVICE.md.
 //
 // persona-* actions (mnemosyne-persona-mcp-tools, extended by pw-06 for
-// persona-create) are a deliberate SECOND exception to this file's "every
-// action is a fetch() against the HTTP API" rule (the first being none --
-// this is genuinely new). Layer 1 persona sync/seed/show/create
+// persona-create, and pu-05 for the four persona-draft-* verbs below) are a
+// deliberate SECOND exception to this file's "every action is a fetch()
+// against the HTTP API" rule (the first being none -- this is genuinely
+// new). Layer 1 persona sync/seed/show/create/draft-*
 // (bin/mnemosyne-persona.mjs, bin/mnemosyne-persona-seed.mjs) has no HTTP
 // route at all -- it operates directly against the filesystem (repo-local/
-// global persona stores, harness files) via TS imports, which is why it's
-// launched via tsx, not plain node (see bin/mnemosyne's dispatcher and
-// bin/mnemosyne-persona.mjs's own doc comment for the noEmit:true/no-
-// build-step constraint this works around). These four actions shell out to
-// that already-tested CLI as a subprocess instead -- same "wrap an existing,
-// separately-tested module, invent no new business logic here" principle
-// this file already follows for graph_*, just via a subprocess boundary
-// instead of fetch() because there is no HTTP surface to fetch().
+// global persona stores, draft stores, harness files) via TS imports, which
+// is why it's launched via tsx, not plain node (see bin/mnemosyne's
+// dispatcher and bin/mnemosyne-persona.mjs's own doc comment for the
+// noEmit:true/no-build-step constraint this works around). These actions
+// shell out to that already-tested CLI as a subprocess instead -- same
+// "wrap an existing, separately-tested module, invent no new business logic
+// here" principle this file already follows for graph_*, just via a
+// subprocess boundary instead of fetch() because there is no HTTP surface
+// to fetch().
 
 import { execFile, spawn } from "node:child_process";
 import { mkdir, open } from "node:fs/promises";
@@ -296,6 +302,49 @@ export const personaCreateAction = (port, { file, repo, root } = {}) =>
     ...(root !== undefined ? ["--root", root] : []),
   ]);
 
+// personaDraftProposeAction/personaDraftShowAction/personaDraftApproveAction/
+// personaDraftDiscardAction (pu-05) -- pure subprocess pass-throughs to
+// pu-04's `mnemosyne persona draft <verb>` CLI verbs, same personaCliRun()
+// shape as personaSyncAction/personaSeedAction/personaShowAction/
+// personaCreateAction above. No new logic here, and no independent import of
+// persona-draft-store.ts or the real write functions -- every draft-store
+// call, validation, and archive-not-delete guarantee is owned entirely by
+// bin/mnemosyne-persona.mjs's own `draft` sub-subcommands.
+
+// personaDraftProposeAction -- writes/overwrites the active draft for
+// {tier, scopeId} (parsed from --file's YAML) via `persona draft propose
+// --file <path> [--repo <repo>]`.
+export const personaDraftProposeAction = (port, { file, repo } = {}) =>
+  personaCliRun([
+    "draft",
+    "propose",
+    ...(file !== undefined ? ["--file", file] : []),
+    ...(repo !== undefined ? ["--repo", repo] : []),
+  ]);
+
+// personaDraftShowAction -- read-only, live fetch of the active draft for
+// {tier, scopeId} via `persona draft show <tier> <scope-id> [--repo
+// <repo>]`. Positional (port, tier, scopeId) like personaShowAction, plus a
+// trailing options object for --repo (unlike personaShowAction, which only
+// ever reads the 3 global tiers) -- mirrors graphImpactAction/
+// graphDepsAction's (port, node, opts) shape.
+export const personaDraftShowAction = (port, tier, scopeId, { repo } = {}) =>
+  personaCliRun(["draft", "show", tier, scopeId, ...(repo !== undefined ? ["--repo", repo] : [])]);
+
+// personaDraftApproveAction -- commits the active draft via `persona draft
+// approve <tier> <scope-id> [--repo <repo>]`: the SAME write primitive
+// `create` uses, then archives (never deletes) the draft, and -- only when
+// the draft carries a sourceSummary -- fires a real remember() call. All of
+// that sequencing lives entirely in the CLI; this is a bare pass-through.
+export const personaDraftApproveAction = (port, tier, scopeId, { repo } = {}) =>
+  personaCliRun(["draft", "approve", tier, scopeId, ...(repo !== undefined ? ["--repo", repo] : [])]);
+
+// personaDraftDiscardAction -- archives the active draft for {tier,
+// scopeId} to the discarded/ subtree via `persona draft discard <tier>
+// <scope-id> [--repo <repo>]` -- never a bare filesystem delete.
+export const personaDraftDiscardAction = (port, tier, scopeId, { repo } = {}) =>
+  personaCliRun(["draft", "discard", tier, scopeId, ...(repo !== undefined ? ["--repo", repo] : [])]);
+
 // --- CLI dispatcher -------------------------------------------------------
 
 const SIMPLE_ACTIONS = {
@@ -311,6 +360,13 @@ const SIMPLE_ACTIONS = {
   "persona-seed": (port, argJson) => personaSeedAction(port, JSON.parse(argJson || "{}")),
   "persona-show": (port, tier, scopeId) => personaShowAction(port, tier, scopeId),
   "persona-create": (port, argJson) => personaCreateAction(port, JSON.parse(argJson || "{}")),
+  "persona-draft-propose": (port, argJson) => personaDraftProposeAction(port, JSON.parse(argJson || "{}")),
+  "persona-draft-show": (port, tier, scopeId, argJson) =>
+    personaDraftShowAction(port, tier, scopeId, JSON.parse(argJson || "{}")),
+  "persona-draft-approve": (port, tier, scopeId, argJson) =>
+    personaDraftApproveAction(port, tier, scopeId, JSON.parse(argJson || "{}")),
+  "persona-draft-discard": (port, tier, scopeId, argJson) =>
+    personaDraftDiscardAction(port, tier, scopeId, JSON.parse(argJson || "{}")),
 };
 const KNOWN_ACTIONS = ["ensure", ...Object.keys(SIMPLE_ACTIONS)];
 

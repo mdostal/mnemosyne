@@ -1,6 +1,6 @@
 ---
 name: mnemosyne-standalone
-description: Drive a standalone Mnemosyne memory-god instance directly from a bare Claude Code session — no Pantheon host required. Starts the service if it isn't already running (health-checked first, never a second instance), then exposes recall, remember, grep, reindex, graph-query, and Layer 1 persona sync/seed/show/create as thin pass-throughs over Mnemosyne's own HTTP API (or, for persona-*, the already-tested persona CLI). Use when an operator wants to recall/remember/search/reindex/inspect-the-graph/manage-personas via this repo's standalone Mnemosyne without wiring in Pantheon's L2 plugin lifecycle.
+description: Drive a standalone Mnemosyne memory-god instance directly from a bare Claude Code session — no Pantheon host required. Starts the service if it isn't already running (health-checked first, never a second instance), then exposes recall, remember, grep, reindex, graph-query, Layer 1 persona sync/seed/show/create, and persona draft propose/show/approve/discard as thin pass-throughs over Mnemosyne's own HTTP API (or, for persona-*, the already-tested persona CLI). Use when an operator wants to recall/remember/search/reindex/inspect-the-graph/manage-personas/review-persona-drafts via this repo's standalone Mnemosyne without wiring in Pantheon's L2 plugin lifecycle.
 ---
 
 # Mnemosyne Standalone
@@ -19,9 +19,10 @@ by hand.
 
 **Input:** `$ARGUMENTS` names an action (`recall`, `remember`, `grep`,
 `reindex`, `graph-stats`, `graph-edges`, `graph-impact`, `graph-deps`,
-`persona-sync`, `persona-seed`, `persona-show`, `persona-create`, or bare
-`ensure` to just start/confirm the service) plus whatever arguments that
-action needs (see the table below).
+`persona-sync`, `persona-seed`, `persona-show`, `persona-create`,
+`persona-draft-propose`, `persona-draft-show`, `persona-draft-approve`,
+`persona-draft-discard`, or bare `ensure` to just start/confirm the service)
+plus whatever arguments that action needs (see the table below).
 
 ## Process
 
@@ -69,12 +70,13 @@ action needs (see the table below).
 Every `recall`/`remember`/`grep`/`reindex`/`graph-*` action is a **thin
 pass-through** to the corresponding `src/server.mjs` route — same request
 shape, same response shape, no new business logic invented in the skill
-layer. The four `persona-*` actions are a deliberate exception: Layer 1
-persona sync/seed/show/create has no HTTP route at all (it operates directly
-against the filesystem via TS imports), so they instead shell out to the
-already-tested `bin/mnemosyne-persona.mjs` CLI as a subprocess — same "wrap
-an existing, separately-tested module, invent nothing new here" principle,
-just via a subprocess boundary instead of `fetch()`.
+layer. The eight `persona-*`/`persona-draft-*` actions are a deliberate
+exception: Layer 1 persona sync/seed/show/create/draft-* has no HTTP route
+at all (it operates directly against the filesystem via TS imports), so they
+instead shell out to the already-tested `bin/mnemosyne-persona.mjs` CLI as a
+subprocess — same "wrap an existing, separately-tested module, invent
+nothing new here" principle, just via a subprocess boundary instead of
+`fetch()`.
 
 | Action | Helper invocation | Underlying surface |
 |---|---|---|
@@ -90,6 +92,10 @@ just via a subprocess boundary instead of `fetch()`.
 | `persona-seed` | `node bin/mnemosyne-skill-helper.mjs persona-seed '{"root":"...","scopeId":"..."}'` | `bin/mnemosyne-persona.mjs seed` (subprocess) |
 | `persona-show` | `node bin/mnemosyne-skill-helper.mjs persona-show <tier> <scopeId>` | `bin/mnemosyne-persona.mjs show` (subprocess) |
 | `persona-create` | `node bin/mnemosyne-skill-helper.mjs persona-create '{"file":"...","repo":"...","root":"..."}'` | `bin/mnemosyne-persona.mjs create` (subprocess) |
+| `persona-draft-propose` | `node bin/mnemosyne-skill-helper.mjs persona-draft-propose '{"file":"...","repo":"..."}'` | `bin/mnemosyne-persona.mjs draft propose` (subprocess) |
+| `persona-draft-show` | `node bin/mnemosyne-skill-helper.mjs persona-draft-show <tier> <scopeId> '{"repo":"..."}'` | `bin/mnemosyne-persona.mjs draft show` (subprocess) |
+| `persona-draft-approve` | `node bin/mnemosyne-skill-helper.mjs persona-draft-approve <tier> <scopeId> '{"repo":"..."}'` | `bin/mnemosyne-persona.mjs draft approve` (subprocess) |
+| `persona-draft-discard` | `node bin/mnemosyne-skill-helper.mjs persona-draft-discard <tier> <scopeId> '{"repo":"..."}'` | `bin/mnemosyne-persona.mjs draft discard` (subprocess) |
 | `ensure` | `node bin/mnemosyne-skill-helper.mjs ensure` | (no route — just the start-check itself) |
 
 `reindex`'s `collection` and at least one `paths[]` entry are required
@@ -115,6 +121,20 @@ repo-local store (required for a `code-architect` candidate); without it,
 the write routes to the global store, and `root` (only meaningful without
 `repo`) overrides that global store's root — mirrors `persona-seed`'s own
 `root`, primarily for test isolation.
+
+`persona-draft-propose`'s `file` is required — same YAML candidate shape as
+`persona-create`'s, but written into the structurally separate draft store
+(`~/.mnemosyne/persona-drafts`) instead of the real persona store, never
+reachable by `persona-sync`/`persona-show` until a human runs
+`persona-draft-approve`. `persona-draft-show`/`persona-draft-approve`/
+`persona-draft-discard` take positional `<tier> <scopeId>`, matching
+`persona-show`'s own shape; `repo`, when given, routes to a repo-local draft
+(required for `code-architect`) — omit for the 3 global tiers.
+`persona-draft-approve` commits the draft via the same write primitive
+`persona-create` uses and archives (never deletes) the draft, firing a real
+`remember()` call only when the draft carries a `sourceSummary`.
+`persona-draft-discard` archives the draft to the `discarded/` subtree
+without committing it — also never a bare delete.
 
 ## What this skill is NOT
 
@@ -157,4 +177,7 @@ the write routes to the global store, and `root` (only meaningful without
   audience — contrast, don't confuse, with this skill).
 - [`../../test/skill-harness.mjs`](../../test/skill-harness.mjs) — TDD
   coverage: not-running-then-start, already-running-skip-start (no second
-  process), and pass-through correctness for every action above.
+  process), and pass-through correctness for every action above except the
+  four `persona-draft-*` actions.
+- [`../../test/skill-harness-persona-draft.mjs`](../../test/skill-harness-persona-draft.mjs)
+  — TDD coverage for the four `persona-draft-*` actions.
