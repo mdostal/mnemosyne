@@ -1,10 +1,26 @@
 id: pu-09-draft-first-regression
 epic: mnemosyne-persona-ux
 title: "Interview skill: draft-default / escape-hatch / max-skip regression proof"
-status: planned
+status: complete
 complexity: medium
 methodology: tdd
 depends_on: [pu-08-draft-first-interview-flow]
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 46a9a65). Independently verified: read
+  persona-interview-draft-regression.test.ts in full -- confirmed all 5
+  acceptance criteria are covered by 7 real tests, confirmed cases 2 and 4
+  reuse the wizard epic's own verbatim fixtures (pw11-full-co, pw-12's exact
+  max-skip token patterns and scopeIds) rather than superficially-similar
+  new ones, confirmed the byte-for-byte comparisons use the real production
+  serializer (personaToYaml) as ground truth, not a re-derived string.
+  Confirmed no real gap was found in pu-08 (assertValidPersona already
+  tolerates the draft-only proposedBy/proposedAt/sourceSummary keys).
+  Confirmed via merge-base check this worktree's base was current (included
+  pu-08's completion note), so no stale-base merge risk. Reran vitest
+  lib/mnemosyne/layer1 myself in both the builder's worktree and the merged
+  integration worktree (246/246 both times) and tsc --noEmit (clean both
+  times). All acceptance criteria met.
 
 description: |
   Implements horizontal-plan.md H6's regression component: the concrete proof
