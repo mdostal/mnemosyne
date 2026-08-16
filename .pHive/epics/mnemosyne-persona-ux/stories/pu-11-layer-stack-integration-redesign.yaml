@@ -1,0 +1,127 @@
+id: pu-11-layer-stack-integration-redesign
+epic: mnemosyne-persona-ux
+title: Layer-stack visibility section re-integrated into the new shell
+status: complete
+complexity: low
+methodology: tdd
+depends_on: [pu-10-personas-panel-redesign-shell]
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 645a144). Independently verified: read the full
+  diff -- confirmed #persona-layer-stack is genuinely nested inside
+  #personas (not merely placed after it), all DOM-target element ids
+  (persona-layer-stack-status/-table/-tbody/-empty, persona-level0-pointer,
+  persona-level0-path) are byte-for-byte preserved through the move, and
+  ui/app.js's loadPersonaLayerStack() change is doc-comment-only (fetch
+  logic, mnemosyneClientApiBase(), single call site in refreshAll() all
+  unchanged). Confirmed no hard-coded "Level/Layer 1-4" or "0-4" copy
+  appears anywhere in the re-homed section. Confirmed Level 0 stays
+  view-only with zero edit affordance. Reran the new
+  persona-layer-stack-shell-integration.mjs (26/26) plus the 4 other UI
+  test files myself in both the builder's worktree and the merged
+  integration worktree -- all passing both times, tsc --noEmit clean both
+  times. Confirmed via merge-base check the builder's worktree base was
+  STALE (missing pu-06) -- resolved by merging via commit hash into the
+  up-to-date integration worktree. All acceptance criteria met.
+
+description: |
+  Implements horizontal-plan.md H7's layer-stack component: carries pw-04's
+  existing #persona-layer-stack section (view-only layer stack + Level 0
+  pointer, via the already-shipped GET /layers) into pu-10's new shell, with
+  copy/labeling written defensively against today's real GET /layers
+  response shape rather than the sibling mnemosyne-memory-levels epic's
+  documented-but-not-yet-shipped 0-4 level numbering (design-discussion.md
+  OQ1). No new backend route -- this is a pure re-integration + labeling
+  ticket.
+
+acceptance_criteria:
+  - "Given pu-10's new shell, when this ticket ships, then the layer-stack section (currently pw-04's #persona-layer-stack) is re-integrated into it, remaining a clearly-labeled, visually distinct section from the persona list -- never merged into one list, per research-brief.md §6's already-established boundary"
+  - "Given the section's copy/labeling, when read for any 'level' or 'layer' terminology, then it renders exactly what GET /layers actually returns today (layer names in cascade order, a writable boolean) and does NOT hard-code, assume, or silently imply the sibling epic's corrected 0-4 numbering anywhere in code or copy -- an explicit acceptance gate, not an incidental property"
+  - "Given loadPersonaLayerStack() (pw-04's existing function), when this ticket ships, then it is reused, not rebuilt, for the data-fetching half -- only its rendering target changes to fit the new shell's structure"
+  - "Given Level 0's pointer display, when this ticket ships, then it remains view-only with zero edit affordance, exactly as Epic 1's original recommendation and every prior epic since have held -- not relitigated by this ticket"
+
+steps:
+  - id: research
+    description: >
+      Read ui/index.html's #persona-layer-stack section (lines 276-307) and
+      ui/app.js's loadPersonaLayerStack() (pw-04) in full. Read
+      lib/mnemosyne/server.ts's GET /layers route (lines 228-247) and
+      client.getConfiguredLayers()'s actual return shape to confirm exactly
+      what data is available to render TODAY, as the concrete boundary this
+      ticket's copy must stay within. Read design-discussion.md §6/OQ1 for
+      the exact defensive-posture requirement.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Write failing tests confirming: the layer-stack section renders inside
+      pu-10's new shell structure; loadPersonaLayerStack() is called, not
+      duplicated; a search of the new copy/labels for any hard-coded
+      '0'/'1'/'2'/'3'/'4' level-number reference tied to specific layer
+      semantics fails the test (i.e., a structural check that this ticket
+      did not encode the sibling epic's unshipped numbering).
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Move/restyle the #persona-layer-stack section markup into pu-10's new
+      shell structure per pu-01's chosen option (if it addresses this
+      section at all -- if not, keep the section's existing visual treatment
+      largely as-is, re-homed structurally). Update loadPersonaLayerStack()'s
+      DOM target references only; its fetch logic (GET /layers,
+      mnemosyneClientApiBase()) stays unchanged.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: >
+      Confirm no copy/label anywhere in this ticket's changes references the
+      sibling epic's 0-4 numbering as though it were already live. Confirm
+      loadPersonaLayerStack() and the GET /layers route are both reused
+      unchanged, not modified or duplicated.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: ui/index.html
+      purpose: "#persona-layer-stack's existing markup (lines 276-307, pw-04) -- what this ticket re-homes into the new shell."
+    - path: ui/app.js
+      purpose: "loadPersonaLayerStack() (pw-04) -- reused unchanged for data-fetching; only its DOM-target wiring changes."
+    - path: lib/mnemosyne/server.ts
+      purpose: "GET /layers (lines 228-247) -- confirms exactly what data shape is real and available today, the boundary this ticket's copy must not exceed."
+
+files_to_modify:
+  - file: ui/index.html
+    change: "#persona-layer-stack section re-homed into pu-10's new shell structure; copy reviewed for level-numbering assumptions."
+  - file: ui/app.js
+    change: "loadPersonaLayerStack()'s DOM-target references updated to match the new shell; fetch logic unchanged."
+
+design_decisions:
+  - decision: "Copy/labeling renders whatever GET /layers actually returns today (names, cascade order, writable flag) -- never the sibling epic's not-yet-shipped 0-4 numbering."
+    rationale: "design-discussion.md OQ1: this session has zero visibility into mnemosyne-memory-levels' actual shipped shape. Hard-coding an assumption about it would either be wrong or need to be reverted the moment that epic ships -- the safer, explicitly-chosen posture is defensive rendering against today's real data."
+  - decision: "Level 0 stays view-only with zero edit affordance -- not relitigated."
+    rationale: "Carried forward unchanged from Epic 1's original recommendation, reaffirmed by the wizard epic's own §3d/§6 OQ4 -- nothing in this epic's research surfaces a reason to revisit it."
+
+cross_cutting: []
+
+risks:
+  - severity: low
+    description: "Once the sibling mnemosyne-memory-levels epic ships, this section will likely need a follow-up ticket to actually surface the corrected 0-4 numbering structurally, not just in defensively-neutral prose."
+    mitigation: "Named explicitly as an accepted, out-of-scope follow-up in design-discussion.md OQ1 and horizontal-plan.md's Cross-Cutting Concerns -- not silently forgotten, just not this epic's job to build."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-ux/docs/design-discussion.md
+    relevant_excerpt: |
+      OQ1: "pu-11 is built defensively against today's GET /layers response
+      (names in cascade order, writable boolean) and explicitly avoids
+      hard-coding the corrected 0-4 numbering into any logic -- but once
+      that sibling epic ships, a follow-up ticket... will likely be needed."
+  - path: .pHive/epics/mnemosyne-persona-wizard/stories/pw-04-layer-stack-visibility.yaml
+    relevant_excerpt: |
+      The original pw-04 ticket this one re-homes, not rebuilds from
+      scratch -- confirms loadPersonaLayerStack()'s existing fetch logic and
+      the GET /layers reuse convention this ticket must not duplicate.

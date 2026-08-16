@@ -95,6 +95,79 @@ regressions found across the epic; the only failures on either side of the
   `tsc --noEmit` there, and got the exact same 3 failures — nothing else —
   proving they predate this epic and are not caused by it.
 
+## [0.10.0] — 2026-08-16
+
+Full `mnemosyne-persona-ux` epic (`pu-01`..`pu-15`) — a heavy UI/UX
+redesign of the Personas panel plus a real agent-assisted "crawl, propose,
+human-approve" authoring flow, both driven by a genuine multi-swarm design
+pass (3 options → 7 named-lens review → 3 synthesized options → a
+cross-checked selection). Every ticket independently verified with real
+tests (real subprocesses, real HTTP calls, real disk read-backs, a real
+end-to-end loop from a live CLI interview through UI-simulated review to a
+committed persona) before merging; a closing design-fidelity review found
+4 real, honestly-logged deviations from the chosen design (tracked as a
+follow-up, not silently absorbed — see below).
+
+### Added
+
+- **Draft-persona staging/approval infrastructure** — a structurally
+  separate, home-rooted draft store (`~/.mnemosyne/persona-drafts`, never
+  inside a consuming repo's git tree), addressed by the same `{tier,
+  scopeId}` identity as the real persona store, disposed by archive-by-move
+  (never a hard delete). New `/persona/draft/*` HTTP routes
+  (list/read/propose/approve/discard), a `mnemosyne persona draft
+  propose|show|approve|discard` CLI, and matching skill-harness/MCP tool
+  wraps — verified leak-proof and consistent across all 4 transports
+  (CLI/skill-harness/MCP/HTTP): a discarded draft is unreachable through
+  every real-store read path, an approved one becomes visible through all
+  of them, and concurrent proposals against the same identity never
+  corrupt state.
+- **`remember()` fires only on draft approval, never on draft creation** —
+  verified end-to-end: a `recall()` query during the pending-review window
+  returns nothing; after approval, the same query finds the real, indexed
+  content.
+- **Bounded crawl-context tool for agent-assisted persona authoring**
+  (`crawl-context.mjs`) — an agent proposing a persona now crawls a small,
+  capped set of real project signals (never an unbounded drill-down) to
+  produce a `sourceSummary` a human reviewer can see and judge before
+  approving.
+- **Interview skill now defaults to proposing a draft**, not committing
+  directly — `skills/mnemosyne-persona-interview` writes via `persona
+  draft propose` by default; a `--commit-directly` flag reproduces the old
+  (pre-epic) immediate-commit behavior exactly, byte-for-byte, for
+  backward compatibility.
+- **Personas panel rebuilt** against a genuine multi-swarm design pass's
+  chosen option ("Trust-Gated Unified Queue"): a single grouped/filterable
+  list (group by Tier/Repo/Status, a status filter, sticky group headers),
+  a jargon glossary, status always rendered as real text (never a glyph),
+  and `parentRefs` upgraded from inert pointer-only text into an
+  interactive-but-still-pointer-only in-page focus jump — never fetching a
+  parent's actual content.
+- **Draft review/approve UI** — the old single free-text create/edit form
+  is retargeted to propose a draft instead of writing directly; a unified
+  list shows both agent-proposed drafts (with their `sourceSummary`,
+  visibly labeled) and human-typed drafts (without one, never a fabricated
+  label); a read-before-edit trust gate (never a `disabled` attribute —
+  gating is structural, controls simply don't exist in the DOM until the
+  raw proposal has been read) precedes Approve/Discard, each requiring
+  explicit confirmation.
+
+### Known gaps (found by this epic's own closing design-fidelity review,
+### tracked as follow-up work, not fixed here)
+
+- The status filter defaults to "All" instead of the design's specified
+  "Needs review".
+- The design's own "central bet" batch-approve mechanism (review N drafts,
+  one reload) was never built — each approve/discard today triggers its
+  own full reload.
+- No persistent post-approval provenance note survives approval, and the
+  `Persona` data model has no field to hold one — once approved, an
+  agent-proposed persona is indistinguishable from a hand-typed one.
+- The repo-hierarchy fix that was the literal deciding factor for choosing
+  this design over its alternative is correctly coded but structurally
+  unreachable today — no code path in the shipped panel ever fetches
+  repo-scoped (`code-architect`) personas or drafts.
+
 ## [0.8.0] — 2026-08-16
 
 Full `mnemosyne-persona-wizard` epic (`pw-01`..`pw-17`) — Epic 2 of 2 in the

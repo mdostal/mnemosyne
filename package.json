@@ -50,11 +50,13 @@
     "test:graph-route": "node test/graph-route.mjs",
     "test:reindex-route": "node test/reindex-route.mjs",
     "test:skill-harness": "node test/skill-harness.mjs",
+    "test:skill-harness-persona-draft": "node test/skill-harness-persona-draft.mjs",
     "test:mcp-server": "node test/mcp-server.mjs",
     "test:graphify-bridge": "node test/graphify-bridge.mjs",
     "test:mcp-server-graphify": "node test/mcp-server-graphify.mjs",
     "test:mcp-server-persona": "node test/mcp-server-persona.mjs",
-    "test:persona-cross-transport": "node test/persona-cross-transport.mjs"
+    "test:persona-cross-transport": "node test/persona-cross-transport.mjs",
+    "test:persona-draft-cross-transport": "tsx test/persona-draft-cross-transport.mjs"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",

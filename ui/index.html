@@ -195,14 +195,93 @@
     <section id="personas" class="panel panel-wide">
       <h2>Personas</h2>
       <p class="panel-status" id="personas-status">loading…</p>
+      <!-- pu-12-draft-review-approve-ui: loadDrafts()'s own status element,
+           following loadPersonas()'s existing "fetch, setStatus, render"
+           convention (personas-status above), kept as its own element rather
+           than overloading personas-status -- the two fetches (GET /persona,
+           GET /persona/draft) are independent and can succeed/fail
+           independently, exactly as loadPersonaLayerStack() below already
+           has its own status element distinct from personas-status. -->
+      <p class="panel-status" id="personas-drafts-status">loading…</p>
       <p class="panel-hint">
         Every existing persona (global tiers: <code>top-orchestrator</code>,
         <code>company-director</code>, <code>project-orchestrator</code>) — fetched
         from the persona service on port 3141 (a different server than this UI's
         own, see <code>lib/mnemosyne/server.ts</code>). A persona's parent(s) render
         as pointer-only text (tier + scope ID) — the parent's actual content is
-        never fetched or inlined here.
+        never fetched or inlined here. Rows with a pending draft (agent-proposed
+        or human-typed) are merged into the SAME list below, per
+        <code>.pHive/design/mnemosyne-persona-ux/synthesized/option-2.md</code>
+        §1/§3 ("one continuous list holds every persona identity — live and
+        drafted").
       </p>
+
+      <!-- pu-10-personas-panel-redesign-shell: glossary block, addressing
+           onboarding-clarity.md's finding that none of the 3 original
+           design options defined tier/scopeId/Parent(s)/sourceSummary
+           anywhere. Collapsed by default (native <details>, zero space cost
+           for a returning operator) -- selection.md / synthesized
+           option-2.md §2. -->
+      <details id="personas-glossary">
+        <summary>What do these terms mean?</summary>
+        <dl class="fields">
+          <dt>tier</dt>
+          <dd>The four fixed levels a persona can sit at, in cascade order: <code>top-orchestrator</code>, <code>company-director</code>, <code>project-orchestrator</code>, <code>code-architect</code>.</dd>
+          <dt>scopeId</dt>
+          <dd>A human-assigned identity for this persona (a company/project/repo name) — never auto-detected.</dd>
+          <dt>Parent(s)</dt>
+          <dd>A pointer to where this persona's own content stops and a parent's begins ("query up, never copy down") — the parent's real content is never fetched or shown here, only named.</dd>
+          <dt>sourceSummary</dt>
+          <dd>What an agent read before proposing a draft — shown under the label "Why the agent proposed this" when reviewing a draft below. A human-typed draft has no sourceSummary, and never shows a fabricated one.</dd>
+        </dl>
+      </details>
+
+      <!-- pu-10: group-by / status-filter toolbar. group-by reuses the
+           existing .mode-toggle role="radiogroup" idiom (#search-form's
+           mode switch, ui/app.js); status reuses the existing native
+           <select>-as-filter idiom (#reindex-lane). Neither invents a new
+           chip/tab widget (design-language-consistency.md, selection.md
+           "where all 3 options already agree"). Toggling either control
+           re-buckets the already-fetched personas client-side -- no
+           re-fetch, matching every panel's manual-refresh-only convention. -->
+      <div id="personas-toolbar" class="persona-toolbar">
+        <span class="mode-toggle" role="radiogroup" aria-label="group personas by">
+          <label><input type="radio" name="personas-group-by" value="tier" checked /> Tier</label>
+          <label><input type="radio" name="personas-group-by" value="repo" /> Repo</label>
+          <label><input type="radio" name="personas-group-by" value="status" /> Status</label>
+        </span>
+
+        <label for="personas-status-filter">status:</label>
+        <select id="personas-status-filter">
+          <option value="all" selected>All</option>
+          <option value="live">Live</option>
+          <option value="needs-review">Needs review</option>
+          <option value="history">History</option>
+        </select>
+      </div>
+
+      <!-- aria-live region: announces approve/discard/parent-jump outcomes
+           (accessibility.md: "no mention of an aria-live announcement...").
+           pu-10 used it only for the parent-ref filter self-heal (§5/
+           personas-toolbar above); pu-12-draft-review-approve-ui wires it
+           for approve/discard outcomes too (ui/app.js, approveDraft()/
+           discardDraft()) -- same single element, never a second aria-live
+           region. -->
+      <p id="personas-live-region" class="sr-only" aria-live="polite"></p>
+
+      <!-- Outer shape (section -> h2 -> panel-status -> table) unchanged,
+           per selection.md/synthesized option-2.md §1: "#personas keeps its
+           existing <section class="panel panel-wide"> -> <h2> ->
+           panel-status -> <table> shape unchanged at the outer level."
+           Grouping happens INSIDE the one table via group-header <tr>s in
+           #personas-tbody, not a separate table per group. pu-12 adds one
+           new "Actions" column (Review/Edit toggle per row) -- the merged
+           live+draft rows and their expandable draft-detail panels
+           (source summary, read-before-edit gate, Approve/Discard) are
+           rendered by ui/app.js's renderPersonas()/buildPersonaDraftDetailRow(),
+           not new static markup here, following the same "row shape lives
+           in JS, static markup is only the outer table" convention pu-10
+           already established for grouping. -->
       <table id="personas-table">
         <thead>
           <tr>
@@ -210,22 +289,37 @@
             <th>Scope ID</th>
             <th>Display name</th>
             <th>Parent(s)</th>
+            <th>Status</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody id="personas-tbody"></tbody>
       </table>
+      <p class="panel-status" id="personas-empty" hidden></p>
 
-      <!-- pw-17-personas-panel-write-form: create/edit form, following
-           add-lane-form's exact convention (form-row divs, single submit
-           button, panel-status pass/fail element). POSTs to pw-15's
-           POST /persona/:tier/:scopeId route on the persona service (same
-           cross-origin personaServiceOrigin() pattern loadPersonas() above
-           already uses -- see ui/app.js). On success, re-loads via
-           loadPersonas() (pw-03) -- no second rendering path. A single
-           "knows" section (heading + body) is the v1 minimum viable write
-           path, not a full multi-section editor. -->
+      <!-- pw-17-personas-panel-write-form, RETARGETED by
+           pu-12-draft-review-approve-ui: same add-lane-form-derived
+           convention (form-row divs, single submit button, panel-status
+           pass/fail element), same field set (design-discussion.md §9.4:
+           one editor, reused, for both authoring paths) -- but now POSTs to
+           pu-03's POST /persona/draft/:tier/:scopeId route instead of the
+           real POST /persona/:tier/:scopeId (pw-15). A human typing a
+           persona by hand now produces an active DRAFT, not an immediate
+           commit -- reviewed/approved through the exact same queue below as
+           an agent-proposed draft (selection.md/synthesized option-2.md
+           §1/§4: "+ New draft" opens the same row-level editor; §4.4: "one
+           editor, reused, not a second one"). On success, calls loadDrafts()
+           (ui/app.js) -- never loadPersonas() directly, since proposing/
+           editing a draft never touches the real persona store; only
+           approve does that (see the draft-detail panel's Approve handler
+           below, which calls both). Also reused as the "Edit" affordance for
+           an existing live persona or an existing draft: clicking either
+           row's Edit/Review-then-edit control pre-fills these same fields
+           (populatePersonaForm(), ui/app.js) rather than building a second
+           form. A single "knows" section (heading + body) remains the v1
+           minimum viable write path, not a full multi-section editor. -->
       <form id="persona-form">
-        <h3>Create / edit persona</h3>
+        <h3>Propose / edit persona draft</h3>
         <div class="form-row">
           <label for="persona-tier">Tier</label>
           <select id="persona-tier" name="tier" required>
@@ -260,65 +354,77 @@
           <label for="persona-repo">Repo (optional — required for code-architect)</label>
           <input id="persona-repo" name="repo" type="text" placeholder="e.g. /path/to/repo -- only required for the code-architect tier" />
         </div>
-        <button type="submit">Save persona</button>
+        <button type="submit">Save draft</button>
         <p class="panel-status" id="persona-form-status"></p>
       </form>
-    </section>
 
-    <!-- ================================================================
-         pw-04-layer-stack-visibility: layer-stack visibility section.
-         Deliberately its OWN <section>, never folded into the persona list
-         above: it shows the CURRENTLY CONFIGURED, RUNTIME recall()/
-         remember() retrieval cascade order (a different data model from
-         personas — research-brief.md §6) via the ALREADY-SHIPPED GET
-         /layers route, plus a static, view-only Level 0 pointer.
+      <!-- pu-11-layer-stack-integration-redesign: pw-04's layer-stack
+           visibility section, re-homed from a standalone top-level
+           <section> (a sibling of #personas) into pu-10's new Personas
+           panel shell (horizontal-plan.md H7 component 2: "pu-11 depends
+           on pu-10 -- extends its shell"). Still deliberately its OWN
+           <section>, set off from the persona list/form above by a
+           border-top divider (the same idiom #persona-level0-pointer below
+           already uses) -- NEVER folded into #personas-table/
+           #personas-tbody's unified queue (research-brief.md §6's
+           already-established boundary; selection.md/synthesized
+           option-2.md doesn't address this section, so its existing visual
+           treatment carries forward largely as-is per pu-11's own spec).
 
-         ml-05-memory-levels-ui (epic mnemosyne-memory-levels) renames this
-         section's heading/hint copy only, to "Retrieval Layer Stack" (its
-         former heading is gone), to disambiguate it from the NEW, separate
-         "Memory Levels (0-4)" section below (the canonical 5-level
-         memory-STORE-TYPE taxonomy). GET /layers and this section's markup
-         are otherwise byte-for-byte unchanged; see ui/app.js's
-         loadPersonaLayerStack(), also unchanged.
-         ================================================================ -->
-    <section id="persona-layer-stack" class="panel panel-wide">
-      <h2>Retrieval Layer Stack</h2>
-      <p class="panel-hint">
-        The current runtime <code>recall()</code>/<code>remember()</code>
-        cascade order — not the canonical 5-level memory-store-type model
-        (see the separate "Memory Levels (0-4)" section below), and not a
-        persona list. Read-only introspection via the existing
-        <code>GET /layers</code> route, shown in cascade order. This is also
-        NOT the team/orchestration tier hierarchy
-        (top-orchestrator/company-director/project-orchestrator/code-architect).
-      </p>
-      <p class="panel-status" id="persona-layer-stack-status">loading…</p>
-      <table id="persona-layer-stack-table" hidden>
-        <thead>
-          <tr>
-            <th>#</th>
-            <th>Layer</th>
-            <th>Writable</th>
-          </tr>
-        </thead>
-        <tbody id="persona-layer-stack-tbody"></tbody>
-      </table>
-      <p class="panel-status" id="persona-layer-stack-empty" hidden>No layers configured.</p>
+           ml-05-memory-levels-ui (epic mnemosyne-memory-levels) renames
+           this section's heading/hint copy, to "Retrieval Layer Stack", to
+           disambiguate it from the NEW, separate "Memory Levels (0-4)"
+           section below (the canonical 5-level memory-STORE-TYPE
+           taxonomy) -- reconciled here with pu-11's nesting (both changes
+           are additive to different axes: WHERE the section lives in the
+           DOM vs. WHAT it's called).
 
-      <div id="persona-level0-pointer">
-        <h3>Level 0</h3>
+           Shows the currently configured, RUNTIME recall()/remember()
+           retrieval cascade order (a different data model from personas
+           and from the canonical 5-level taxonomy below) via the
+           ALREADY-SHIPPED GET /layers route, plus a static, view-only
+           Level 0 pointer. loadPersonaLayerStack() (ui/app.js, pw-04) is
+           reused completely unchanged for fetching -- only this markup's
+           position in the document (pu-11) and heading copy (ml-05)
+           changed; its DOM-target ids (below) are unchanged. -->
+      <section id="persona-layer-stack">
+        <h3>Retrieval Layer Stack</h3>
         <p class="panel-hint">
-          Global rules file — view-only here. This UI never offers an edit
-          form for it; edit the file directly on disk.
+          The current runtime <code>recall()</code>/<code>remember()</code>
+          cascade order — not the canonical 5-level memory-store-type model
+          (see the separate "Memory Levels (0-4)" section below), and not a
+          persona list. Read-only introspection via the existing
+          <code>GET /layers</code> route, shown in cascade order. This is
+          also NOT the team/orchestration tier hierarchy
+          (top-orchestrator/company-director/project-orchestrator/code-architect).
         </p>
-        <dl class="fields">
-          <dt>path</dt>
-          <dd id="persona-level0-path">~/.mnemosyne/level0-rules.md</dd>
-        </dl>
-      </div>
-    </section>
-    <!-- ==================== end pw-04 section ======================= -->
+        <p class="panel-status" id="persona-layer-stack-status">loading…</p>
+        <table id="persona-layer-stack-table" hidden>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Layer</th>
+              <th>Writable</th>
+            </tr>
+          </thead>
+          <tbody id="persona-layer-stack-tbody"></tbody>
+        </table>
+        <p class="panel-status" id="persona-layer-stack-empty" hidden>No layers configured.</p>
 
+        <div id="persona-level0-pointer">
+          <h4>Level 0</h4>
+          <p class="panel-hint">
+            Global rules file — view-only here. This UI never offers an edit
+            form for it; edit the file directly on disk.
+          </p>
+          <dl class="fields">
+            <dt>path</dt>
+            <dd id="persona-level0-path">~/.mnemosyne/level0-rules.md</dd>
+          </dl>
+        </div>
+      </section>
+      <!-- ==================== end pu-11 re-homed section =============== -->
+    </section>
     <!-- ================================================================
          ml-05-memory-levels-ui (epic mnemosyne-memory-levels): Memory
          Levels (0-4) section. Deliberately its OWN <section>, never merged

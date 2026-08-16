@@ -52,3 +52,5 @@ config/minerva.local.yaml
 !.pHive/epics/mnemosyne-persona-wizard/**
 !.pHive/epics/mnemosyne-memory-levels/
 !.pHive/epics/mnemosyne-memory-levels/**
+!.pHive/epics/mnemosyne-persona-ux/
+!.pHive/epics/mnemosyne-persona-ux/**

@@ -44,6 +44,42 @@
  *                               writeGlobalPersona/writeRepoLocalPersona
  *                               directly, the 4th write-capable transport
  *                               alongside CLI/MCP/skill-harness
+ *   GET  /persona/draft           -> list every ACTIVE draft (pu-03-draft-
+ *                               persona-routes): global tiers by default, or
+ *                               ?repo=<path> ADDS that repo's code-architect
+ *                               drafts alongside them (pu-02's
+ *                               listDraftPersonas's own contract -- not a
+ *                               "switch" the way GET /persona's ?repo= is)
+ *   GET  /persona/draft/:tier/:scopeId  -> read one active draft back
+ *                               (?repo=<path> required for tier=code-
+ *                               architect) -- wraps readDraftPersona
+ *   POST /persona/draft/:tier/:scopeId  -> propose a new draft, or overwrite
+ *                               the existing active one for the same
+ *                               identity -- wraps writeDraftPersona directly,
+ *                               same bare-candidate-plus-optional-`repo`
+ *                               convention as POST /persona/:tier/:scopeId.
+ *                               Full assertValidPersona-strength validation
+ *                               is deliberately NOT applied here -- a draft
+ *                               may be incomplete while under review
+ *   POST /persona/draft/:tier/:scopeId/approve  -> commits the active draft
+ *                               via the SAME writeGlobalPersona/
+ *                               writeRepoLocalPersona POST /persona/:tier/
+ *                               :scopeId already uses (draft-only metadata
+ *                               stripped first), archives the draft
+ *                               (disposeDraftPersona('approved'), never
+ *                               deleted), and -- ONLY when the draft carries
+ *                               a real `sourceSummary` (agent-proposed via
+ *                               pu-07's bounded crawl) -- fires a real
+ *                               remember() call against the swarm-memory-
+ *                               backed service (src/server.mjs), scoped via
+ *                               resolveRememberScope() (persona.ts), AFTER
+ *                               the write succeeds. A human-typed draft (no
+ *                               sourceSummary) never fires remember() --
+ *                               there is no real source material to index
+ *   DELETE /persona/draft/:tier/:scopeId  -> discard the active draft --
+ *                               ALWAYS disposeDraftPersona('discarded')
+ *                               (archive-by-move), never a bare filesystem
+ *                               delete
  *   POST /recall  {query, scope, intent?}            -> RecallResult
  *   POST /remember {content: {text, metadata?}, scope, layer?} -> RememberResult
  *
@@ -67,7 +103,15 @@ import path from 'node:path';
 import { MnemosyneClient } from './client.js';
 import type { Layer, Scope } from './interfaces.js';
 import { DEFAULT_LEVEL0_PATH } from './layer1/level0.js';
-import { PERSONA_STORE_BY_TIER } from './layer1/persona.js';
+import { PERSONA_STORE_BY_TIER, resolveRememberScope } from './layer1/persona.js';
+import {
+  disposeDraftPersona,
+  listDraftPersonas,
+  readDraftPersona,
+  writeDraftPersona,
+  type DraftPersonaCandidate,
+  type DraftPersonaContext,
+} from './layer1/persona-draft-store.js';
 import { listGlobalPersonas, readGlobalPersona, writeGlobalPersona } from './layer1/persona-store-global.js';
 import {
   listRepoLocalPersonas,
@@ -133,6 +177,107 @@ function applyPersonaCors(req: http.IncomingMessage, res: http.ServerResponse): 
   if (typeof origin === 'string' && UI_ORIGINS.has(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
+  }
+}
+
+// pu-03-draft-persona-routes: the target port for the approve route's
+// remember()-on-approval firing (below) -- the swarm-memory-backed service
+// (src/server.mjs), NOT this file's own /remember route (which wraps
+// MnemosyneClient.remember(), a structurally different engine, see
+// persona.ts's resolveRememberScope() doc comment for the full rationale on
+// why the target must be engine.mjs's remember(), never client.ts's).
+// Deliberately reuses the SAME `PORT` env var convention
+// bin/mnemosyne-skill-helper.mjs's own DEFAULT_PORT and src/server.mjs
+// already use (default 8477) -- not a new env var -- so a test (or an
+// operator) can redirect this call the exact same way those already do.
+const REMEMBER_SERVICE_PORT = Number(process.env.PORT || 8477);
+
+interface RememberCallResult {
+  ok: boolean;
+  scope: string;
+  tag: string;
+  text: string;
+  file: string | null;
+  chunksUpserted: number | null;
+  error: string | null;
+}
+
+/**
+ * Fires the real remember() call the approve route wires in for an
+ * agent-proposed draft (design-discussion.md OQ3/§9.9, "remember() fires on
+ * approval, never on draft creation"): scopes it via `resolveRememberScope()`
+ * (persona.ts) -- the exact same real resolver
+ * skills/mnemosyne-persona-interview/persona-remember.mjs's
+ * `rememberInterviewSource()` uses, never a hand-copied scope table -- builds
+ * text in the same `buildRememberText()`-shaped style (identity line +
+ * source-material body), but from the draft's own `sourceSummary` rather
+ * than `persona.sections` (that function's own input): `sourceSummary` is
+ * the crawled SOURCE material a human is meant to trust an agent's proposal
+ * against, distinct from the persona content itself. A REAL `POST /remember`
+ * HTTP call against the swarm-memory-backed service (never a stubbed/
+ * in-process call) -- mirrors `bin/mnemosyne-skill-helper.mjs`'s
+ * `rememberAction`'s exact request/response contract
+ * ({text,scope,tag} -> {remembered, file, chunks_upserted, ...}), just
+ * invoked via a direct fetch() rather than a subprocess, since this file is
+ * already a running Node/TS process (unlike the interview skill, a plain
+ * .mjs module that cannot import persona.ts directly and must cross the
+ * TS/JS boundary via a real CLI subprocess instead).
+ */
+async function fireDraftApprovalRemember(
+  tier: Tier,
+  scopeId: string,
+  sourceSummary: string,
+  displayName: unknown,
+): Promise<RememberCallResult> {
+  const { scope, tag } = resolveRememberScope({ tier, scopeId });
+  const text =
+    `Persona draft proposal — tier: ${tier}, scopeId: ${scopeId}` +
+    (typeof displayName === 'string' && displayName.trim() !== '' ? `, displayName: ${displayName}` : '') +
+    `. Source material (pu-07 bounded crawl): ${sourceSummary}`;
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${REMEMBER_SERVICE_PORT}/remember`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text, scope, tag }),
+    });
+    const data = (await res.json()) as {
+      remembered?: boolean;
+      file?: string;
+      chunks_upserted?: number;
+      error?: unknown;
+    };
+    if (res.status >= 400 || data.remembered !== true) {
+      return {
+        ok: false,
+        scope,
+        tag,
+        text,
+        file: null,
+        chunksUpserted: null,
+        error:
+          typeof data.error === 'string' ? data.error : `remember() did not report remembered:true (status ${res.status})`,
+      };
+    }
+    return {
+      ok: true,
+      scope,
+      tag,
+      text,
+      file: data.file ?? null,
+      chunksUpserted: data.chunks_upserted ?? null,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      scope,
+      tag,
+      text,
+      file: null,
+      chunksUpserted: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
@@ -343,6 +488,227 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { personas });
       }
       return sendJson(res, 200, { personas: listGlobalPersonas() });
+    }
+
+    // pu-03-draft-persona-routes: 5 new draft-route branches, checked BEFORE
+    // the existing generic GET/POST /persona/:tier/:scopeId handlers below
+    // (design-discussion.md §9 judgment call #7) -- a 3-segment
+    // /persona/draft/:tier/:scopeId path happens to fail those handlers' own
+    // segments.length !== 2 guard today, but relying on that as the ONLY
+    // protection would be fragile/incidental; explicit dispatch ordering
+    // (this block runs first, in source order) is the real guarantee. Wraps
+    // pu-02's persona-draft-store.ts functions (writeDraftPersona/
+    // readDraftPersona/listDraftPersonas/disposeDraftPersona) directly -- no
+    // re-implemented storage logic here. The OPTIONS preflight handler above
+    // already covers every path under this prefix with zero changes needed
+    // (its own check, `url.pathname.startsWith('/persona/')`, structurally
+    // includes '/persona/draft/*'), and applyPersonaCors is reused unchanged
+    // on every branch below -- never a second CORS implementation.
+    if (url.pathname === '/persona/draft' || url.pathname.startsWith('/persona/draft/')) {
+      applyPersonaCors(req, res);
+      const draftSegments =
+        url.pathname === '/persona/draft'
+          ? []
+          : url.pathname.slice('/persona/draft/'.length).split('/').filter(Boolean);
+
+      // GET /persona/draft -- list every ACTIVE draft (pu-02's
+      // listDraftPersonas). Global tiers always included; ?repo=<path> ADDS
+      // that repo's code-architect drafts alongside them (listDraftPersonas'
+      // own contract) -- NOT a "switch" the way GET /persona's ?repo= is
+      // (pw-02), since a draft reviewer plausibly wants to see everything
+      // pending across both stores at once.
+      if (draftSegments.length === 0) {
+        if (req.method !== 'GET') {
+          return sendJson(res, 404, { error: { code: 'not_found', message: `no route for ${route}` } });
+        }
+        const repoParam = url.searchParams.get('repo');
+        const listCtx: DraftPersonaContext = repoParam ? { repoRoot: repoParam } : {};
+        return sendJson(res, 200, { drafts: listDraftPersonas(listCtx) });
+      }
+
+      // GET/POST/DELETE /persona/draft/:tier/:scopeId
+      if (draftSegments.length === 2) {
+        const [tierParam, scopeId] = draftSegments as [string, string];
+        if (!(TIERS as readonly string[]).includes(tierParam)) {
+          return badRequest(res, 'invalid_tier', `"tier" must be one of: ${TIERS.join(', ')}`);
+        }
+        const tier = tierParam as Tier;
+        const isRepoLocal = PERSONA_STORE_BY_TIER[tier] === 'repo-local';
+
+        if (req.method === 'GET') {
+          // GET /persona/draft/:tier/:scopeId -- read one active draft back,
+          // wrapping readDraftPersona directly (no re-implemented parsing --
+          // pw-01's write-path non-duplication concern applies equally here).
+          const repoParam = url.searchParams.get('repo');
+          if (isRepoLocal && !repoParam) {
+            return badRequest(
+              res,
+              'missing_repo',
+              '"repo" query parameter is required to read a code-architect draft persona',
+            );
+          }
+          const readCtx: DraftPersonaContext = repoParam ? { repoRoot: repoParam } : {};
+          try {
+            return sendJson(res, 200, { draft: readDraftPersona(tier, scopeId, readCtx) });
+          } catch (error) {
+            return sendJson(res, 404, {
+              error: { code: 'draft_not_found', message: error instanceof Error ? error.message : String(error) },
+            });
+          }
+        }
+
+        if (req.method === 'POST') {
+          // POST /persona/draft/:tier/:scopeId -- propose a new draft, or
+          // overwrite the existing active one for the same identity (pu-02's
+          // own "one active draft per identity" contract), wrapping
+          // writeDraftPersona directly. Same "the body IS the candidate,
+          // `repo` is this route's own routing metadata and is stripped
+          // before the rest is passed through UNCHANGED" convention as
+          // POST /persona/:tier/:scopeId below -- no re-implemented
+          // validation here; writeDraftPersona's own structural-only check
+          // is deliberately the single enforcement point at this layer
+          // (assertValidPersona is NOT applied until approve, below -- a
+          // draft may be incomplete while a human is still reviewing it).
+          let body: Record<string, unknown>;
+          try {
+            body = await readJsonBody(req);
+          } catch (error) {
+            const e = error as HttpError;
+            return badRequest(res, e.code ?? 'invalid_body', e.message);
+          }
+          const { repo: bodyRepo, ...candidate } = body;
+
+          const proposeCtx: DraftPersonaContext = {};
+          if (isRepoLocal) {
+            const repo = (typeof bodyRepo === 'string' && bodyRepo) || url.searchParams.get('repo');
+            if (!repo) {
+              return badRequest(
+                res,
+                'missing_repo',
+                '"repo" (request body field or query parameter) is required to propose a code-architect draft persona',
+              );
+            }
+            proposeCtx.repoRoot = repo;
+          }
+
+          try {
+            const filePath = writeDraftPersona(candidate, proposeCtx);
+            return sendJson(res, 201, { proposed: true, tier, scopeId, path: filePath });
+          } catch (error) {
+            return badRequest(res, 'invalid_draft', error instanceof Error ? error.message : String(error));
+          }
+        }
+
+        if (req.method === 'DELETE') {
+          // DELETE /persona/draft/:tier/:scopeId -- discard, ALWAYS via
+          // disposeDraftPersona('discarded') (archive-by-move, mirrors this
+          // codebase's own flight-status philosophy), never a bare
+          // filesystem delete (design-discussion.md §9 judgment call #5).
+          const repoParam = url.searchParams.get('repo');
+          if (isRepoLocal && !repoParam) {
+            return badRequest(
+              res,
+              'missing_repo',
+              '"repo" query parameter is required to discard a code-architect draft persona',
+            );
+          }
+          const discardCtx: DraftPersonaContext = repoParam ? { repoRoot: repoParam } : {};
+          try {
+            const archivedDraftPath = disposeDraftPersona(tier, scopeId, 'discarded', discardCtx);
+            return sendJson(res, 200, { discarded: true, tier, scopeId, archivedDraftPath });
+          } catch (error) {
+            return sendJson(res, 404, {
+              error: { code: 'draft_not_found', message: error instanceof Error ? error.message : String(error) },
+            });
+          }
+        }
+
+        return sendJson(res, 404, { error: { code: 'not_found', message: `no route for ${route}` } });
+      }
+
+      // POST /persona/draft/:tier/:scopeId/approve -- the human-in-the-loop
+      // gate ask 2 exists to create. Commits via the SAME write primitive
+      // POST /persona/:tier/:scopeId already uses, completely unchanged --
+      // no re-implemented validation at this route layer (design-
+      // discussion.md §5 risk table's "no second write path" guardrail;
+      // assertValidPersona, inside writeGlobalPersona/writeRepoLocalPersona,
+      // remains the single real enforcement point, exercised for the first
+      // time only at this moment).
+      if (draftSegments.length === 3 && draftSegments[2] === 'approve') {
+        const [tierParam, scopeId] = draftSegments as [string, string, string];
+        if (!(TIERS as readonly string[]).includes(tierParam)) {
+          return badRequest(res, 'invalid_tier', `"tier" must be one of: ${TIERS.join(', ')}`);
+        }
+        const tier = tierParam as Tier;
+
+        if (req.method !== 'POST') {
+          return sendJson(res, 404, { error: { code: 'not_found', message: `no route for ${route}` } });
+        }
+
+        const isRepoLocal = PERSONA_STORE_BY_TIER[tier] === 'repo-local';
+        const repoParam = url.searchParams.get('repo');
+        if (isRepoLocal && !repoParam) {
+          return badRequest(
+            res,
+            'missing_repo',
+            '"repo" query parameter is required to approve a code-architect draft persona',
+          );
+        }
+        const approveCtx: DraftPersonaContext = repoParam ? { repoRoot: repoParam } : {};
+
+        let draft: DraftPersonaCandidate;
+        try {
+          draft = readDraftPersona(tier, scopeId, approveCtx);
+        } catch (error) {
+          return sendJson(res, 404, {
+            error: { code: 'draft_not_found', message: error instanceof Error ? error.message : String(error) },
+          });
+        }
+
+        // Strip draft-only metadata (proposedBy/proposedAt/sourceSummary)
+        // BEFORE calling the real write primitive.
+        const { proposedBy: _proposedBy, proposedAt: _proposedAt, sourceSummary, ...candidate } = draft;
+
+        let filePath: string;
+        try {
+          filePath = isRepoLocal
+            ? writeRepoLocalPersona(repoParam as string, candidate)
+            : writeGlobalPersona(candidate);
+        } catch (error) {
+          // assertValidPersona (or the store's own tier guard) rejected the
+          // candidate -- nothing was written, and the draft is left ACTIVE
+          // (not archived) so a human can go fix it, per this story's own
+          // acceptance criteria.
+          return badRequest(res, 'invalid_persona', error instanceof Error ? error.message : String(error));
+        }
+
+        // Only NOW, after the real write has genuinely succeeded, archive
+        // the draft -- disposeDraftPersona('approved'), never a bare delete.
+        const archivedDraftPath = disposeDraftPersona(tier, scopeId, 'approved', approveCtx);
+
+        // remember() fires HERE, after the write succeeds, ONLY when the
+        // draft actually carried a real sourceSummary (agent-proposed, via
+        // pu-07's bounded crawl) -- a human-typed draft has no real source
+        // material to index, and this route must never invent placeholder
+        // text just to have something to remember() (design-discussion.md
+        // OQ3/§9.9, "remember() fires on approval, never on draft creation").
+        let remembered: RememberCallResult | null = null;
+        if (typeof sourceSummary === 'string' && sourceSummary.trim() !== '') {
+          remembered = await fireDraftApprovalRemember(tier, scopeId, sourceSummary, candidate.displayName);
+        }
+
+        return sendJson(res, 200, {
+          approved: true,
+          store: isRepoLocal ? 'repo-local' : 'global',
+          tier,
+          scopeId,
+          path: filePath,
+          archivedDraftPath,
+          remembered,
+        });
+      }
+
+      return sendJson(res, 404, { error: { code: 'not_found', message: `no route for ${route}` } });
     }
 
     if (req.method === 'GET' && url.pathname.startsWith('/persona/')) {

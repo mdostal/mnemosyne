@@ -1,0 +1,156 @@
+id: pu-13-full-loop-e2e-regression
+epic: mnemosyne-persona-ux
+title: "Full-loop regression: agent-propose (CLI) -> UI review -> human-approve -> real commit"
+status: complete
+complexity: medium
+methodology: tdd
+depends_on: [pu-06-draft-persona-transport-tests, pu-09-draft-first-regression, pu-12-draft-review-approve-ui]
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 556d670). This is the epic's closing ticket --
+  pu-01 through pu-14 are now all complete. Independently verified: read
+  the full new test file (test/persona-full-loop-e2e.mjs) -- confirmed
+  every step is a real subprocess/HTTP call (real CLI interview via
+  runPersonaInterview + a genuine crawlBoundedContext() filesystem read +
+  a real `mnemosyne persona draft propose` subprocess; real HTTP against a
+  separately-spawned lib/mnemosyne/server.ts; a real recall() POST against
+  a real src/server.mjs + the pu-03 stateful fixture double proving 0 hits
+  during the pending-review window and >=1 hit after approval; a real HTTP
+  edit re-POST; a real HTTP approve POST verified via 3 independent reads
+  -- HTTP response, direct filesystem read of the persona store, direct
+  filesystem read of the remember()-written note file). Confirmed the
+  documented scoping decision (the edit step reuses the draft route's
+  full-candidate-overwrite mechanism rather than cloning ui/app.js's
+  current single-section v1 DOM field list, since pu-12's own test already
+  covers that specific DOM-field question) is honest and correctly
+  reasoned, not a shortcut. Reran the new test myself (27/27 passing) in
+  both the builder's worktree and the merged integration worktree. Ran
+  test/http-api.mjs myself and independently confirmed its 3 failures are
+  the same pre-existing, unrelated generic POST /remember default-layer
+  assertions documented since ml-04's completion note earlier this
+  session -- zero persona/draft-specific failures. Ran the epic's full
+  combined suite (npx vitest run lib/mnemosyne: 615/615 passing across 44
+  files) plus npx tsc --noEmit (clean) as the final regression gate in the
+  merged integration worktree. All acceptance criteria met. The
+  mnemosyne-persona-ux epic is now fully built.
+
+description: |
+  Implements horizontal-plan.md H8's e2e component: the epic's own real
+  release-gate proof, mirroring the wizard epic's own closing pattern
+  (pw-14/pw-16/pw-17's "closes the loop" proofs). Proves the complete,
+  actual interaction ask 2 exists to create -- a CLI-run interview proposes
+  a draft, the draft is genuinely visible and actionable through the real
+  browser UI (not just through the CLI/HTTP transports pu-06 already
+  proved), a human edits and approves it via the UI, and the real persona
+  ends up committed via the unchanged write primitive -- not each piece
+  proven only in isolation.
+
+  OQ3 (where remember()'s post-approval firing lives) is now operator-resolved
+  (design-discussion.md §9 judgment call #9, decided after this planning pass
+  completed): remember() fires on approval, never on draft creation, wired
+  directly into pu-03/pu-04's approve paths. This ticket's job is no longer to
+  decide that -- it's the real, end-to-end PROOF that the already-decided
+  behavior holds across the complete loop, not just at the unit/transport
+  level pu-03/pu-04/pu-06 already cover in isolation.
+
+acceptance_criteria:
+  - "Given a real subprocess-spawned lib/mnemosyne/server.ts and a real CLI-run interview (skills/mnemosyne-persona-interview, default draft-first path, pu-08), when the interview completes, then GET /persona/draft (pu-03) shows the newly-proposed draft, including its sourceSummary (pu-07)"
+  - "Given that draft is now active but NOT yet approved, when a recall() query is run against content from the draft's sourceSummary/text, then it returns nothing -- proving remember() has not fired during the pending-review window, across the FULL real loop (CLI-propose through this exact moment), not just in pu-03's own isolated unit test"
+  - "Given that draft, when a simulated UI interaction edits one field and re-submits (exercising pu-12's edit path against real HTTP, not a mocked fetch), then GET /persona/draft/:tier/:scopeId reflects the edit"
+  - "Given the edited draft, when a simulated UI interaction approves it (exercising pu-12's approve path against pu-03's real approve route), then a direct filesystem read confirms the real persona store now has the committed persona, GET /persona (the real store's list route) includes it, AND a real remember() call landed (a real note file exists on disk, correctly scoped via resolveRememberScope()) -- the full propose-to-remembered loop proven in one continuous real run"
+  - "Given the same approval, when GET /persona/draft is checked afterward, then the approved draft no longer appears in the active list (archived, per pu-02's disposal design)"
+
+steps:
+  - id: research
+    description: >
+      Read pu-06's cross-transport tests (CLI/skill-harness/MCP/HTTP,
+      already-proven) and pu-09's interview-skill regression tests
+      (already-proven) as the two halves this ticket's e2e proof composes --
+      confirm exactly what each already covers so this ticket adds only the
+      genuinely new assertion (real UI-driven review/edit/approve against a
+      real CLI-originated draft), not a duplicate of either.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Write a single, real, end-to-end test exercising: CLI interview run
+      (default, no --commit-directly) -> real HTTP GET against the draft
+      routes -> a real HTTP PATCH-equivalent (re-POST) simulating the UI's
+      edit -> a real HTTP POST to the approve route simulating the UI's
+      approve click -> real filesystem + GET /persona verification of the
+      committed result -> real GET /persona/draft verification the draft is
+      gone from the active list. No mocked transport boundary anywhere.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Write test/persona-full-loop-e2e.mjs implementing the above against
+      real subprocess-spawned processes throughout, including the
+      pending-review-window recall() assertion (proves remember() genuinely
+      has not fired yet) and the post-approval remember()-landed assertion
+      (pu-03/pu-04 already wire the firing logic itself -- this ticket proves
+      it holds across the complete real loop, not in isolation).
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: >
+      Confirm every step of the loop uses a REAL process/HTTP call, no
+      simulation shortcuts that would let this test pass even if the real UI
+      code (pu-12) were broken. Confirm the remember()-timing proof
+      (not-yet-fired during review, fired-and-landed after approval) is
+      genuinely exercised end-to-end, not asserted against a stub.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: >
+      Commit and push to feature branch. Run the FULL suite across this
+      entire epic (pu-02 through pu-13's test files) together with the
+      foundation and wizard epics' own suites, confirming zero regressions
+      anywhere.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: test/persona-draft-cross-transport.mjs
+      purpose: "pu-06's already-proven cross-transport coverage -- this ticket composes with it, does not duplicate it."
+    - path: lib/mnemosyne/layer1/__tests__/persona-interview-draft-regression.test.ts
+      purpose: "pu-09's already-proven interview-skill draft-default behavior -- the CLI-side half this ticket's e2e test's first step exercises for real."
+    - path: skills/mnemosyne-persona-interview/persona-draft-writer.mjs
+      purpose: "pu-08's real draft-propose CLI wiring -- what this ticket's first e2e step actually invokes, end-to-end, not a stand-in."
+
+files_to_modify:
+  - file: test/persona-full-loop-e2e.mjs
+    change: "New file. The complete agent-propose -> UI-review-edit -> human-approve -> real-commit loop, against real subprocess-spawned processes throughout."
+
+design_decisions:
+  - decision: "This ticket proves the operator-resolved remember()-timing decision (fires on approval, never on draft creation) end-to-end, rather than deciding it -- the decision itself is now settled at the planning level (design-discussion.md §9 judgment call #9), wired into pu-03/pu-04."
+    rationale: >
+      Originally OQ3, deferred through planning for lack of visibility into
+      the right call; resolved directly by the operator before execution
+      began. This ticket's remaining job is the same 'prove it holds
+      end-to-end, not just in isolated unit tests' bar every other assertion
+      here already holds to.
+
+cross_cutting: []
+
+risks:
+  - severity: medium
+    description: "This ticket has 3 upstream dependencies spanning both of the epic's two independent tracks (backend/skill: pu-06, pu-09; UI: pu-12) -- it cannot start until both tracks converge, making it a real scheduling bottleneck if either track slips."
+    mitigation: "Named explicitly in horizontal-plan.md's Capability Dependencies diagram as the epic's true convergence point -- an execution pass should plan staffing with this bottleneck in mind, not discover it mid-epic."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-ux/docs/design-discussion.md
+    relevant_excerpt: |
+      §9 judgment call #9 (formerly OQ3, operator-resolved): "remember()
+      fires on approval, never on draft creation ... pu-13 (full-loop e2e
+      regression) gains a new acceptance criterion: propose (with a real
+      sourceSummary) -> approve -> assert a real remember() call landed ...
+      AND a second case proving NO remember() call fires between propose
+      and approve."
+  - path: .pHive/epics/mnemosyne-persona-wizard/stories/pw-17-personas-panel-write-form.yaml
+    relevant_excerpt: |
+      "This closes the epic (pw-01 through pw-17) with the write form
+      genuinely, not just nominally, functional from a real browser." -- the
+      exact "prove it's real, not just individually-tested" bar this
+      ticket's own e2e proof holds itself to.

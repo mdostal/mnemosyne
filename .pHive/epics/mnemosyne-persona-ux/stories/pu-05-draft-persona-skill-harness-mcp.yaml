@@ -1,0 +1,125 @@
+id: pu-05-draft-persona-skill-harness-mcp
+epic: mnemosyne-persona-ux
+title: Draft persona skill-harness action + MCP tool wraps
+status: complete
+complexity: low
+methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 39fbb44 + a fixup removing incidental
+  allowScripts noise the builder's own npm install run left in package.json,
+  found during review). Independently verified: grepped both
+  bin/mnemosyne-skill-helper.mjs and bin/mnemosyne-mcp.mjs for any import of
+  persona-draft-store.ts or persona-store-*.ts -- confirmed zero, only
+  doc-comment mentions. Reran test/skill-harness-persona-draft.mjs and
+  test/mcp-server-persona.mjs myself (all pass). Reran vitest
+  lib/mnemosyne/layer1 -- hit one real but understood transient failure (a
+  port-8542 collision with a concurrently-running, unrelated agent's own
+  test server for a completely different, unmodified test file) -- confirmed
+  clean (230/230) on rerun once the port freed. Reran tsc --noEmit (clean)
+  myself. All acceptance criteria met.
+depends_on: [pu-04-draft-persona-cli]
+
+description: |
+  Implements horizontal-plan.md H4's remaining two transport components,
+  mirroring the wizard epic's own strictly-sequential CLI -> skill-harness ->
+  MCP chain exactly (vertical-plan.md Decision 3): skill-harness subprocess-
+  execs pu-04's CLI (no new logic), MCP imports the skill-harness action
+  function directly (no new logic). Closes out transport parity for the
+  draft mechanism, matching the real write primitive's own 3-transport-plus-
+  HTTP parity bar the wizard epic already established.
+
+acceptance_criteria:
+  - "Given bin/mnemosyne-skill-helper.mjs, when personaDraftProposeAction/personaDraftShowAction/personaDraftApproveAction/personaDraftDiscardAction are called, then each subprocess-shells to pu-04's `mnemosyne persona draft <verb>` CLI via the existing personaCliRun() helper -- no independent import of persona-draft-store.ts or the real write functions"
+  - "Given bin/mnemosyne-mcp.mjs, when persona_draft_propose/persona_draft_show/persona_draft_approve/persona_draft_discard tools are invoked, then each imports and wraps the corresponding skill-harness action function directly via wrapAction(), the same registration shape the existing persona_create tool already uses"
+  - "Given a rejected draft-approve (invalid candidate) at either transport, when the action/tool is invoked, then it surfaces a clear non-zero-exit (skill-harness) or isError:true (MCP) result -- never a silent no-op, matching the exact bar horizontal-plan.md H4 already states for the real write primitive"
+  - "Given skills/mnemosyne-standalone/SKILL.md's existing action table, when this ticket ships, then it gains new rows for persona-draft-propose/show/approve/discard, following the exact same table shape every other row already uses"
+
+steps:
+  - id: research
+    description: >
+      Read bin/mnemosyne-skill-helper.mjs's existing personaSyncAction/
+      personaSeedAction/personaShowAction/personaCreateAction (and
+      personaCliRun()) in full, and bin/mnemosyne-mcp.mjs's existing
+      persona_sync/persona_seed/persona_show/persona_create tool
+      registrations (wrapAction(), server.registerTool()) in full, as the
+      exact shape this ticket's 4 new action/tool pairs reproduce.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Extend test/mcp-server-persona.mjs's existing real-StdioClientTransport,
+      real-spawned-subprocess convention with the 4 new MCP tools. New
+      subprocess test for the skill-harness actions (no existing coverage --
+      test/skill-harness.mjs explicitly excludes persona actions today, same
+      gap the wizard epic's H5 already documented for the real create verb),
+      following persona-cli.mjs/mcp-server-persona.mjs's real-subprocess,
+      fake-$HOME convention.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Add personaDraftProposeAction/personaDraftShowAction/
+      personaDraftApproveAction/personaDraftDiscardAction to
+      bin/mnemosyne-skill-helper.mjs's SIMPLE_ACTIONS, each subprocess-
+      shelling to pu-04's CLI via personaCliRun(). Add
+      persona_draft_propose/show/approve/discard tools to bin/
+      mnemosyne-mcp.mjs, each wrapping the corresponding skill-harness
+      action via wrapAction(). Add the 4 new rows to skills/
+      mnemosyne-standalone/SKILL.md's action table.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: >
+      Confirm zero new logic in either file beyond dispatch/wrapping -- grep
+      for any import of persona-draft-store.ts or lib/mnemosyne/layer1/
+      persona-store-*.ts in either bin/mnemosyne-skill-helper.mjs or
+      bin/mnemosyne-mcp.mjs; there should be none (both stay pure
+      pass-throughs, per the wizard epic's own H4 chain).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: bin/mnemosyne-skill-helper.mjs
+      purpose: "personaCreateAction (and personaCliRun()) -- the exact subprocess-shell-to-CLI shape this ticket's 4 new draft actions reproduce, no new logic of their own."
+    - path: bin/mnemosyne-mcp.mjs
+      purpose: "persona_create's exact wrapAction()/registerTool() shape -- the pattern this ticket's 4 new draft tools reproduce."
+    - path: skills/mnemosyne-standalone/SKILL.md
+      purpose: "The existing action table (stateless, table-driven, one action per call) this ticket adds 4 new rows to -- confirms this repo's convention that skill-harness actions get documented here, not only in code."
+
+files_to_modify:
+  - file: bin/mnemosyne-skill-helper.mjs
+    change: "New personaDraftProposeAction/personaDraftShowAction/personaDraftApproveAction/personaDraftDiscardAction, added to SIMPLE_ACTIONS."
+  - file: bin/mnemosyne-mcp.mjs
+    change: "New persona_draft_propose/show/approve/discard tools, wrapping the skill-harness actions via wrapAction()."
+  - file: skills/mnemosyne-standalone/SKILL.md
+    change: "4 new action-table rows for the draft verbs."
+  - file: test/mcp-server-persona.mjs
+    change: "New assertions for the 4 draft MCP tools."
+  - file: test/skill-harness-persona-draft.mjs
+    change: "New file. Real-subprocess coverage for the 4 draft skill-harness actions (no prior coverage for any persona action existed in test/skill-harness.mjs, same gap the wizard epic's H5 documented for `create`)."
+
+design_decisions:
+  - decision: "skill-harness subprocess-execs the CLI; MCP imports the skill-harness action function directly -- strictly sequential, mirroring the wizard epic's H4 chain exactly, not a parallel 3-transport build."
+    rationale: "vertical-plan.md Decision 3, reproduced identically here: the same real import-graph constraint that made the wizard epic's write primitive CLI-first applies again -- there is no code path by which the MCP draft tool could exist before the skill-harness draft action exists, which cannot exist before pu-04's CLI verb exists."
+
+cross_cutting: []
+
+risks:
+  - severity: low
+    description: "Low novelty, low complexity -- the main risk is mechanical drift from the established pattern (e.g. forgetting the SKILL.md table update, which is easy to skip since it's documentation, not code)."
+    mitigation: "The SKILL.md table update is a named acceptance criterion, not left implicit -- matches this repo's own established discipline of keeping the action table and the code in lockstep."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-wizard/docs/horizontal-plan.md
+    relevant_excerpt: |
+      H4.2/H4.3: "skill-harness (bin/mnemosyne-skill-helper.mjs) does NOT
+      implement new logic -- it subprocess-shells to the CLI... MCP
+      (bin/mnemosyne-mcp.mjs) does NOT implement new logic either -- it
+      imports and wraps the skill-helper's action function directly." -- the
+      exact shape this ticket reproduces for the draft verbs.

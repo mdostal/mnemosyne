@@ -61,6 +61,10 @@ import {
   personaSeedAction,
   personaShowAction,
   personaCreateAction,
+  personaDraftProposeAction,
+  personaDraftShowAction,
+  personaDraftApproveAction,
+  personaDraftDiscardAction,
 } from "./mnemosyne-skill-helper.mjs";
 import {
   isGraphifyConfigured,
@@ -232,13 +236,16 @@ export function createServer({ port = DEFAULT_PORT } = {}) {
   );
 
   // persona_* tools (mnemosyne-persona-mcp-tools, extended by pw-07 with
-  // persona_create) -- unlike every tool above, these never fetch() the HTTP
-  // API at all; they shell out to the already-tested bin/mnemosyne-persona.mjs
-  // CLI (via mnemosyne-skill-helper.mjs's personaSyncAction/personaSeedAction/
-  // personaShowAction/personaCreateAction), since Layer 1 persona sync/seed/
-  // show/create has no HTTP route (see that file's header for why). `port` is
-  // still threaded through wrapAction for a uniform handler shape; these four
-  // actions ignore it.
+  // persona_create, and pu-05 with the four persona_draft_* tools below) --
+  // unlike every tool above, these never fetch() the HTTP API at all; they
+  // shell out to the already-tested bin/mnemosyne-persona.mjs CLI (via
+  // mnemosyne-skill-helper.mjs's personaSyncAction/personaSeedAction/
+  // personaShowAction/personaCreateAction/personaDraftProposeAction/
+  // personaDraftShowAction/personaDraftApproveAction/
+  // personaDraftDiscardAction), since Layer 1 persona sync/seed/show/create/
+  // draft-* has no HTTP route (see that file's header for why). `port` is
+  // still threaded through wrapAction for a uniform handler shape; none of
+  // these actions touch the network.
 
   server.registerTool(
     "persona_sync",
@@ -297,6 +304,72 @@ export function createServer({ port = DEFAULT_PORT } = {}) {
       },
     },
     wrapAction(port, personaCreateAction),
+  );
+
+  // persona_draft_* tools (pu-05) -- thin wrapAction() wraps of pu-05's
+  // personaDraftProposeAction/personaDraftShowAction/
+  // personaDraftApproveAction/personaDraftDiscardAction, each itself a pure
+  // subprocess pass-through to pu-04's `mnemosyne persona draft <verb>` CLI.
+  // Same registration shape persona_create above already uses -- no new
+  // logic, no independent import of persona-draft-store.ts.
+
+  server.registerTool(
+    "persona_draft_propose",
+    {
+      title: "Persona draft propose",
+      description:
+        "Write/overwrite the active in-review draft for {tier, scopeId} (parsed from --file's YAML) into the structurally separate draft store (~/.mnemosyne/persona-drafts) -- never the real persona store, never reachable by persona_sync/persona_show until a human runs persona_draft_approve. A thin wrap of pu-04's personaDraftProposeAction, itself a pass-through to `mnemosyne persona draft propose`. --file is required. Without --repo the draft routes to the global draft store; with --repo (required for a code-architect draft) it routes to that repo's repo-local draft store.",
+      inputSchema: {
+        file: z.string().describe("Path to a YAML file containing the full persona candidate"),
+        repo: z.string().optional().describe("Route the draft to this repo's repo-local draft store (required for code-architect)"),
+      },
+    },
+    wrapAction(port, personaDraftProposeAction),
+  );
+
+  server.registerTool(
+    "persona_draft_show",
+    {
+      title: "Persona draft show",
+      description:
+        "Read-only, live fetch of the active in-review draft for {tier, scopeId}, clearly labeled DRAFT, including proposedBy/proposedAt/sourceSummary metadata when present. A thin wrap of pu-04's personaDraftShowAction, itself a pass-through to `mnemosyne persona draft show`. --repo is required for a code-architect draft (repo-local); omit for the 3 global tiers.",
+      inputSchema: {
+        tier: z.string().describe("One of: top-orchestrator, company-director, project-orchestrator, code-architect"),
+        scopeId: z.string().describe("The persona's scope identifier"),
+        repo: z.string().optional().describe("Required for a code-architect draft (repo-local); omit for the 3 global tiers"),
+      },
+    },
+    wrapAction(port, (p, { tier, scopeId, repo }) => personaDraftShowAction(p, tier, scopeId, { repo })),
+  );
+
+  server.registerTool(
+    "persona_draft_approve",
+    {
+      title: "Persona draft approve",
+      description:
+        "Commit the active draft for {tier, scopeId} via the SAME unchanged write primitive persona_create uses, archive the draft (never delete), and -- only when the draft carries a sourceSummary -- fire a real remember() call scoped via resolveRememberScope(). A thin wrap of pu-04's personaDraftApproveAction, itself a pass-through to `mnemosyne persona draft approve`. --repo is required for a code-architect draft (repo-local); omit for the 3 global tiers.",
+      inputSchema: {
+        tier: z.string().describe("One of: top-orchestrator, company-director, project-orchestrator, code-architect"),
+        scopeId: z.string().describe("The persona's scope identifier"),
+        repo: z.string().optional().describe("Required for a code-architect draft (repo-local); omit for the 3 global tiers"),
+      },
+    },
+    wrapAction(port, (p, { tier, scopeId, repo }) => personaDraftApproveAction(p, tier, scopeId, { repo })),
+  );
+
+  server.registerTool(
+    "persona_draft_discard",
+    {
+      title: "Persona draft discard",
+      description:
+        "Archive the active draft for {tier, scopeId} to the discarded/ subtree (never a bare delete). A thin wrap of pu-04's personaDraftDiscardAction, itself a pass-through to `mnemosyne persona draft discard`. --repo is required for a code-architect draft (repo-local); omit for the 3 global tiers.",
+      inputSchema: {
+        tier: z.string().describe("One of: top-orchestrator, company-director, project-orchestrator, code-architect"),
+        scopeId: z.string().describe("The persona's scope identifier"),
+        repo: z.string().optional().describe("Required for a code-architect draft (repo-local); omit for the 3 global tiers"),
+      },
+    },
+    wrapAction(port, (p, { tier, scopeId, repo }) => personaDraftDiscardAction(p, tier, scopeId, { repo })),
   );
 
   return server;

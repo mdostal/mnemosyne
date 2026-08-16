@@ -92,7 +92,7 @@
 //                            tier guard, BEFORE any disk write.
 //
 // Usage: node test/persona-cli.mjs
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -106,6 +106,17 @@ const ROOT = path.resolve(__dirname, "..");
 const TSX_BIN = path.join(ROOT, "node_modules", ".bin", "tsx");
 const CLI = path.join(ROOT, "bin", "mnemosyne-persona.mjs");
 const DISPATCHER = path.join(ROOT, "bin", "mnemosyne");
+// pu-04: draft approve's remember()-firing tests reuse pw-13's own
+// dedicated fake-swarm-memory fixture (already provisions all four real
+// persona-* remember() scopes -- see that fixture's own doc comment) rather
+// than inventing a second one, and pick a port distinct from every other
+// test file's own real-server port (see test/persona-cross-transport.mjs's
+// own port-registry comment: 8477/8479/8483/8487/8491/8492/8497/8498/8499/
+// 8500/8501/8502/8503/8504/8505, and lib/mnemosyne/layer1/__tests__'s own
+// pw-13/pw-14 at 8541/8542).
+const SERVER_PATH = path.join(ROOT, "src", "server.mjs");
+const FIXTURE_BIN = path.join(ROOT, "lib", "mnemosyne", "layer1", "__tests__", "fixtures", "fake-swarm-memory-pw13");
+const DRAFT_REMEMBER_TEST_PORT = Number(process.env.MNEMOSYNE_PU04_TEST_PORT || 8547);
 
 let fails = 0;
 const ok = (c, m) => {
@@ -178,7 +189,12 @@ async function writeFakeGlobalPersona(home, tier, scopeId, { displayName, scope,
  */
 function personaCandidateYaml(candidate) {
   const lines = [];
-  for (const key of ["tier", "scopeId", "displayName", "scope"]) {
+  // pu-04: `proposedBy`/`proposedAt`/`sourceSummary` are draft-only metadata
+  // (persona-draft-store.ts's doc comment) -- included here purely so this
+  // helper can also serialize `draft propose --file <path>` fixtures that
+  // carry them; `create`'s own candidates never set these three keys, so
+  // this is a strict superset, not a behavior change for existing callers.
+  for (const key of ["tier", "scopeId", "displayName", "scope", "proposedBy", "proposedAt", "sourceSummary"]) {
     if (candidate[key] !== undefined) lines.push(`${key}: ${JSON.stringify(candidate[key])}`);
   }
   for (const key of ["sections", "mandateSections"]) {
@@ -236,11 +252,12 @@ async function snapshotTree(root) {
 }
 
 /** Runs the CLI as a real subprocess via tsx (directly, or through the bin/mnemosyne dispatcher). */
-async function runCli(args, { home, viaDispatcher = false } = {}) {
+async function runCli(args, { home, viaDispatcher = false, extraEnv } = {}) {
   const cmd = viaDispatcher ? DISPATCHER : process.execPath;
   const cmdArgs = viaDispatcher ? ["persona", ...args] : [TSX_BIN, CLI, ...args];
   const env = { ...process.env };
   if (home) env.HOME = home;
+  if (extraEnv) Object.assign(env, extraEnv);
   try {
     const { stdout, stderr } = await execFileAsync(cmd, cmdArgs, { cwd: ROOT, env });
     return { code: 0, stdout, stderr };
@@ -766,6 +783,458 @@ async function main() {
     await rm(contentDir, { recursive: true, force: true });
   }
 
+  // --- AC-draft-propose/AC-draft-show: propose+show round trip, global tier (pu-04) ------------
+  {
+    const home = await makeFakeHome();
+    const contentDir = await makeTempDir("mnemosyne-persona-cli-draft-content-");
+
+    const candidateFile = await writeCandidateFile(contentDir, "draft-candidate.yaml", {
+      tier: "project-orchestrator",
+      scopeId: "draft-global-scope",
+      displayName: "Project Orchestrator (draft)",
+      scope: "DRAFT_GLOBAL_SCOPE_MARKER — proposed via `draft propose`.",
+      sections: [{ heading: "Authored section", body: "DRAFT_GLOBAL_BODY_MARKER — real writeDraftPersona() write." }],
+      proposedBy: "agent:pu-08-test-fixture",
+      proposedAt: "2026-08-12T00:00:00.000Z",
+      sourceSummary: "DRAFT_SOURCE_SUMMARY_MARKER — crawled from README.md.",
+    });
+
+    const propose = await runCli(["draft", "propose", "--file", candidateFile], { home });
+    ok(propose.code === 0, `draft propose (global tier) -> exit 0 (got ${propose.code}, stderr=${short(propose.stderr)})`);
+    ok(/proposed/.test(propose.stdout), `draft propose reports the write -> ${short(propose.stdout)}`);
+    ok(!/^created /.test(propose.stdout), `draft propose's stdout verb is NOT create's own 'created' verb -> ${short(propose.stdout)}`);
+
+    const writtenDraft = await readFile(
+      path.join(home, ".mnemosyne", "persona-drafts", "project-orchestrator", "draft-global-scope.yaml"),
+      "utf8",
+    );
+    ok(writtenDraft.includes("DRAFT_GLOBAL_SCOPE_MARKER"), "draft propose actually wrote the draft's scope text to the draft store");
+    ok(
+      !(await stat(path.join(home, ".mnemosyne", "personas", "project-orchestrator", "draft-global-scope.yaml")).then(() => true).catch(() => false)),
+      "draft propose did NOT write anything into the REAL global persona store -- structurally separate stores",
+    );
+
+    const shown = await runCli(["draft", "show", "project-orchestrator", "draft-global-scope"], { home });
+    ok(shown.code === 0, `draft show (after propose) -> exit 0 (got ${shown.code}, stderr=${short(shown.stderr)})`);
+    ok(shown.stdout.includes("DRAFT_GLOBAL_SCOPE_MARKER"), `draft show prints the draft's scope text -> ${short(shown.stdout)}`);
+    ok(shown.stdout.includes("DRAFT_GLOBAL_BODY_MARKER"), `draft show prints the draft's section body -> ${short(shown.stdout)}`);
+    ok(shown.stdout.includes("agent:pu-08-test-fixture"), `draft show prints proposedBy metadata -> ${short(shown.stdout)}`);
+    ok(shown.stdout.includes("2026-08-12T00:00:00.000Z"), `draft show prints proposedAt metadata -> ${short(shown.stdout)}`);
+    ok(shown.stdout.includes("DRAFT_SOURCE_SUMMARY_MARKER"), `draft show prints sourceSummary metadata -> ${short(shown.stdout)}`);
+    ok(/DRAFT/.test(shown.stdout), `draft show's output is visibly labeled DRAFT -> ${short(shown.stdout)}`);
+
+    await rm(home, { recursive: true, force: true });
+    await rm(contentDir, { recursive: true, force: true });
+  }
+
+  // --- AC-draft-propose/AC-draft-show: propose+show round trip, repo-local tier (pu-04) --------
+  {
+    const home = await makeFakeHome();
+    const repo = await makeTempDir("mnemosyne-persona-cli-draft-repo-");
+    const contentDir = await makeTempDir("mnemosyne-persona-cli-draft-repo-content-");
+
+    const candidateFile = await writeCandidateFile(contentDir, "draft-candidate-repo.yaml", {
+      tier: "code-architect",
+      scopeId: "draft-repo-scope",
+      displayName: "Code/Area Architect (draft)",
+      scope: "DRAFT_REPO_SCOPE_MARKER — proposed via `draft propose --repo`.",
+      sections: [{ heading: "Authored section", body: "DRAFT_REPO_BODY_MARKER — real repo-local draft write." }],
+      sourceSummary: "DRAFT_REPO_SOURCE_SUMMARY_MARKER — crawled from CLAUDE.md.",
+    });
+
+    const propose = await runCli(["draft", "propose", "--file", candidateFile, "--repo", repo], { home });
+    ok(propose.code === 0, `draft propose (repo-local tier) -> exit 0 (got ${propose.code}, stderr=${short(propose.stderr)})`);
+
+    ok(
+      !(await stat(path.join(repo, ".mnemosyne", "personas", "draft-repo-scope.yaml")).then(() => true).catch(() => false)),
+      "draft propose did NOT write anything into the repo's REAL repo-local persona store",
+    );
+
+    const shown = await runCli(["draft", "show", "code-architect", "draft-repo-scope", "--repo", repo], { home });
+    ok(shown.code === 0, `draft show (repo-local, after propose) -> exit 0 (got ${shown.code}, stderr=${short(shown.stderr)})`);
+    ok(shown.stdout.includes("DRAFT_REPO_SCOPE_MARKER"), `draft show (repo-local) prints the draft's scope text -> ${short(shown.stdout)}`);
+    ok(shown.stdout.includes("DRAFT_REPO_BODY_MARKER"), `draft show (repo-local) prints the draft's section body -> ${short(shown.stdout)}`);
+
+    // Without --repo, the same identity is NOT visible (repo-local drafts are scoped by repoRoot).
+    const shownNoRepo = await runCli(["draft", "show", "code-architect", "draft-repo-scope"], { home });
+    ok(shownNoRepo.code !== 0, `draft show (repo-local identity, --repo omitted) -> non-zero exit (got ${shownNoRepo.code})`);
+
+    await rm(home, { recursive: true, force: true });
+    await rm(repo, { recursive: true, force: true });
+    await rm(contentDir, { recursive: true, force: true });
+  }
+
+  // --- AC-draft-show: visibly distinct from real `persona show` output (pu-04, design_decisions) -
+  {
+    const home = await makeFakeHome();
+    const contentDir = await makeTempDir("mnemosyne-persona-cli-draft-distinct-");
+
+    // Write a REAL persona and a DRAFT persona with the IDENTICAL scope/section marker text, so
+    // any accidental output-shape convergence would be caught even though the content is the same.
+    await writeFakeGlobalPersona(home, "top-orchestrator", "distinct-scope", {
+      displayName: "Top Orchestrator",
+      scope: "SHARED_MARKER_TEXT — identical to the draft below.",
+      sections: [{ heading: "Section", body: "SHARED_BODY_MARKER" }],
+    });
+    const candidateFile = await writeCandidateFile(contentDir, "distinct-draft.yaml", {
+      tier: "top-orchestrator",
+      scopeId: "distinct-scope-draft",
+      displayName: "Top Orchestrator",
+      scope: "SHARED_MARKER_TEXT — identical to the draft below.",
+      sections: [{ heading: "Section", body: "SHARED_BODY_MARKER" }],
+    });
+    await runCli(["draft", "propose", "--file", candidateFile], { home });
+
+    const realShow = await runCli(["show", "top-orchestrator", "distinct-scope"], { home });
+    const draftShow = await runCli(["draft", "show", "top-orchestrator", "distinct-scope-draft"], { home });
+    ok(realShow.code === 0 && draftShow.code === 0, "both real `show` and `draft show` succeeded");
+
+    ok(realShow.stdout !== draftShow.stdout, "real `persona show` output and `draft show` output are NOT byte-identical even for equivalent content");
+    ok(!/DRAFT/.test(realShow.stdout), `real 'persona show' output never contains the word DRAFT -> ${short(realShow.stdout)}`);
+    ok(/DRAFT/.test(draftShow.stdout), `'draft show' output visibly contains the word DRAFT -> ${short(draftShow.stdout)}`);
+    ok(
+      !realShow.stdout.trimStart().startsWith("#"),
+      "real 'persona show' output has no banner (starts directly with 'tier: ...')",
+    );
+    ok(
+      draftShow.stdout.trimStart().startsWith("#"),
+      `'draft show' output starts with a visible banner, not a bare field list -> ${short(draftShow.stdout)}`,
+    );
+
+    await rm(home, { recursive: true, force: true });
+    await rm(contentDir, { recursive: true, force: true });
+  }
+
+  // --- AC-draft-propose: structural sanity rejection (bad tier), before any disk write (pu-04) --
+  {
+    const home = await makeFakeHome();
+    const contentDir = await makeTempDir("mnemosyne-persona-cli-draft-reject-");
+
+    const candidateFile = await writeCandidateFile(contentDir, "bad-tier-draft.yaml", {
+      tier: "not-a-real-tier",
+      scopeId: "bad-tier-scope",
+      displayName: "Whatever",
+      scope: "Whatever.",
+      sections: [{ heading: "Section", body: "body" }],
+    });
+
+    const propose = await runCli(["draft", "propose", "--file", candidateFile], { home });
+    ok(propose.code !== 0, `draft propose with a bad tier -> non-zero exit (got ${propose.code})`);
+    ok(
+      /'tier' must be one of/i.test(propose.stderr),
+      `draft propose with a bad tier -> clear stderr message, writeDraftPersona's own structural guard -> ${short(propose.stderr)}`,
+    );
+
+    const draftsDirExists = await stat(path.join(home, ".mnemosyne", "persona-drafts")).then(() => true).catch(() => false);
+    ok(draftsDirExists === false, "draft propose rejected the bad tier BEFORE any disk write -- not even the persona-drafts directory was created");
+
+    // Missing --file and a nonexistent --file are rejected the same clear way as `create`'s own.
+    const noFile = await runCli(["draft", "propose"], { home });
+    ok(noFile.code !== 0, `draft propose with no --file -> non-zero exit (got ${noFile.code})`);
+    ok(/--file.*required/i.test(noFile.stderr), `draft propose with no --file -> clear stderr message -> ${short(noFile.stderr)}`);
+
+    const missingFile = await runCli(["draft", "propose", "--file", "/no/such/file.yaml"], { home });
+    ok(missingFile.code !== 0, `draft propose with a --file that does not exist -> non-zero exit (got ${missingFile.code})`);
+    ok(/no such file/i.test(missingFile.stderr), `draft propose with a missing --file -> clear stderr message -> ${short(missingFile.stderr)}`);
+
+    // draft show/approve/discard argument parsing: missing args, invalid tier -- same shape as `show`'s own.
+    const showNoArgs = await runCli(["draft", "show"], { home });
+    ok(showNoArgs.code !== 0, `draft show with no args -> non-zero exit (got ${showNoArgs.code})`);
+    ok(/tier.*scope-id.*required/i.test(showNoArgs.stderr), `draft show with no args -> clear stderr message -> ${short(showNoArgs.stderr)}`);
+
+    const showBadTier = await runCli(["draft", "show", "not-a-real-tier", "x"], { home });
+    ok(showBadTier.code !== 0, `draft show with an invalid tier -> non-zero exit (got ${showBadTier.code})`);
+    ok(/invalid tier/i.test(showBadTier.stderr), `draft show with an invalid tier -> clear stderr message -> ${short(showBadTier.stderr)}`);
+
+    const showNoDraft = await runCli(["draft", "show", "top-orchestrator", "no-such-draft"], { home });
+    ok(showNoDraft.code !== 0, `draft show for an identity with no active draft -> non-zero exit (got ${showNoDraft.code})`);
+    ok(/no active draft/i.test(showNoDraft.stderr), `draft show for a missing draft -> clear stderr message -> ${short(showNoDraft.stderr)}`);
+
+    const unknownVerb = await runCli(["draft", "bogus"], { home });
+    ok(unknownVerb.code !== 0, `draft <unknown verb> -> non-zero exit (got ${unknownVerb.code})`);
+    ok(/unknown or missing sub-subcommand/i.test(unknownVerb.stderr), `draft <unknown verb> -> clear stderr message -> ${short(unknownVerb.stderr)}`);
+
+    await rm(home, { recursive: true, force: true });
+    await rm(contentDir, { recursive: true, force: true });
+  }
+
+  // --- AC-draft-approve: success path -- byte-for-byte identical to what `create` would write,
+  //     draft archived (never deleted), `draft show` afterward reports none (pu-04) -------------
+  {
+    const baseCandidate = {
+      tier: "company-director",
+      scopeId: "approve-parity-scope",
+      displayName: "Company Director",
+      scope: "APPROVE_PARITY_SCOPE_MARKER — identical base candidate for both paths.",
+      sections: [{ heading: "Authored section", body: "APPROVE_PARITY_BODY_MARKER" }],
+    };
+
+    // Path A: `create` writes this candidate directly.
+    const homeA = await makeFakeHome();
+    const contentDirA = await makeTempDir("mnemosyne-persona-cli-approve-parity-a-");
+    const candidateFileA = await writeCandidateFile(contentDirA, "candidate.yaml", baseCandidate);
+    const createResult = await runCli(["create", "--file", candidateFileA], { home: homeA });
+    ok(createResult.code === 0, `[parity] create (baseline) -> exit 0 (got ${createResult.code}, stderr=${short(createResult.stderr)})`);
+    const createdFileContent = await readFile(
+      path.join(homeA, ".mnemosyne", "personas", "company-director", "approve-parity-scope.yaml"),
+      "utf8",
+    );
+
+    // Path B: `draft propose` (with extra draft-only metadata) then `draft approve`.
+    const homeB = await makeFakeHome();
+    const contentDirB = await makeTempDir("mnemosyne-persona-cli-approve-parity-b-");
+    const candidateFileB = await writeCandidateFile(contentDirB, "draft-candidate.yaml", {
+      ...baseCandidate,
+      proposedBy: "agent:pu-08-test-fixture",
+      proposedAt: "2026-08-12T00:00:00.000Z",
+      sourceSummary: "APPROVE_PARITY_SOURCE_SUMMARY — this must NOT appear in the committed file.",
+    });
+    const proposeResult = await runCli(["draft", "propose", "--file", candidateFileB], { home: homeB });
+    ok(proposeResult.code === 0, `[parity] draft propose -> exit 0 (got ${proposeResult.code}, stderr=${short(proposeResult.stderr)})`);
+
+    const approveResult = await runCli(["draft", "approve", "company-director", "approve-parity-scope"], { home: homeB });
+    ok(approveResult.code === 0, `[parity] draft approve -> exit 0 (got ${approveResult.code}, stderr=${short(approveResult.stderr)})`);
+    ok(/approved draft/.test(approveResult.stdout), `draft approve reports the approval -> ${short(approveResult.stdout)}`);
+
+    const approvedFileContent = await readFile(
+      path.join(homeB, ".mnemosyne", "personas", "company-director", "approve-parity-scope.yaml"),
+      "utf8",
+    );
+
+    ok(
+      approvedFileContent === createdFileContent,
+      `draft approve's committed file is BYTE-FOR-BYTE identical to what 'create' would have produced for the same base candidate -- ` +
+        `create=${short(createdFileContent)} approve=${short(approvedFileContent)}`,
+    );
+    ok(!approvedFileContent.includes("proposedBy"), "committed file does NOT contain the stripped 'proposedBy' draft-only metadata");
+    ok(!approvedFileContent.includes("proposedAt"), "committed file does NOT contain the stripped 'proposedAt' draft-only metadata");
+    ok(!approvedFileContent.includes("sourceSummary"), "committed file does NOT contain the stripped 'sourceSummary' draft-only metadata");
+    ok(!approvedFileContent.includes("APPROVE_PARITY_SOURCE_SUMMARY"), "committed file does NOT contain the sourceSummary's own marker text");
+
+    // The draft was archived (approved/ subtree), never deleted -- and no longer active.
+    const approvedArchiveDir = path.join(homeB, ".mnemosyne", "persona-drafts", "approved", "company-director");
+    const approvedArchiveFiles = await readdir(approvedArchiveDir).catch(() => []);
+    ok(approvedArchiveFiles.length === 1, `exactly one archived draft file exists under approved/company-director/ (got ${JSON.stringify(approvedArchiveFiles)})`);
+    ok(
+      approvedArchiveFiles[0]?.startsWith("approve-parity-scope-"),
+      `archived draft filename is timestamped off the original scopeId -> ${JSON.stringify(approvedArchiveFiles)}`,
+    );
+    const archivedContent = await readFile(path.join(approvedArchiveDir, approvedArchiveFiles[0]), "utf8");
+    ok(archivedContent.includes("sourceSummary"), "the ARCHIVED draft file itself still carries its full original content, including sourceSummary (never stripped there)");
+
+    const draftGoneDir = path.join(homeB, ".mnemosyne", "persona-drafts", "company-director");
+    const draftFileStillActive = await stat(path.join(draftGoneDir, "approve-parity-scope.yaml")).then(() => true).catch(() => false);
+    ok(draftFileStillActive === false, "the active draft file no longer exists at its original active-tree path after approve");
+
+    const showAfterApprove = await runCli(["draft", "show", "company-director", "approve-parity-scope"], { home: homeB });
+    ok(showAfterApprove.code !== 0, `draft show (same identity, after approve) -> non-zero exit, reports no active draft (got ${showAfterApprove.code})`);
+    ok(/no active draft/i.test(showAfterApprove.stderr), `draft show (after approve) -> clear stderr message -> ${short(showAfterApprove.stderr)}`);
+
+    await rm(homeA, { recursive: true, force: true });
+    await rm(homeB, { recursive: true, force: true });
+    await rm(contentDirA, { recursive: true, force: true });
+    await rm(contentDirB, { recursive: true, force: true });
+  }
+
+  // --- AC-draft-approve: failure path -- draft remains active, real store untouched (pu-04) -----
+  {
+    const home = await makeFakeHome();
+    const contentDir = await makeTempDir("mnemosyne-persona-cli-approve-fail-");
+
+    // Structurally valid enough to write as a DRAFT (writeDraftPersona only checks tier/scopeId),
+    // but missing `displayName`/`scope` -- assertValidPersona rejects it at approve time.
+    const candidateFile = await writeCandidateFile(contentDir, "incomplete-draft.yaml", {
+      tier: "top-orchestrator",
+      scopeId: "approve-fail-scope",
+      sections: [{ heading: "Section", body: "body" }],
+    });
+    const propose = await runCli(["draft", "propose", "--file", candidateFile], { home });
+    ok(propose.code === 0, `[approve-failure] draft propose (incomplete candidate) -> exit 0 (got ${propose.code}, stderr=${short(propose.stderr)})`);
+
+    const approve = await runCli(["draft", "approve", "top-orchestrator", "approve-fail-scope"], { home });
+    ok(approve.code !== 0, `draft approve of an invalid draft -> non-zero exit (got ${approve.code})`);
+    ok(
+      /displayName/.test(approve.stderr),
+      `draft approve of an invalid draft -> clear stderr message naming the missing field (assertValidPersona's own guard) -> ${short(approve.stderr)}`,
+    );
+
+    const committed = await stat(path.join(home, ".mnemosyne", "personas", "top-orchestrator", "approve-fail-scope.yaml")).then(() => true).catch(() => false);
+    ok(committed === false, "the failed approve wrote NOTHING to the real global persona store");
+
+    // The draft is still active (not archived) after the failed approve -- `draft show` still works.
+    const showAfterFail = await runCli(["draft", "show", "top-orchestrator", "approve-fail-scope"], { home });
+    ok(showAfterFail.code === 0, `draft show (same identity, after a FAILED approve) -> still exit 0, draft remains active (got ${showAfterFail.code}, stderr=${short(showAfterFail.stderr)})`);
+
+    const approvedArchiveExists = await stat(path.join(home, ".mnemosyne", "persona-drafts", "approved")).then(() => true).catch(() => false);
+    ok(approvedArchiveExists === false, "no approved/ archive directory was created at all -- the failed approve never got as far as disposeDraftPersona");
+
+    await rm(home, { recursive: true, force: true });
+    await rm(contentDir, { recursive: true, force: true });
+  }
+
+  // --- AC-draft-discard: archives to discarded/ (never deletes), `draft show` reports none (pu-04)
+  {
+    const home = await makeFakeHome();
+    const contentDir = await makeTempDir("mnemosyne-persona-cli-discard-");
+
+    const candidateFile = await writeCandidateFile(contentDir, "discard-candidate.yaml", {
+      tier: "project-orchestrator",
+      scopeId: "discard-scope",
+      displayName: "Project Orchestrator",
+      scope: "DISCARD_SCOPE_MARKER",
+      sections: [{ heading: "Section", body: "DISCARD_BODY_MARKER" }],
+    });
+    const propose = await runCli(["draft", "propose", "--file", candidateFile], { home });
+    ok(propose.code === 0, `[discard] draft propose -> exit 0 (got ${propose.code}, stderr=${short(propose.stderr)})`);
+
+    const discard = await runCli(["draft", "discard", "project-orchestrator", "discard-scope"], { home });
+    ok(discard.code === 0, `draft discard -> exit 0 (got ${discard.code}, stderr=${short(discard.stderr)})`);
+    ok(/discarded/.test(discard.stdout), `draft discard reports the discard -> ${short(discard.stdout)}`);
+
+    const discardedDir = path.join(home, ".mnemosyne", "persona-drafts", "discarded", "project-orchestrator");
+    const discardedFiles = await readdir(discardedDir).catch(() => []);
+    ok(discardedFiles.length === 1, `exactly one archived (discarded) draft file exists (got ${JSON.stringify(discardedFiles)})`);
+    const discardedContent = await readFile(path.join(discardedDir, discardedFiles[0]), "utf8");
+    ok(discardedContent.includes("DISCARD_SCOPE_MARKER"), "the discarded draft file still carries its full original content -- archived, not deleted");
+
+    const activeStillExists = await stat(path.join(home, ".mnemosyne", "persona-drafts", "project-orchestrator", "discard-scope.yaml")).then(() => true).catch(() => false);
+    ok(activeStillExists === false, "the active draft file no longer exists at its original active-tree path after discard");
+
+    const showAfterDiscard = await runCli(["draft", "show", "project-orchestrator", "discard-scope"], { home });
+    ok(showAfterDiscard.code !== 0, `draft show (same identity, after discard) -> non-zero exit, reports no active draft (got ${showAfterDiscard.code})`);
+    ok(/no active draft/i.test(showAfterDiscard.stderr), `draft show (after discard) -> clear stderr message -> ${short(showAfterDiscard.stderr)}`);
+
+    // discard on an identity with no active draft is itself a clear rejection, not a silent no-op.
+    const discardMissing = await runCli(["draft", "discard", "project-orchestrator", "no-such-draft"], { home });
+    ok(discardMissing.code !== 0, `draft discard of a nonexistent draft -> non-zero exit (got ${discardMissing.code})`);
+    ok(/no active draft/i.test(discardMissing.stderr), `draft discard of a nonexistent draft -> clear stderr message -> ${short(discardMissing.stderr)}`);
+
+    await rm(home, { recursive: true, force: true });
+    await rm(contentDir, { recursive: true, force: true });
+  }
+
+  // --- AC-draft-approve-remember: real remember() firing, gated on sourceSummary (pu-04) --------
+  // A real src/server.mjs subprocess, pointed at pw-13's own fake-swarm-memory fixture (already
+  // provisions all four real persona-* remember() scopes) and a throwaway notes dir -- mirrors
+  // lib/mnemosyne/layer1/__tests__/persona-interview-crawl-and-feed.test.ts's own real-pipeline
+  // rigor (real HTTP -> engine.mjs -> CLI-subprocess -> note-file-on-disk), just driven from this
+  // plain-node test file instead of vitest. `draft approve`'s remember() call inherits PORT from
+  // its own process env (see bin/mnemosyne-persona.mjs's runDraftApprove doc comment), so pointing
+  // it at this test server is just `extraEnv: { PORT }` on `runCli`.
+  {
+    const notesDir = await makeTempDir("mnemosyne-persona-cli-pu04-notes-");
+    let server;
+    let serverOutput = "";
+    try {
+      server = spawn(process.execPath, [SERVER_PATH], {
+        cwd: ROOT,
+        env: {
+          ...process.env,
+          PORT: String(DRAFT_REMEMBER_TEST_PORT),
+          SWARM_MEMORY_BIN: FIXTURE_BIN,
+          MNEMOSYNE_NOTES_DIR: notesDir,
+          MNEMO_TEST_NODE: process.execPath,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      server.stdout.on("data", (d) => (serverOutput += d.toString()));
+      server.stderr.on("data", (d) => (serverOutput += d.toString()));
+
+      const deadline = Date.now() + 15_000;
+      let up = false;
+      while (Date.now() < deadline) {
+        try {
+          const res = await fetch(`http://127.0.0.1:${DRAFT_REMEMBER_TEST_PORT}/healthz`);
+          if (res.status) {
+            up = true;
+            break;
+          }
+        } catch {
+          // not up yet
+        }
+        await new Promise((r) => setTimeout(r, 150));
+      }
+      ok(up, `real src/server.mjs test server (draft-approve-remember) came up on port ${DRAFT_REMEMBER_TEST_PORT} (output so far: ${short(serverOutput)})`);
+      if (!up) throw new Error(`pu-04 draft-remember test server never came up. output:\n${serverOutput}`);
+
+      const extraEnv = { PORT: String(DRAFT_REMEMBER_TEST_PORT), SWARM_MEMORY_BIN: FIXTURE_BIN, MNEMOSYNE_NOTES_DIR: notesDir, MNEMO_TEST_NODE: process.execPath };
+
+      // Case 1: draft carries a real sourceSummary -> remember() fires, and its landing is
+      // independently verifiable via a real note file on disk (not just the CLI's own claim).
+      {
+        const home = await makeFakeHome();
+        const contentDir = await makeTempDir("mnemosyne-persona-cli-pu04-fire-");
+        const candidateFile = await writeCandidateFile(contentDir, "candidate.yaml", {
+          tier: "top-orchestrator",
+          scopeId: "pu04-remember-fires",
+          displayName: "Top Orchestrator",
+          scope: "PU04_REMEMBER_FIRES_SCOPE_MARKER",
+          sections: [{ heading: "Section", body: "PU04_REMEMBER_FIRES_BODY_MARKER" }],
+          sourceSummary: "PU04_REMEMBER_FIRES_SOURCE_SUMMARY_MARKER — a real crawled source.",
+        });
+        const propose = await runCli(["draft", "propose", "--file", candidateFile], { home });
+        ok(propose.code === 0, `[remember-fires] draft propose -> exit 0 (got ${propose.code}, stderr=${short(propose.stderr)})`);
+
+        const notesBefore = await readdir(notesDir).catch(() => []);
+        const approve = await runCli(["draft", "approve", "top-orchestrator", "pu04-remember-fires"], { home, extraEnv });
+        ok(approve.code === 0, `[remember-fires] draft approve -> exit 0 (got ${approve.code}, stderr=${short(approve.stderr)})`);
+        ok(/remember\(\) fired/.test(approve.stdout), `draft approve (with sourceSummary) reports remember() fired -> ${short(approve.stdout)}`);
+        ok(/scope=persona-top-orchestrator/.test(approve.stdout), `draft approve's remember() report shows the resolveRememberScope()-derived scope -> ${short(approve.stdout)}`);
+
+        const notesAfter = await readdir(notesDir).catch(() => []);
+        ok(notesAfter.length === notesBefore.length + 1, `exactly one new note file landed on disk after approve (before=${notesBefore.length}, after=${notesAfter.length})`);
+        const newNoteFile = notesAfter.find((f) => !notesBefore.includes(f));
+        const noteContent = await readFile(path.join(notesDir, newNoteFile), "utf8");
+        ok(noteContent.includes("pu04-remember-fires"), "the real note file remember() wrote contains this draft's scopeId");
+        ok(noteContent.includes("PU04_REMEMBER_FIRES_SOURCE_SUMMARY_MARKER"), "the real note file contains the draft's sourceSummary text (the actual source material remember()'d)");
+        ok(noteContent.includes("scope=persona-top-orchestrator"), "the real note file records the resolveRememberScope()-derived scope");
+
+        await rm(home, { recursive: true, force: true });
+        await rm(contentDir, { recursive: true, force: true });
+      }
+
+      // Case 2: draft has NO sourceSummary (human-typed) -> remember() does NOT fire -- no new
+      // note file lands, proven by a direct notesDir snapshot, not merely absence of a claim.
+      {
+        const home = await makeFakeHome();
+        const contentDir = await makeTempDir("mnemosyne-persona-cli-pu04-nofire-");
+        const candidateFile = await writeCandidateFile(contentDir, "candidate.yaml", {
+          tier: "top-orchestrator",
+          scopeId: "pu04-remember-no-fire",
+          displayName: "Top Orchestrator",
+          scope: "PU04_REMEMBER_NOFIRE_SCOPE_MARKER",
+          sections: [{ heading: "Section", body: "PU04_REMEMBER_NOFIRE_BODY_MARKER" }],
+          // deliberately no sourceSummary -- a human typed this draft directly.
+        });
+        const propose = await runCli(["draft", "propose", "--file", candidateFile], { home });
+        ok(propose.code === 0, `[remember-no-fire] draft propose -> exit 0 (got ${propose.code}, stderr=${short(propose.stderr)})`);
+
+        const notesBefore = await readdir(notesDir).catch(() => []);
+        const approve = await runCli(["draft", "approve", "top-orchestrator", "pu04-remember-no-fire"], { home, extraEnv });
+        ok(approve.code === 0, `[remember-no-fire] draft approve -> exit 0 (got ${approve.code}, stderr=${short(approve.stderr)})`);
+        ok(!/remember\(\) fired/.test(approve.stdout), `draft approve (no sourceSummary) does NOT report remember() fired -> ${short(approve.stdout)}`);
+
+        const notesAfter = await readdir(notesDir).catch(() => []);
+        ok(notesAfter.length === notesBefore.length, `NO new note file landed on disk (no real source material to index) -- before=${notesBefore.length}, after=${notesAfter.length}`);
+
+        const committed = await readFile(path.join(home, ".mnemosyne", "personas", "top-orchestrator", "pu04-remember-no-fire.yaml"), "utf8");
+        ok(committed.includes("PU04_REMEMBER_NOFIRE_SCOPE_MARKER"), "the persona was still committed successfully even though remember() never fired");
+
+        await rm(home, { recursive: true, force: true });
+        await rm(contentDir, { recursive: true, force: true });
+      }
+    } finally {
+      if (server && server.pid) {
+        try {
+          process.kill(server.pid);
+        } catch {
+          // already gone
+        }
+      }
+      await rm(notesDir, { recursive: true, force: true });
+    }
+  }
+
   // --- AC-help: --help output distinguishes write-target from content-source (pf-09) ------------
   {
     const help = await runCli(["--help"]);
@@ -778,6 +1247,10 @@ async function main() {
     );
     ok(/show <tier> <scope-id>/.test(helpText), `persona --help mentions the show subcommand -> ${short(helpText)}`);
     ok(/create --file/.test(helpText), `persona --help mentions the create subcommand -> ${short(helpText)}`);
+    ok(/draft propose/.test(helpText), `persona --help mentions the draft propose subcommand -> ${short(helpText)}`);
+    ok(/draft show/.test(helpText), `persona --help mentions the draft show subcommand -> ${short(helpText)}`);
+    ok(/draft approve/.test(helpText), `persona --help mentions the draft approve subcommand -> ${short(helpText)}`);
+    ok(/draft discard/.test(helpText), `persona --help mentions the draft discard subcommand -> ${short(helpText)}`);
   }
 }
 
