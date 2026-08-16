@@ -21,6 +21,13 @@ note_on_completion: >
   POST /remember failures confirmed present on the pre-change baseline too
   -- not introduced by this story). GET /layers confirmed untouched (diff
   is purely additive to server.ts, no lines removed).
+
+  Independently verified (orchestrator, extra scrutiny given this story's
+  risk level): reran vitest and tsc myself, read the actual CORS code, AND
+  personally started the real server and issued real curl requests with
+  allowed/disallowed/no Origin headers -- confirmed the header appears
+  only for the two allowlisted origins and is absent otherwise, never a
+  wildcard.
 depends_on: [pw-01-listing-primitives]
 
 description: |
