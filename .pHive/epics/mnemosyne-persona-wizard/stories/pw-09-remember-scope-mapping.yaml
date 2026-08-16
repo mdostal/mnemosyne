@@ -1,9 +1,28 @@
 id: pw-09-remember-scope-mapping
 epic: mnemosyne-persona-wizard
 title: "remember()-scope mapping decision + resolver (OQ2)"
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-15 (commit af47ca8, built directly on the branch).
+  Independently verified: read the actual resolveRememberScope()
+  implementation and its rationale comment in full, confirmed the tag
+  sanitization regex is byte-identical to engine.mjs's own opts.tag rule
+  (src/engine.mjs:484), confirmed the four fixed lane names all satisfy
+  engine.mjs's SCOPE_NAME_RE (src/engine.mjs:710), confirmed zero imports
+  from either remember() implementation (pure mapping function only), and
+  confirmed the design-discussion.md §8 addendum documents the decision
+  legibly (target: engine.mjs's free-form lane vocabulary via
+  src/server.mjs's real skill-reachable POST /remember, not client.ts's
+  closed Scope union on the separate, skill-unreachable port-3141
+  process; tier alone selects one of 4 fixed lanes, scopeId returned as a
+  sanitized tag rather than folded into the scope string, to avoid
+  unbounded per-persona lane provisioning). Reran tsc --noEmit (clean) and
+  vitest lib/mnemosyne/layer1 (163/163, including 65/65 in
+  persona.test.ts) myself. Deterministic, matches H7 option (b). All
+  acceptance criteria met.
 depends_on: [pw-08-cross-transport-roundtrip]
 
 description: |
