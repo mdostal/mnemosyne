@@ -38,18 +38,20 @@
 //   node bin/mnemosyne-skill-helper.mjs persona-sync '{"repo":"...","tier":"...","scopeId":"...","dryRun":false}'
 //   node bin/mnemosyne-skill-helper.mjs persona-seed '{"root":"...","scopeId":"..."}'
 //   node bin/mnemosyne-skill-helper.mjs persona-show <tier> <scopeId>
+//   node bin/mnemosyne-skill-helper.mjs persona-create '{"file":"...","repo":"...","root":"..."}'
 //
 // PORT env (default 8477) — same convention as src/server.mjs / SERVICE.md.
 //
-// persona-* actions (mnemosyne-persona-mcp-tools) are a deliberate SECOND
-// exception to this file's "every action is a fetch() against the HTTP API"
-// rule (the first being none -- this is genuinely new). Layer 1 persona
-// sync/seed/show (bin/mnemosyne-persona.mjs, bin/mnemosyne-persona-seed.mjs)
-// has no HTTP route at all -- it operates directly against the filesystem
-// (repo-local/global persona stores, harness files) via TS imports, which is
-// why it's launched via tsx, not plain node (see bin/mnemosyne's dispatcher
-// and bin/mnemosyne-persona.mjs's own doc comment for the noEmit:true/no-
-// build-step constraint this works around). These three actions shell out to
+// persona-* actions (mnemosyne-persona-mcp-tools, extended by pw-06 for
+// persona-create) are a deliberate SECOND exception to this file's "every
+// action is a fetch() against the HTTP API" rule (the first being none --
+// this is genuinely new). Layer 1 persona sync/seed/show/create
+// (bin/mnemosyne-persona.mjs, bin/mnemosyne-persona-seed.mjs) has no HTTP
+// route at all -- it operates directly against the filesystem (repo-local/
+// global persona stores, harness files) via TS imports, which is why it's
+// launched via tsx, not plain node (see bin/mnemosyne's dispatcher and
+// bin/mnemosyne-persona.mjs's own doc comment for the noEmit:true/no-
+// build-step constraint this works around). These four actions shell out to
 // that already-tested CLI as a subprocess instead -- same "wrap an existing,
 // separately-tested module, invent no new business logic here" principle
 // this file already follows for graph_*, just via a subprocess boundary
@@ -281,6 +283,19 @@ export const personaSeedAction = (port, { root, scopeId } = {}) =>
 // (port, node, opts) shape for a single non-object positional argument.
 export const personaShowAction = (port, tier, scopeId) => personaCliRun(["show", tier, scopeId]);
 
+// personaCreateAction (pw-06) — writes a full persona candidate (parsed from
+// --file's YAML) into either the global or repo-local persona store,
+// matching pw-05's `persona create --file <path> [--repo <path>]
+// [--root <path>]` CLI verb exactly. Pure subprocess pass-through, no new
+// logic here -- same shape as personaSyncAction/personaSeedAction above.
+export const personaCreateAction = (port, { file, repo, root } = {}) =>
+  personaCliRun([
+    "create",
+    ...(file !== undefined ? ["--file", file] : []),
+    ...(repo !== undefined ? ["--repo", repo] : []),
+    ...(root !== undefined ? ["--root", root] : []),
+  ]);
+
 // --- CLI dispatcher -------------------------------------------------------
 
 const SIMPLE_ACTIONS = {
@@ -295,6 +310,7 @@ const SIMPLE_ACTIONS = {
   "persona-sync": (port, argJson) => personaSyncAction(port, JSON.parse(argJson || "{}")),
   "persona-seed": (port, argJson) => personaSeedAction(port, JSON.parse(argJson || "{}")),
   "persona-show": (port, tier, scopeId) => personaShowAction(port, tier, scopeId),
+  "persona-create": (port, argJson) => personaCreateAction(port, JSON.parse(argJson || "{}")),
 };
 const KNOWN_ACTIONS = ["ensure", ...Object.keys(SIMPLE_ACTIONS)];
 
