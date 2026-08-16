@@ -1,9 +1,16 @@
 id: pw-01-listing-primitives
 epic: mnemosyne-persona-wizard
 title: Persona listing primitives (listGlobalPersonas/listRepoLocalPersonas)
-status: pending
+status: complete
 complexity: low
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-15 (commit bb09b93). Real TDD, independently verified:
+  reran vitest (150/150) and tsc myself. Real, good catch: computing the
+  global-tier list inside the function body rather than at module scope,
+  avoiding a real persona.ts<->persona-store-global.ts circular-import
+  initialization-order hazard. All acceptance criteria met.
 depends_on: []
 
 description: |
