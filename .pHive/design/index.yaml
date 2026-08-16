@@ -38,3 +38,16 @@ topics:
       - pu-12-draft-review-approve-ui
       - pu-14-design-fidelity-review
     date: 2026-08-16
+    fidelity_review:
+      status: complete
+      artifact: .pHive/design/mnemosyne-persona-ux/fidelity-review.md
+      summary: >
+        Section-by-section comparison of the shipped Personas panel
+        (post pu-10/pu-11/pu-12) against synthesized option-2.md, plus a
+        spot-check of the shipped code against all 7 original lenses.
+        8 deviations logged, each with an explicit disposition: 4 ACCEPTED
+        (documented/reasoned substitutions), 4 FLAGGED for follow-up
+        (status-filter default, missing batch-approve strip, missing
+        post-approval provenance note, code-architect/repo data
+        unreachable in the shipped UI).
+      date: 2026-08-16
