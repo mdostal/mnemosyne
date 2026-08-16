@@ -1,9 +1,24 @@
 id: ml-06-file-store-index-build
 epic: mnemosyne-memory-levels
 title: "FileStoreIndex.ts build + persisted manifest + real-fixture verification tests"
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit c66517e). Independently verified: read
+  FileStoreIndex.ts and the FileLayerAdapter.ts diff in full -- confirmed
+  walk()/sha256() were genuinely extracted (not duplicated) into a shared
+  fileWalk.ts module both files import, confirmed directory+markdown-heading
+  granularity (never semantic clustering), confirmed graceful empty-manifest
+  degradation for missing/empty targets. One environmental issue found and
+  resolved during independent review: this worktree had zero node_modules
+  installed (not just a missing tsx binary), producing 27 unrelated test
+  failures the builder correctly identified as pre-existing/environmental
+  (confirmed independently via npm install + rerun -- clean 196/196 after).
+  Reran the new FileStoreIndex tests, tsc --noEmit (clean), and vitest
+  lib/mnemosyne/layers (115/115, zero regression across every adapter)
+  myself. All acceptance criteria met.
 depends_on: [ml-01-memory-level-taxonomy]
 
 description: |

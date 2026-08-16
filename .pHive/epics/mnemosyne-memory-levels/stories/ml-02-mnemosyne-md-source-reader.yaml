@@ -1,9 +1,24 @@
 id: ml-02-mnemosyne-md-source-reader
 epic: mnemosyne-memory-levels
 title: "mnemosyne.md canonical source + level1Source.ts reader + MANDATE_SECTIONS sourcing decision"
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 084a593 + 7acdbe4). Independently verified: read
+  mnemosyne.md and lib/mnemosyne/layer1/level1Source.ts/tiers.ts in full --
+  confirmed the sourcing decision was fully implemented (not just decided):
+  mnemosyne.md is the single canonical source, MANDATE_SECTIONS is genuinely
+  generated from it at module load via parseMandateSectionsFromMarkdown,
+  anchored to the module's own file location (not process.cwd()-dependent).
+  Confirmed readMnemosyneMdContent's missing-file divergence from level0.ts
+  is deliberate and documented (returns null, never throws -- Level 1 is
+  opt-in). Found and fixed one stale cross-reference during review:
+  mnemosyne.md cited "ml-03/ml-04" as the install mechanism, but ml-04 is
+  actually the unrelated GET /memory-levels route ticket -- corrected to
+  cite only ml-03. Reran the 7 new tests (7/7), tsc --noEmit (clean), and
+  vitest lib/mnemosyne/layer1 (203/203) myself. All acceptance criteria met.
 depends_on: [ml-01-memory-level-taxonomy]
 
 description: |

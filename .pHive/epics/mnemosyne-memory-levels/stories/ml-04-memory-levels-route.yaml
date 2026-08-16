@@ -1,9 +1,23 @@
 id: ml-04-memory-levels-route
 epic: mnemosyne-memory-levels
 title: "GET /memory-levels route + GET /layers byte-for-byte-unchanged regression proof"
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit abe1272). Independently verified: read the
+  actual route in lib/mnemosyne/server.ts -- confirmed GET /layers's diff is
+  purely additive (zero lines removed from the existing route), confirmed
+  GET /memory-levels reads MEMORY_LEVELS + performs exactly two live checks
+  (existsSync for levels 0/1, a read of getConfiguredLayers()'s already-
+  resolved output for levels 2-4, never a second resolution). Reran
+  node test/http-api.mjs myself -- confirmed the byte-for-byte GET /layers
+  regression check (raw-text comparison against a pre-captured baseline) and
+  every GET /memory-levels shape/configured/activeInCascade/CORS check pass;
+  only the 3 pre-existing/unrelated POST /remember failures remain. Reran
+  tsc --noEmit (clean) and vitest lib/mnemosyne/layer1 (196/196) myself. All
+  acceptance criteria met.
 depends_on: [ml-01-memory-level-taxonomy]
 
 description: |
