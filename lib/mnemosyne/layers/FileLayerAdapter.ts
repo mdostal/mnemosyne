@@ -1,16 +1,8 @@
-import { createHash } from 'node:crypto';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { Hit, RecallFailure, RecallResult, RecallSuccess } from '../interfaces.js';
+import { DEFAULT_IGNORED_DIRECTORIES, sha256, walk } from './fileWalk.js';
 import type { LayerAdapter, RecallOptions } from './LayerAdapter.js';
-
-const DEFAULT_IGNORED_DIRECTORIES = new Set([
-  '.git',
-  'node_modules',
-  'dist',
-  'build',
-  'coverage',
-]);
 
 export interface FileLayerAdapterOptions {
   ignoredDirectories?: Iterable<string>;
@@ -62,7 +54,7 @@ export class FileLayerAdapter implements LayerAdapter {
     const hits: Hit[] = [];
 
     try {
-      for await (const filePath of this.walk(this.root)) {
+      for await (const filePath of walk(this.root, this.ignoredDirectories)) {
         if (hits.length >= limit) {
           break;
         }
@@ -115,25 +107,6 @@ export class FileLayerAdapter implements LayerAdapter {
     } satisfies RecallSuccess;
   }
 
-  private async *walk(directory: string): AsyncGenerator<string> {
-    const entries = await readdir(directory, { withFileTypes: true });
-
-    for (const entry of entries) {
-      const entryPath = path.join(directory, entry.name);
-
-      if (entry.isDirectory()) {
-        if (!this.ignoredDirectories.has(entry.name)) {
-          yield* this.walk(entryPath);
-        }
-        continue;
-      }
-
-      if (entry.isFile()) {
-        yield entryPath;
-      }
-    }
-  }
-
   private failure(
     query: string,
     scope: RecallFailure['scope'],
@@ -166,8 +139,4 @@ export class FileLayerAdapter implements LayerAdapter {
 
     return fallback;
   }
-}
-
-function sha256(content: string): string {
-  return createHash('sha256').update(content).digest('hex');
 }
