@@ -1,9 +1,24 @@
 id: ml-05-memory-levels-ui
 epic: mnemosyne-memory-levels
 title: "UI: rename Memory Layer Stack -> Retrieval Layer Stack + new Memory Levels (0-4) section"
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 9974331). Independently verified: read
+  ui/index.html's diff in full -- confirmed both sections carry the exact
+  required disambiguation sentences (neither is the retrieval cascade vs.
+  taxonomy, neither is the orchestration tier hierarchy). Confirmed via
+  git diff -U0 that ui/app.js's diff is purely additive (zero deletions).
+  Killed a stale, hours-old leftover src/server.mjs process squatting on
+  port 8477 (unrelated to this story, left over from earlier session
+  activity) and started a fresh server from this worktree's actual code to
+  verify for real. Reran tsc --noEmit (clean), test/ui-shell.mjs (all
+  pass), and test/persona-layer-stack.mjs (all pass, including the
+  explicit byte-for-byte pin proving loadPersonaLayerStack() is genuinely
+  unchanged) myself against the real served UI. All acceptance criteria
+  met.
 depends_on: [ml-04-memory-levels-route]
 
 description: |
