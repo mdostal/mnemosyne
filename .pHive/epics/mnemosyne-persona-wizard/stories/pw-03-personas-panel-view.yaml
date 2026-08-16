@@ -1,9 +1,25 @@
 id: pw-03-personas-panel-view
 epic: mnemosyne-persona-wizard
 title: Personas panel markup + loadPersonas() (view-only)
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-15 (commit e1554a9). Built in a separate worktree in
+  parallel with pw-04 (also touching ui/index.html and ui/app.js) --
+  produced a real, expected merge conflict on both files when merged after
+  pw-04. Resolved by hand: kept the Personas panel (pw-03, its own
+  <section id="personas">) and the Memory Layer Stack section (pw-04,
+  <section id="persona-layer-stack">) as fully distinct sections/functions,
+  both wired into refreshAll(). Independently verified post-resolution:
+  tsc --noEmit clean, test/ui-shell.mjs (28/28, including the new
+  personas-panel assertions), test/persona-layer-stack.mjs (15/15, confirms
+  pw-04's section still isolated after the merge), test/http-api.mjs (only
+  the 3 pre-existing, unrelated POST /remember failures). parentRefs render
+  as pointer-only text ("tier: scopeId") via parentRefsText() -- confirmed
+  it never fetches a parent's actual content, satisfying the "query up,
+  never copy down" acceptance criterion. All acceptance criteria met.
 depends_on: [pw-02-get-persona-routes-cors]
 
 description: |
