@@ -727,10 +727,26 @@ footer {
 }
 
 /* ====================================================================
-   pw-04-layer-stack-visibility: layer-stack visibility section.
-   ADDITIVE / SELF-CONTAINED -- scoped entirely to #persona-layer-stack
-   and its children, no changes to existing rules above.
+   pw-04-layer-stack-visibility / pu-11-layer-stack-integration-redesign:
+   layer-stack visibility section. Originally its own top-level
+   .panel.panel-wide (pw-04); pu-11 re-homed the markup to sit nested
+   inside #personas (pu-10's shell), so it no longer gets the top-level
+   .panel treatment -- instead it's set off from #persona-form above it by
+   a border-top divider, the same idiom #persona-level0-pointer below
+   already used pre-re-home. Scoped entirely to #persona-layer-stack and
+   its children, no changes to existing rules above.
    ==================================================================== */
+#persona-layer-stack {
+  border-top: 1px solid var(--border);
+  padding-top: 1.25rem;
+  margin-top: 1.5rem;
+}
+
+#persona-layer-stack h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+}
+
 #persona-layer-stack-table {
   width: 100%;
   border-collapse: collapse;
@@ -763,7 +779,7 @@ footer {
   margin-top: 0.25rem;
 }
 
-#persona-level0-pointer h3 {
+#persona-level0-pointer h4 {
   margin: 0 0 0.4rem;
   font-size: 0.9rem;
 }
