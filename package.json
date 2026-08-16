@@ -54,7 +54,8 @@
     "test:graphify-bridge": "node test/graphify-bridge.mjs",
     "test:mcp-server-graphify": "node test/mcp-server-graphify.mjs",
     "test:mcp-server-persona": "node test/mcp-server-persona.mjs",
-    "test:persona-cross-transport": "node test/persona-cross-transport.mjs"
+    "test:persona-cross-transport": "node test/persona-cross-transport.mjs",
+    "test:persona-draft-cross-transport": "tsx test/persona-draft-cross-transport.mjs"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
