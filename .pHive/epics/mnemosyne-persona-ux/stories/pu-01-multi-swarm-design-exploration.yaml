@@ -1,9 +1,33 @@
 id: pu-01-multi-swarm-design-exploration
 epic: mnemosyne-persona-ux
 title: "Multi-swarm design pass: 3 options -> 7-lens review panel -> 3 synthesized options"
-status: planned
+status: complete
 complexity: high
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 6445423, produced via a 14-agent Workflow-tool
+  run: 3 option-generation + 7 lens-review + 3 synthesis + 1 selection,
+  zero agent errors). Independently verified with real scrutiny given the
+  size of this deliverable: confirmed all 15 artifacts exist on disk (3
+  options, 7 critiques, 3 synthesized options, selection.md, index.yaml).
+  Read selection.md in full -- confirmed the reasoning is genuinely
+  substantive (not a coin flip): it explicitly cross-checked each
+  synthesized option's self-reported critique-response claims against the
+  actual critique text, catching a real discrepancy (synthesized option 3
+  claimed to fix hierarchy-legibility's two named gaps in original option 3
+  but had actually fixed two different, unrelated gaps from a different
+  critique). Independently spot-checked this claim myself by reading
+  hierarchy-legibility.md directly -- confirmed its two named gaps
+  ("global tiers collapse into one bucket when grouped by Repo", "parent
+  anchor could point at a filtered-out target") match selection.md's
+  citations exactly. Read the winning synthesized option (option-2.md,
+  "Trust-Gated Unified Queue") in full -- confirmed it is a real,
+  buildable wireframe-level spec against this repo's actual zero-dependency
+  vanilla-JS/HTML/CSS shell, with explicit citations back to which lens
+  finding drove which specific decision, not generic prose. Confirmed
+  index.yaml correctly registers the topic and selected option for pu-10/
+  pu-11/pu-12/pu-14 to build against. All acceptance criteria met.
 depends_on: []
 
 description: |
