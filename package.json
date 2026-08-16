@@ -1,6 +1,6 @@
 {
   "name": "mnemosyne",
-  "version": "0.8.0",
+  "version": "0.10.0",
   "private": true,
   "description": "Pantheon's Memory god — thin HTTP service wrapping the swarm-memory engine over the Qdrant SSOT (recall / remember / scopes / health).",
   "type": "module",
@@ -13,7 +13,8 @@
     "mnemosyne-install-git-hooks": "bin/mnemosyne-install-git-hooks",
     "mnemosyne-client-api": "bin/mnemosyne-client-api",
     "mnemosyne-mcp": "bin/mnemosyne-mcp.mjs",
-    "mnemosyne-audit-lifecycle": "bin/mnemosyne-audit-lifecycle"
+    "mnemosyne-audit-lifecycle": "bin/mnemosyne-audit-lifecycle",
+    "mnemosyne-file-index": "bin/mnemosyne-file-index.mjs"
   },
   "scripts": {
     "start": "node src/server.mjs",
@@ -49,11 +50,13 @@
     "test:graph-route": "node test/graph-route.mjs",
     "test:reindex-route": "node test/reindex-route.mjs",
     "test:skill-harness": "node test/skill-harness.mjs",
+    "test:skill-harness-persona-draft": "node test/skill-harness-persona-draft.mjs",
     "test:mcp-server": "node test/mcp-server.mjs",
     "test:graphify-bridge": "node test/graphify-bridge.mjs",
     "test:mcp-server-graphify": "node test/mcp-server-graphify.mjs",
     "test:mcp-server-persona": "node test/mcp-server-persona.mjs",
-    "test:persona-cross-transport": "node test/persona-cross-transport.mjs"
+    "test:persona-cross-transport": "node test/persona-cross-transport.mjs",
+    "test:persona-draft-cross-transport": "tsx test/persona-draft-cross-transport.mjs"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",

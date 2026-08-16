@@ -1,0 +1,63 @@
+name: mnemosyne-persona-ux
+title: Multi-swarm-designed Personas panel redesign + agent-assisted persona build-and-approve interaction
+target_codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+methodology: tdd
+version_bump: minor
+
+stories:
+  - id: pu-01-multi-swarm-design-exploration
+    title: "Multi-swarm design pass: 3 options -> 7-lens review panel -> 3 synthesized options"
+    complexity: high
+    depends_on: []
+  - id: pu-02-draft-persona-store
+    title: Draft persona store (home-rooted, archive-by-move disposal)
+    complexity: medium
+    depends_on: []
+  - id: pu-03-draft-persona-routes
+    title: "Draft /persona/draft/* HTTP routes on lib/mnemosyne/server.ts (list/read/propose/approve/discard)"
+    complexity: medium
+    depends_on: [pu-02-draft-persona-store]
+  - id: pu-04-draft-persona-cli
+    title: "CLI: mnemosyne persona draft propose|show|approve|discard"
+    complexity: medium
+    depends_on: [pu-02-draft-persona-store]
+  - id: pu-05-draft-persona-skill-harness-mcp
+    title: Draft persona skill-harness action + MCP tool wraps
+    complexity: low
+    depends_on: [pu-04-draft-persona-cli]
+  - id: pu-06-draft-persona-transport-tests
+    title: Draft cross-transport round-trip + concurrency + leak-proof tests
+    complexity: medium
+    depends_on: [pu-03-draft-persona-routes, pu-05-draft-persona-skill-harness-mcp]
+  - id: pu-07-bounded-crawl-context
+    title: "Interview skill: bounded, capped crawl -> sourceSummary"
+    complexity: medium
+    depends_on: []
+  - id: pu-08-draft-first-interview-flow
+    title: "Interview skill: draft-first write target + --commit-directly escape hatch"
+    complexity: medium
+    depends_on: [pu-04-draft-persona-cli, pu-07-bounded-crawl-context]
+  - id: pu-09-draft-first-regression
+    title: "Interview skill: draft-default / escape-hatch / max-skip regression proof"
+    complexity: medium
+    depends_on: [pu-08-draft-first-interview-flow]
+  - id: pu-10-personas-panel-redesign-shell
+    title: Personas panel shell rebuild per pu-01's chosen synthesized option
+    complexity: high
+    depends_on: [pu-01-multi-swarm-design-exploration]
+  - id: pu-11-layer-stack-integration-redesign
+    title: Layer-stack visibility section re-integrated into the new shell
+    complexity: low
+    depends_on: [pu-10-personas-panel-redesign-shell]
+  - id: pu-12-draft-review-approve-ui
+    title: Draft review/approve UI (unifies agent-proposed and human-authored drafts)
+    complexity: high
+    depends_on: [pu-01-multi-swarm-design-exploration, pu-03-draft-persona-routes, pu-10-personas-panel-redesign-shell]
+  - id: pu-13-full-loop-e2e-regression
+    title: "Full-loop regression: agent-propose (CLI) -> UI review -> human-approve -> real commit"
+    complexity: medium
+    depends_on: [pu-06-draft-persona-transport-tests, pu-09-draft-first-regression, pu-12-draft-review-approve-ui]
+  - id: pu-14-design-fidelity-review
+    title: Design-fidelity review against pu-01's chosen synthesized option
+    complexity: low
+    depends_on: [pu-12-draft-review-approve-ui]

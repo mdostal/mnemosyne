@@ -14,6 +14,9 @@ const addLaneForm = document.getElementById("add-lane-form");
 const addLaneStatusEl = document.getElementById("add-lane-status");
 const personasStatusEl = document.getElementById("personas-status");
 const personasTbodyEl = document.getElementById("personas-tbody");
+// pu-12-draft-review-approve-ui: loadDrafts()'s own status element (see
+// that function, below, for why it's separate from personasStatusEl).
+const personasDraftsStatusEl = document.getElementById("personas-drafts-status");
 
 function setStatus(el, kind, text) {
   el.textContent = text;
@@ -1179,18 +1182,23 @@ function personaCell(text) {
 
 // ============================================================================
 // pw-04-layer-stack-visibility: layer-stack visibility section.
-// ADDITIVE / SELF-CONTAINED -- own DOM refs, own small loader function.
-// Fetches the ALREADY-SHIPPED GET /layers route on lib/mnemosyne/server.ts
-// -- no new backend route. That service runs on a different origin/port
-// (3141, MNEMOSYNE_PORT) than this UI's own server (src/server.mjs, port
-// 8477), so this is a genuine cross-origin fetch -- same pattern
+// Own DOM refs, own small loader function. pu-11-layer-stack-integration-
+// redesign re-homed the markup these refs target from a standalone
+// top-level <section> into pu-10's new Personas panel shell (nested inside
+// #personas, ui/index.html) -- the element ids below, and everything in
+// loadPersonaLayerStack() itself, are UNCHANGED by that move. It fetches
+// the ALREADY-SHIPPED GET /layers route on lib/mnemosyne/server.ts -- no
+// new backend route. That service runs on a different origin/port (3141,
+// MNEMOSYNE_PORT) than this UI's own server (src/server.mjs, port 8477),
+// so this is a genuine cross-origin fetch -- same pattern
 // pw-02-get-persona-routes-cors's CORS fix already covers for /persona/*,
 // extended by this story to /layers (see server.ts).
 //
 // The Level 0 pointer rendered alongside it is a STATIC path display only
 // (no fetch, no form) -- intentionally view-only, matching Epic 1's own
-// recommendation (design-discussion.md §3d/§6 OQ4). There is no edit
-// affordance for it anywhere in this file.
+// recommendation (design-discussion.md §3d/§6 OQ4), carried forward
+// unchanged through the pu-11 re-home. There is no edit affordance for it
+// anywhere in this file.
 // ============================================================================
 const MNEMOSYNE_CLIENT_API_LOOPBACK = "http://127.0.0.1:3141";
 const MNEMOSYNE_CLIENT_API_LOCALHOST = "http://localhost:3141";
@@ -1214,21 +1222,772 @@ function personaLayerStackCell(text) {
   return td;
 }
 
+// ml-05-memory-levels-ui (epic mnemosyne-memory-levels): element refs for
+// the new, structurally separate Memory Levels (0-4) section -- never
+// shared with persona-layer-stack's elements above.
+const memoryLevelsStatusEl = document.getElementById("memory-levels-status");
+const memoryLevelsTableEl = document.getElementById("memory-levels-table");
+const memoryLevelsTbodyEl = document.getElementById("memory-levels-tbody");
+const memoryLevelsEmptyEl = document.getElementById("memory-levels-empty");
+
+function memoryLevelsCell(text) {
+  const td = document.createElement("td");
+  td.textContent = text;
+  return td;
+}
+
 // Renders a persona's parentRefs as pointer-only text ("tier: scopeId",
 // comma-separated), built entirely from fields already present on the
 // persona record itself -- this function never fetches anything. This is
 // the UI-layer half of the "query up, never copy down" guarantee
 // getPersonaContent's own buildParentContextSections (persona.ts) enforces
 // server-side: a parent's real sections content must NEVER be fetched or
-// inlined here, only named (research-brief.md §6).
+// inlined here, only named (research-brief.md §6). Kept as its own function
+// (used by personaParentCell below, and directly wherever plain text is
+// all that's needed) so the pointer-only guarantee stays in exactly one
+// place, unchanged from pw-03.
 function parentRefsText(parentRefs) {
   if (!Array.isArray(parentRefs) || parentRefs.length === 0) return "—";
   return parentRefs.map((ref) => `${ref.tier}: ${ref.scopeId}`).join(", ");
 }
 
+// --- pu-10-personas-panel-redesign-shell: new grouped/filterable shell ----
+// Rebuilds ONLY how loadPersonas()'s result is rendered/organized, per
+// selection.md's chosen synthesized option-2.md ("Trust-Gated Unified
+// Queue"). loadPersonas()'s own fetch logic (below) is unchanged from pw-03
+// -- still GET /persona + one GET /persona/:tier/:scopeId per entry, same
+// personaServiceOrigin() cross-origin pattern, no new route, no draft fetch
+// (horizontal-plan.md H7 component 1: "still reading the same GET
+// /persona/... routes underneath -- pure view rebuild").
+//
+// pu-12-draft-review-approve-ui extends this shell (does not rebuild it):
+// loadDrafts() below is a NEW function, following loadPersonas()'s own
+// "fetch, setStatus, render" shape, that fetches pu-03's GET /persona/draft
+// (+ one GET /persona/draft/:tier/:scopeId per entry, for the sourceSummary/
+// proposedBy/proposedAt metadata the list route doesn't carry -- exactly
+// mirroring loadPersonas()'s own "list route doesn't carry displayName, so
+// fetch each entry's own record" shape). mergedPersonaRows() (below,
+// immediately before renderPersonas()) is the ONE place that combines
+// loadedPersonas (live) with loadedDrafts (draft) by identity into the rows
+// renderPersonas() actually renders -- renderPersonas() itself still never
+// fetches anything, matching this ticket's own "loadDrafts() following
+// loadPersonas()'s existing conventions" instruction.
+const personasTableEl = document.getElementById("personas-table");
+const personasEmptyEl = document.getElementById("personas-empty");
+const personasStatusFilterEl = document.getElementById("personas-status-filter");
+const personasLiveRegionEl = document.getElementById("personas-live-region");
+
+// Canonical tier cascade order (mirrors lib/mnemosyne/layer1/tiers.ts's
+// TIERS) -- used for stable Tier-group-by ordering and to label Repo-group-
+// by's 3 "global" sub-groups.
+const PERSONA_TIER_ORDER = ["top-orchestrator", "company-director", "project-orchestrator", "code-architect"];
+
+// Already-fetched persona rows, kept module-level so the group-by/status-
+// filter controls below can re-render client-side on every change -- no
+// re-fetch (selection.md §1: "toggling re-buckets already-fetched rows
+// client-side"; every other panel's manual-refresh-only convention).
+let loadedPersonas = [];
+
+// pu-12-draft-review-approve-ui: already-fetched ACTIVE drafts (full
+// records, including sourceSummary/proposedBy/proposedAt when present),
+// kept module-level for the exact same client-side-re-render-on-toggle
+// reason as loadedPersonas above. mergedPersonaRows() (below) is the only
+// place this is combined with loadedPersonas.
+let loadedDrafts = [];
+
+// Session-scoped "has this draft's raw proposal been read at least once"
+// gate (selection.md/synthesized option-2.md §4.3: "the accordion always
+// opens in a non-editable, read-only mode first... a single control...
+// 'I've read this -- enable editing'... Once clicked within a session, this
+// specific draft's identity is marked read for the remainder of the
+// session (client-side only)... a fresh page load resets it"). A plain JS
+// Set is enough for that exact contract -- it lives only as long as this
+// page does, never persisted, never sent anywhere.
+const readDraftIdentities = new Set();
+
+function personaRowKey(tier, scopeId) {
+  return `${tier} ${scopeId}`;
+}
+
+// Status is always real cell text, never a bare glyph (accessibility.md,
+// onboarding-clarity.md). This ticket's data (GET /persona, unchanged) only
+// ever produces "live" rows -- the needs-review/needs-review-update/history
+// values exist here so the grouping/filtering/labeling machinery is
+// already correct once pu-12 merges in GET /persona/draft's rows
+// alongside these (horizontal-plan.md H7 component 3), not something this
+// ticket fabricates data for today.
+function personaStatusLabel(status) {
+  switch (status) {
+    case "needs-review":
+      return "needs review";
+    case "needs-review-update":
+      return "needs review — updates existing persona";
+    case "history":
+      return "history";
+    default:
+      return "live";
+  }
+}
+
+function personaMatchesStatusFilter(row, filterValue) {
+  if (filterValue === "all") return true;
+  if (filterValue === "needs-review") {
+    return row.status === "needs-review" || row.status === "needs-review-update";
+  }
+  return row.status === filterValue;
+}
+
+function currentPersonaGroupBy() {
+  const checked = document.querySelector('input[name="personas-group-by"]:checked');
+  return checked ? checked.value : "tier";
+}
+
+// Buckets already-loaded (and already status-filtered) rows for the
+// current group-by mode. Pure client-side recompute -- no fetch anywhere
+// in this function. Repo-grouping keeps the 3 global tiers as 3 separate,
+// explicitly labeled sub-groups ("<tier> — global — not repo-scoped")
+// rather than collapsing them into one undifferentiated "global" bucket --
+// the concrete fix for hierarchy-legibility.md's named gap in original
+// Option 3 (selection.md "the deciding factor"). loadPersonas() only ever
+// fetches the 3 global tiers (GET /persona, no ?repo=), so no code-architect
+// row can appear via this ticket's data; the per-repo branch below is
+// written for correctness/forward-compatibility but has nothing to
+// populate yet under this ticket's own reuse-loadPersonas()-unchanged
+// scope boundary.
+function groupPersonaRows(rows, groupBy) {
+  const groups = new Map(); // label -> rows[]
+  const order = [];
+  const push = (label, row) => {
+    if (!groups.has(label)) {
+      groups.set(label, []);
+      order.push(label);
+    }
+    groups.get(label).push(row);
+  };
+
+  if (groupBy === "status") {
+    for (const status of ["live", "needs-review", "needs-review-update", "history"]) {
+      const label = personaStatusLabel(status);
+      for (const row of rows) if (row.status === status) push(label, row);
+    }
+  } else if (groupBy === "repo") {
+    for (const tier of PERSONA_TIER_ORDER) {
+      if (tier === "code-architect") continue; // no repo-scoped rows loaded by this ticket
+      const label = `${tier} — global — not repo-scoped`;
+      for (const row of rows) if (row.tier === tier) push(label, row);
+    }
+    for (const row of rows) if (row.tier === "code-architect") push(row.repo || "(unknown repo)", row);
+  } else {
+    for (const tier of PERSONA_TIER_ORDER) {
+      for (const row of rows) if (row.tier === tier) push(tier, row);
+    }
+  }
+  return order.map((label) => ({ label, rows: groups.get(label) }));
+}
+
+// personaCell(text) is defined once, above (personaServiceOrigin()'s
+// section) -- reused here unchanged, not redefined.
+
+// Builds the Parent(s) <td> for one row: plain pointer-only text (via
+// parentRefsText's exact phrasing) for a parentRef with no matching row in
+// the currently loaded set, or a real <button> (never an href="#" anchor --
+// there is nothing to navigate to, only in-page focus to move) for one that
+// does. Still never fetches anything -- clicking only moves focus among
+// rows already rendered from loadPersonas()'s own result.
+function personaParentCell(parentRefs, loadedByKey) {
+  const td = document.createElement("td");
+  if (!Array.isArray(parentRefs) || parentRefs.length === 0) {
+    td.textContent = "—";
+    return td;
+  }
+  parentRefs.forEach((ref, i) => {
+    if (i > 0) td.appendChild(document.createTextNode(", "));
+    const label = `${ref.tier}: ${ref.scopeId}`;
+    if (!loadedByKey.has(personaRowKey(ref.tier, ref.scopeId))) {
+      td.appendChild(document.createTextNode(label));
+      return;
+    }
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "persona-parent-link";
+    btn.textContent = label;
+    btn.addEventListener("click", () => jumpToPersonaRow(ref.tier, ref.scopeId));
+    td.appendChild(btn);
+  });
+  return td;
+}
+
+// Moves real DOM focus to {tier, scopeId}'s row (accessibility.md: "nothing
+// said about moving actual focus... or otherwise giving a screen reader
+// user any signal that the jump happened" -- flagged against a prior
+// design's "scroll to and flash"). If the identity is in the loaded set but
+// currently hidden by the active status filter, resets the filter to "all"
+// (never the group-by mode, to avoid disorienting the operator further)
+// and announces the reset via the aria-live region instead of silently
+// pointing at nothing (hierarchy-legibility.md's gap in original Option 3).
+function jumpToPersonaRow(tier, scopeId) {
+  const findRow = () =>
+    Array.from(personasTbodyEl.querySelectorAll("tr[data-tier]")).find(
+      (tr) => tr.dataset.tier === tier && tr.dataset.scopeId === scopeId
+    );
+
+  let target = findRow();
+  if (!target) {
+    personasStatusFilterEl.value = "all";
+    renderPersonas();
+    target = findRow();
+    if (personasLiveRegionEl) {
+      personasLiveRegionEl.textContent = `Filter cleared to show parent ${tier} / ${scopeId}.`;
+    }
+  }
+  if (target) {
+    target.scrollIntoView({ block: "center" });
+    target.focus();
+  }
+}
+
+// Single funnel point for every <tr> renderPersonas() appends into the
+// personas tbody -- so that append call is made from exactly one place in
+// this file (group-header rows and data rows both route through here),
+// matching test/persona-write-form.mjs's existing "no second persona-
+// rendering path" guard, even though this shell now appends two kinds of
+// <tr> per group.
+function appendPersonaTbodyRow(tr) {
+  personasTbodyEl.appendChild(tr);
+}
+
+function resetPersonaView() {
+  loadedPersonas = [];
+  personasTbodyEl.textContent = "";
+  personasTableEl.hidden = true;
+  personasEmptyEl.hidden = true;
+}
+
+// pu-12-draft-review-approve-ui: same sanitization rule
+// lib/mnemosyne/layer1/persona-draft-store.ts's sanitizeForPath() /
+// persona.ts's resolveRememberScope() already use for turning an arbitrary
+// scopeId into a safe path/tag segment -- reused byte-for-byte here to turn
+// a {tier, scopeId} identity into a safe HTML id for the draft-detail row's
+// id/aria-controls pairing, rather than inventing a third sanitization rule.
+function sanitizeForDomId(value) {
+  return String(value).replace(/[^a-zA-Z0-9_-]/g, "-");
+}
+
+function draftDetailRowId(tier, scopeId) {
+  return `persona-draft-detail-${sanitizeForDomId(tier)}-${sanitizeForDomId(scopeId)}`;
+}
+
+// The ONLY signal this file uses to decide "agent-proposed" vs "human-typed"
+// for a draft: a real, non-empty sourceSummary. Mirrors server.ts's own
+// approve-route logic (`typeof sourceSummary === 'string' && sourceSummary.trim() !== ''`
+// gates whether remember() fires) -- same signal, reused, never a second
+// definition of what counts as "agent-proposed" (design_decisions:
+// "sourceSummary is rendered and labeled ONLY when present -- never
+// fabricated or implied for a human-typed draft").
+function isAgentProposedDraft(draft) {
+  return typeof draft.sourceSummary === "string" && draft.sourceSummary.trim() !== "";
+}
+
+// One-line snippet rendered directly under a collapsed agent-proposed row
+// (selection.md/synthesized option-2.md §1: "a one-line sourceSummary
+// snippet renders directly under any agent-proposed row, truncated to
+// roughly one sentence... visible without expanding anything").
+function sourceSummarySnippet(text) {
+  const trimmed = String(text || "").trim();
+  const firstSentence = trimmed.split(/(?<=[.!?])\s/)[0] || trimmed;
+  return firstSentence.length > 140 ? `${firstSentence.slice(0, 137)}…` : firstSentence;
+}
+
+// The one place loadedPersonas (live, pw-03/loadPersonas()) and
+// loadedDrafts (pu-03/loadDrafts()) are combined by identity into the rows
+// renderPersonas() actually renders -- a pure function, never fetches.
+// Three possible outcomes per identity, exactly selection.md/synthesized
+// option-2.md §3's table: an identity with a live record and NO matching
+// draft stays "live"; an identity with BOTH a live record and an active
+// draft becomes "needs-review-update" (one row, not two -- the live record
+// is superseded in the list by its own pending draft, matching the design's
+// "current (live) vs proposed (draft)" comparison being reachable from that
+// single row's detail panel); an identity with ONLY an active draft (no
+// live record yet) becomes "needs-review".
+function mergedPersonaRows() {
+  const draftByKey = new Map(loadedDrafts.map((d) => [personaRowKey(d.tier, d.scopeId), d]));
+  const rows = [];
+  const seenKeys = new Set();
+
+  for (const persona of loadedPersonas) {
+    const key = personaRowKey(persona.tier, persona.scopeId);
+    seenKeys.add(key);
+    const draft = draftByKey.get(key);
+    if (draft) {
+      rows.push({ ...persona, status: "needs-review-update", draft, live: persona });
+    } else {
+      rows.push(persona);
+    }
+  }
+
+  for (const draft of loadedDrafts) {
+    const key = personaRowKey(draft.tier, draft.scopeId);
+    if (seenKeys.has(key)) continue;
+    rows.push({
+      tier: draft.tier,
+      scopeId: draft.scopeId,
+      displayName: draft.displayName == null ? null : draft.displayName,
+      parentRefs: Array.isArray(draft.parentRefs) ? draft.parentRefs : [],
+      repo: draft.repo,
+      status: "needs-review",
+      draft,
+      live: null,
+    });
+  }
+
+  return rows;
+}
+
+// Re-renders #personas-table's grouped rows from already-fetched state --
+// never fetches. Called once by loadPersonas() after a real load, again by
+// loadDrafts() after a draft load, and again by the group-by/status-filter
+// controls' own change listeners below on every client-side re-view.
+// Building block for every row is mergedPersonaRows() above, not
+// loadedPersonas directly, so live and draft identities render in ONE
+// unified list (pu-12's own acceptance criterion), never two.
+function renderPersonas() {
+  personasTbodyEl.textContent = "";
+
+  const merged = mergedPersonaRows();
+
+  if (merged.length === 0) {
+    personasTableEl.hidden = true;
+    personasEmptyEl.hidden = false;
+    // pu-12-draft-review-approve-ui: the literal empty-state copy
+    // selection.md/synthesized option-2.md §2 singles out as "concrete,
+    // verifiable onboarding text" -- reused verbatim, not re-invented. Still
+    // contains the exact "No personas yet." substring this file's own
+    // pu-10-era test (test/personas-panel-shell.mjs) already asserts.
+    personasEmptyEl.textContent =
+      "No personas yet. No drafts pending. Ask an agent to propose one " +
+      "(`mnemosyne persona draft propose ...` or the " +
+      "`mnemosyne-persona-interview` skill), or start one by hand below.";
+    return;
+  }
+
+  const filterValue = personasStatusFilterEl.value;
+  const groupBy = currentPersonaGroupBy();
+  const loadedByKey = new Map(merged.map((p) => [personaRowKey(p.tier, p.scopeId), p]));
+  const visible = merged.filter((p) => personaMatchesStatusFilter(p, filterValue));
+
+  if (visible.length === 0) {
+    personasTableEl.hidden = true;
+    personasEmptyEl.hidden = false;
+    personasEmptyEl.textContent = "No personas match the current filter.";
+    return;
+  }
+  personasTableEl.hidden = false;
+  personasEmptyEl.hidden = true;
+
+  for (const group of groupPersonaRows(visible, groupBy)) {
+    const headerRow = document.createElement("tr");
+    headerRow.className = "persona-group-header";
+    const th = document.createElement("th");
+    th.colSpan = 6;
+    th.scope = "colgroup";
+    th.textContent = `${group.label} (${group.rows.length})`;
+    headerRow.appendChild(th);
+    appendPersonaTbodyRow(headerRow);
+
+    for (const row of group.rows) {
+      const tr = document.createElement("tr");
+      tr.dataset.tier = row.tier;
+      tr.dataset.scopeId = row.scopeId;
+      // Programmatic focus target only (parent-ref jump above) -- not
+      // meant to sit in the regular Tab order, so tabindex stays -1.
+      tr.tabIndex = -1;
+
+      const displayNameTd = personaCell(row.displayName == null || row.displayName === "" ? "—" : row.displayName);
+      // pu-12: one-line sourceSummary snippet under any agent-proposed row,
+      // visible without expanding anything (selection.md/synthesized
+      // option-2.md §1) -- NEVER rendered for a human-typed draft (no
+      // sourceSummary), so no fabricated provenance signal appears where
+      // none exists.
+      if (row.draft && isAgentProposedDraft(row.draft)) {
+        const snippet = document.createElement("div");
+        snippet.className = "persona-source-snippet";
+        snippet.textContent = sourceSummarySnippet(row.draft.sourceSummary);
+        displayNameTd.appendChild(snippet);
+      }
+
+      tr.appendChild(personaCell(row.tier));
+      tr.appendChild(personaCell(row.scopeId));
+      tr.appendChild(displayNameTd);
+      tr.appendChild(personaParentCell(row.parentRefs, loadedByKey));
+      tr.appendChild(personaCell(personaStatusLabel(row.status)));
+
+      const { actionsCell, detailRow } = buildPersonaActionsAndDetail(row);
+      tr.appendChild(actionsCell);
+      appendPersonaTbodyRow(tr);
+      if (detailRow) appendPersonaTbodyRow(detailRow);
+    }
+  }
+}
+
+document.querySelectorAll('input[name="personas-group-by"]').forEach((el) => {
+  el.addEventListener("change", renderPersonas);
+});
+personasStatusFilterEl.addEventListener("change", renderPersonas);
+
+// ==================== pu-12-draft-review-approve-ui: draft detail/edit/
+// approve/discard, built per pu-01's chosen synthesized option's documented
+// interaction flow (selection.md -> synthesized/option-2.md §3/§4). ========
+
+// A plain stacked-text (never a diff library) block for one side of the
+// "Current (live) vs. Proposed (draft)" comparison (§4.3.3) -- avoids the
+// screen-reader trap a color/strikethrough diff would create.
+function personaCompareBlock(label, record) {
+  const wrap = document.createElement("div");
+  const labelEl = document.createElement("p");
+  labelEl.className = "persona-draft-compare-label";
+  labelEl.textContent = label;
+  wrap.appendChild(labelEl);
+
+  const dl = document.createElement("dl");
+  dl.className = "fields";
+  const addField = (dt, dd) => {
+    const dtEl = document.createElement("dt");
+    dtEl.textContent = dt;
+    const ddEl = document.createElement("dd");
+    ddEl.textContent = dd;
+    dl.appendChild(dtEl);
+    dl.appendChild(ddEl);
+  };
+  addField("Display name", record.displayName || "—");
+  addField("Scope", record.scope || "—");
+  const sections = Array.isArray(record.sections) ? record.sections : [];
+  sections.forEach((s, i) => {
+    addField(`Section ${i + 1}: ${(s && s.heading) || "(untitled)"}`, (s && s.body) || "—");
+  });
+  if (record.repo) addField("Repo", record.repo);
+  wrap.appendChild(dl);
+  return wrap;
+}
+
+// Builds ONE draft's expandable detail row: `{ tr, focusTarget }`. `tr` is a
+// full-width (colspan 6), initially-`hidden` <tr> appended directly after
+// its data row (the real `hidden`-attribute toggle idiom
+// #graph-inspector-detail already uses, per §4.3). `focusTarget` is the
+// first heading inside -- moved to programmatically on expand (§4.3:
+// "focus moves programmatically to the accordion's first heading... not
+// left floating").
+//
+// The accordion always opens in a non-editable, read-only mode first, even
+// on a later visit -- readDraftIdentities (module-level Set, above) is the
+// ONLY thing that ever reveals the Edit/Approve/Discard controls without
+// requiring "I've read this -- enable editing" to be clicked again *within
+// this session* (§4.3's own stated contract). The gate is enforced
+// structurally, by not rendering those controls into the DOM at all until
+// passed -- never a `disabled` attribute (accessibility.md's named
+// anti-pattern; selection.md "Design deviation from Option 2, deliberately").
+function buildPersonaDraftDetailRow(row) {
+  const { tier, scopeId, draft, live } = row;
+  const identityKey = personaRowKey(tier, scopeId);
+  const agentProposed = isAgentProposedDraft(draft);
+
+  const tr = document.createElement("tr");
+  tr.id = draftDetailRowId(tier, scopeId);
+  tr.className = "persona-draft-detail-row";
+  tr.hidden = true;
+
+  const td = document.createElement("td");
+  td.colSpan = 6;
+  const panel = document.createElement("div");
+  panel.className = "persona-draft-panel";
+
+  let focusTarget = null;
+
+  // Source summary -- ONLY rendered, and ONLY labeled agent-proposed, when
+  // draft.sourceSummary is a real, non-empty string (design_decisions:
+  // "never fabricated or implied for a human-typed draft").
+  if (agentProposed) {
+    const h4 = document.createElement("h4");
+    h4.tabIndex = -1;
+    h4.textContent = "Why the agent proposed this";
+    const badge = document.createElement("span");
+    badge.className = "persona-draft-agent-label";
+    badge.textContent = "agent-proposed";
+    h4.appendChild(badge);
+    panel.appendChild(h4);
+    focusTarget = h4;
+
+    const summaryP = document.createElement("p");
+    summaryP.className = "persona-draft-source-summary";
+    summaryP.textContent = draft.sourceSummary;
+    panel.appendChild(summaryP);
+  }
+
+  // Provenance line -- always visible text, never inferred/tooltip-only
+  // (§4.3.2). "Manually created" for a human-typed draft -- never "Proposed
+  // by agent" when there is no real sourceSummary behind it.
+  const provenanceP = document.createElement("p");
+  provenanceP.className = "persona-draft-provenance";
+  const proposedAt = typeof draft.proposedAt === "string" && draft.proposedAt ? draft.proposedAt : "unknown time";
+  provenanceP.textContent = agentProposed
+    ? `Proposed by agent · ${proposedAt}`
+    : `Manually created · ${proposedAt}`;
+  panel.appendChild(provenanceP);
+  if (!focusTarget) {
+    provenanceP.tabIndex = -1;
+    focusTarget = provenanceP;
+  }
+
+  // Current (live) vs. Proposed (draft) -- only when a live record already
+  // exists at this identity (§4.3.3); "New persona -- nothing live yet"
+  // otherwise.
+  if (live) {
+    const compareHeading = document.createElement("h4");
+    compareHeading.textContent = "Current (live) vs. Proposed (draft)";
+    panel.appendChild(compareHeading);
+    panel.appendChild(personaCompareBlock("Current (live)", live));
+    panel.appendChild(personaCompareBlock("Proposed (draft)", draft));
+  } else {
+    const newHeading = document.createElement("h4");
+    newHeading.textContent = "New persona — nothing live yet";
+    panel.appendChild(newHeading);
+    panel.appendChild(personaCompareBlock("Proposed (draft)", draft));
+  }
+
+  // The one-time read gate + the controls it unlocks.
+  const gateBtn = document.createElement("button");
+  gateBtn.type = "button";
+  gateBtn.className = "persona-action-btn";
+  gateBtn.textContent = "I've read this — enable editing";
+
+  const controls = document.createElement("div");
+  controls.className = "persona-draft-controls";
+
+  const editBtn = document.createElement("button");
+  editBtn.type = "button";
+  editBtn.className = "persona-action-btn";
+  editBtn.textContent = "Edit in form above";
+  editBtn.addEventListener("click", () => populatePersonaForm(draft));
+
+  const approveBtn = document.createElement("button");
+  approveBtn.type = "button";
+  approveBtn.className = "persona-action-btn";
+  approveBtn.textContent = "Approve — write to persona store";
+  approveBtn.addEventListener("click", () => approveDraft(tier, scopeId, draft.repo));
+
+  const discardBtn = document.createElement("button");
+  discardBtn.type = "button";
+  discardBtn.className = "persona-action-btn destructive";
+  discardBtn.textContent = "Discard — archive without committing";
+  discardBtn.addEventListener("click", () => discardDraft(tier, scopeId, draft.repo));
+
+  controls.appendChild(editBtn);
+  controls.appendChild(approveBtn);
+  controls.appendChild(discardBtn);
+
+  const alreadyRead = readDraftIdentities.has(identityKey);
+  gateBtn.hidden = alreadyRead;
+  controls.hidden = !alreadyRead;
+
+  gateBtn.addEventListener("click", () => {
+    readDraftIdentities.add(identityKey);
+    gateBtn.hidden = true;
+    controls.hidden = false;
+    editBtn.focus();
+  });
+
+  panel.appendChild(gateBtn);
+  panel.appendChild(controls);
+
+  td.appendChild(panel);
+  tr.appendChild(td);
+  return { tr, focusTarget };
+}
+
+// Builds the Actions <td> for one merged row, plus (for a draft-bearing
+// row) its paired detail <tr> -- built together, in the SAME row-loop
+// iteration, so the toggle button and the row it controls share direct
+// closures rather than re-querying the DOM by a possibly-unsafe scopeId
+// (accessibility.md: aria-expanded/aria-controls kept in sync here, and
+// focus moved to the detail panel's focusTarget on expand, per §4.3).
+function buildPersonaActionsAndDetail(row) {
+  const td = document.createElement("td");
+
+  if (row.draft) {
+    const { tr: detailRow, focusTarget } = buildPersonaDraftDetailRow(row);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "persona-action-btn";
+    btn.textContent = "Review ▸";
+    btn.setAttribute("aria-expanded", "false");
+    btn.setAttribute("aria-controls", detailRow.id);
+    btn.addEventListener("click", () => {
+      const expanded = btn.getAttribute("aria-expanded") === "true";
+      const next = !expanded;
+      btn.setAttribute("aria-expanded", String(next));
+      btn.textContent = next ? "Hide ▾" : "Review ▸";
+      detailRow.hidden = !next;
+      if (next && focusTarget) focusTarget.focus();
+    });
+    td.appendChild(btn);
+    return { actionsCell: td, detailRow };
+  }
+
+  if (row.status === "live") {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "persona-action-btn";
+    btn.textContent = "Edit";
+    btn.addEventListener("click", () => populatePersonaForm(row));
+    td.appendChild(btn);
+    return { actionsCell: td, detailRow: null };
+  }
+
+  td.textContent = "—";
+  return { actionsCell: td, detailRow: null };
+}
+
+// Pre-fills #persona-form (the SAME editor used to propose a brand-new
+// draft) with an existing record's fields -- reused for both "Edit" on a
+// live row (proposes a revision draft) and "Edit in form above" on a draft's
+// detail panel (overwrites that draft in place, since the form's retargeted
+// submit handler below POSTs to the same {tier, scopeId} draft identity).
+// One editor, reused, never a second one (design-discussion.md §9.4).
+function populatePersonaForm(record) {
+  personaForm.reset();
+  personaTierFieldEl.value = record.tier || "";
+  personaScopeIdFieldEl.value = record.scopeId || "";
+  personaDisplayNameFieldEl.value = record.displayName || "";
+  personaScopeFieldEl.value = record.scope || "";
+  const firstSection = Array.isArray(record.sections) && record.sections[0] ? record.sections[0] : {};
+  personaSectionHeadingFieldEl.value = firstSection.heading || "";
+  personaSectionBodyFieldEl.value = firstSection.body || "";
+  personaRepoFieldEl.value = record.repo || "";
+  personaFormStatusEl.textContent = "";
+  personaFormStatusEl.className = "panel-status";
+  personaForm.scrollIntoView({ behavior: "smooth", block: "start" });
+  personaTierFieldEl.focus();
+}
+
+// `?repo=` is only ever needed for the repo-local (code-architect) tier
+// (server.ts's own `isRepoLocal` branch) -- omitted entirely for the 3
+// global tiers, matching every other cross-origin persona-service fetch in
+// this file.
+function personaDraftServiceUrl(tier, scopeId, pathSuffix, repo) {
+  const origin = personaServiceOrigin();
+  const url = `${origin}/persona/draft/${encodeURIComponent(tier)}/${encodeURIComponent(scopeId)}${pathSuffix || ""}`;
+  return repo ? `${url}?repo=${encodeURIComponent(repo)}` : url;
+}
+
+// Approve -- POSTs to pu-03's REAL POST /persona/draft/:tier/:scopeId/approve
+// route (never a client-side simulation). Symmetric confirm-gating with
+// discardDraft() below, specific descriptive copy (never a bare "Are you
+// sure?"), per §4.5. On success: announces via the aria-live region, AND
+// calls BOTH loadDrafts() (drops the now-archived draft from the active
+// list) AND loadPersonas() (pw-03's existing, UNCHANGED function -- the
+// newly-committed persona's appearance in the real list) -- never a
+// duplicated/reimplemented version of either.
+async function approveDraft(tier, scopeId, repo) {
+  const identity = `${tier} / ${scopeId}`;
+  const confirmed = window.confirm(
+    `Approve ${identity}? This writes to the real persona store and cannot be undone from here.`
+  );
+  if (!confirmed) return;
+  try {
+    const res = await fetch(personaDraftServiceUrl(tier, scopeId, "/approve", repo), { method: "POST" });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const message = (body.error && (body.error.message || body.error)) || `HTTP ${res.status}`;
+      personasLiveRegionEl.textContent = `Approve failed for ${identity}: ${message}`;
+      return;
+    }
+    personasLiveRegionEl.textContent = `Approved ${identity} — now live.`;
+    readDraftIdentities.delete(personaRowKey(tier, scopeId));
+    await Promise.all([loadDrafts(), loadPersonas()]);
+  } catch (err) {
+    personasLiveRegionEl.textContent = `Approve failed for ${identity}: ${err && err.message ? err.message : err}`;
+  }
+}
+
+// Discard -- DELETEs via pu-03's REAL DELETE /persona/draft/:tier/:scopeId
+// route (archive-by-move server-side, never a client-side simulation and
+// never a bare delete). Requires this explicit window.confirm() before
+// firing (a meaningfully consequential UI-level action, per
+// design_decisions, even though non-destructive at the storage layer). On
+// success, removes the draft from the active list immediately via
+// loadDrafts() -- loadPersonas() is deliberately NOT called here, since a
+// discard never touches the real persona store.
+async function discardDraft(tier, scopeId, repo) {
+  const identity = `${tier} / ${scopeId}`;
+  const confirmed = window.confirm(
+    "Discard this draft? It will be archived, not deleted, but removed from the review queue."
+  );
+  if (!confirmed) return;
+  try {
+    const res = await fetch(personaDraftServiceUrl(tier, scopeId, "", repo), { method: "DELETE" });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const message = (body.error && (body.error.message || body.error)) || `HTTP ${res.status}`;
+      personasLiveRegionEl.textContent = `Discard failed for ${identity}: ${message}`;
+      return;
+    }
+    personasLiveRegionEl.textContent = `Discarded ${identity} — archived.`;
+    readDraftIdentities.delete(personaRowKey(tier, scopeId));
+    await loadDrafts();
+  } catch (err) {
+    personasLiveRegionEl.textContent = `Discard failed for ${identity}: ${err && err.message ? err.message : err}`;
+  }
+}
+
+// loadDrafts() -- follows loadPersonas()'s existing conventions exactly
+// (fetch, setStatus, render): GET /persona/draft (list; {tier, scopeId}
+// pairs only -- listDraftPersonas' own contract, persona-draft-store.ts),
+// then one GET /persona/draft/:tier/:scopeId per listed entry for the full
+// record (displayName/scope/sections/sourceSummary/proposedBy/proposedAt),
+// mirroring loadPersonas()'s own "list route doesn't carry displayName, so
+// fetch each entry's own record" shape byte-for-byte. Sets loadedDrafts,
+// then calls renderPersonas() -- the SAME render function loadPersonas()
+// calls, never a second/duplicated rendering path.
+async function loadDrafts() {
+  setStatus(personasDraftsStatusEl, "loading", "loading drafts…");
+  try {
+    const origin = personaServiceOrigin();
+    const listRes = await fetch(`${origin}/persona/draft`);
+    const listBody = await listRes.json();
+    if (!listRes.ok) {
+      setStatus(personasDraftsStatusEl, "fail", `FAIL — GET /persona/draft returned ${listRes.status}`);
+      loadedDrafts = [];
+      renderPersonas();
+      return;
+    }
+    const entries = Array.isArray(listBody.drafts) ? listBody.drafts : [];
+
+    const drafts = await Promise.all(
+      entries.map(async (entry) => {
+        try {
+          const res = await fetch(
+            `${origin}/persona/draft/${encodeURIComponent(entry.tier)}/${encodeURIComponent(entry.scopeId)}`
+          );
+          const body = await res.json();
+          if (!res.ok || !body.draft) return null;
+          return body.draft;
+        } catch {
+          return null;
+        }
+      })
+    );
+
+    loadedDrafts = drafts.filter((d) => d != null);
+    renderPersonas();
+    setStatus(personasDraftsStatusEl, "pass", `${loadedDrafts.length} draft(s) pending review`);
+  } catch (err) {
+    setStatus(personasDraftsStatusEl, "fail", "FAIL — could not reach GET /persona/draft");
+  }
+}
+// ==================== end pu-12-draft-review-approve-ui ====================
+
 async function loadPersonas() {
   setStatus(personasStatusEl, "loading", "loading…");
-  personasTbodyEl.textContent = "";
+  resetPersonaView();
   try {
     const origin = personaServiceOrigin();
     const listRes = await fetch(`${origin}/persona`);
@@ -1244,7 +2003,8 @@ async function loadPersonas() {
     // carry) -- this is each persona's own content, not any parent's, so it
     // does not touch the copy-down guarantee above. CRITICAL: this never
     // loops over a persona's parentRefs to fetch THOSE -- see
-    // parentRefsText, the only thing rendered for parentRefs.
+    // parentRefsText/personaParentCell, the only things rendered for
+    // parentRefs.
     const personas = await Promise.all(
       entries.map(async (entry) => {
         try {
@@ -1262,37 +2022,45 @@ async function loadPersonas() {
       })
     );
 
-    for (const p of personas) {
-      const tr = document.createElement("tr");
-      tr.appendChild(personaCell(p.tier));
-      tr.appendChild(personaCell(p.scopeId));
-      tr.appendChild(personaCell(p.displayName == null || p.displayName === "" ? "—" : p.displayName));
-      tr.appendChild(personaCell(parentRefsText(p.parentRefs)));
-      personasTbodyEl.appendChild(tr);
-    }
+    // pu-10-personas-panel-redesign-shell: this ticket reuses GET /persona
+    // unchanged (no ?repo=, no /persona/draft) -- every row loaded here is
+    // therefore a committed, live record. pu-12 is the ticket that merges
+    // in GET /persona/draft's needs-review/needs-review-update rows
+    // alongside these (horizontal-plan.md H7 component 3).
+    loadedPersonas = personas.map((p) => ({ ...p, status: "live" }));
+    renderPersonas();
     setStatus(personasStatusEl, "pass", `${personas.length} persona(s)`);
   } catch (err) {
     setStatus(personasStatusEl, "fail", "FAIL — could not reach GET /persona");
   }
 }
 
-// --- Personas panel write form (pw-17-personas-panel-write-form): closes
-// the epic. Same "form-row divs, POST, setStatus() pass/fail, re-load on
-// success" convention addLaneForm's handler above already established --
-// see that handler for the exact shape this mirrors. POSTs to pw-15's
-// POST /persona/:tier/:scopeId route on the persona service (same
-// cross-origin personaServiceOrigin() this file's loadPersonas() above
-// already uses -- the persona service runs on a different port, 3141, than
-// this UI's own server). The request body is the bare persona candidate
-// pw-15's route expects ({tier, scopeId, displayName, scope, sections,
-// repo?}) -- never mandateSections, which the server-side
-// assertValidPersona rejects on mere presence (persona.ts). A single
-// "knows" section (heading + body) is the v1 minimum viable write path,
-// not a full multi-section editor. On success, calls loadPersonas() again
-// (pw-03's existing function) so the panel reflects the new/edited persona
-// immediately -- no second rendering path is built here.
+// --- Personas panel write form (pw-17-personas-panel-write-form), RETARGETED
+// by pu-12-draft-review-approve-ui. Same "form-row divs, POST, setStatus()
+// pass/fail, re-load on success" convention addLaneForm's handler
+// established -- see that handler for the exact shape this mirrors. POSTs
+// to pu-03's POST /persona/draft/:tier/:scopeId route (NEVER pw-15's real
+// POST /persona/:tier/:scopeId anymore -- that direct-write path is gone
+// from this handler) on the persona service (same cross-origin
+// personaServiceOrigin() this file's loadPersonas() above already uses).
+// The request body is the same bare candidate shape as before
+// ({tier, scopeId, displayName, scope, sections, repo?}) -- never
+// mandateSections, which the server-side assertValidPersona would reject on
+// mere presence (persona.ts) once this candidate is later approved. A
+// single "knows" section (heading + body) remains the v1 minimum viable
+// write path, not a full multi-section editor. On success, calls
+// loadDrafts() (pu-12's new function, NOT loadPersonas() -- proposing or
+// editing a draft never touches the real persona store; only an explicit
+// Approve, wired below, does that).
 const personaForm = document.getElementById("persona-form");
 const personaFormStatusEl = document.getElementById("persona-form-status");
+const personaTierFieldEl = document.getElementById("persona-tier");
+const personaScopeIdFieldEl = document.getElementById("persona-scope-id");
+const personaDisplayNameFieldEl = document.getElementById("persona-display-name");
+const personaScopeFieldEl = document.getElementById("persona-scope");
+const personaSectionHeadingFieldEl = document.getElementById("persona-section-heading");
+const personaSectionBodyFieldEl = document.getElementById("persona-section-body");
+const personaRepoFieldEl = document.getElementById("persona-repo");
 
 personaForm.addEventListener("submit", async (evt) => {
   evt.preventDefault();
@@ -1315,12 +2083,12 @@ personaForm.addEventListener("submit", async (evt) => {
   };
   if (repo) candidate.repo = repo;
 
-  setStatus(personaFormStatusEl, "loading", "saving…");
+  setStatus(personaFormStatusEl, "loading", "saving draft…");
   submitBtn.disabled = true;
   try {
     const origin = personaServiceOrigin();
     const res = await fetch(
-      `${origin}/persona/${encodeURIComponent(tier)}/${encodeURIComponent(scopeId)}`,
+      `${origin}/persona/draft/${encodeURIComponent(tier)}/${encodeURIComponent(scopeId)}`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1333,9 +2101,9 @@ personaForm.addEventListener("submit", async (evt) => {
       setStatus(personaFormStatusEl, "fail", `FAIL — ${message}`);
       return;
     }
-    setStatus(personaFormStatusEl, "pass", `saved persona '${body.scopeId}' (${body.tier})`);
+    setStatus(personaFormStatusEl, "pass", `saved draft '${body.scopeId}' (${body.tier}) — pending review`);
     personaForm.reset();
-    await loadPersonas();
+    await loadDrafts();
   } catch (err) {
     setStatus(personaFormStatusEl, "fail", `FAIL — ${err && err.message ? err.message : err}`);
   } finally {
@@ -1386,6 +2154,59 @@ async function loadPersonaLayerStack() {
 }
 // ==================== end pw-04-layer-stack-visibility ====================
 
+// ==================== ml-05-memory-levels-ui (epic mnemosyne-memory-levels) ====================
+// Loads the 5 canonical memory-STORE-TYPE levels (ml-01's static taxonomy)
+// via ml-04's NEW GET /memory-levels route -- a structurally separate
+// question from loadPersonaLayerStack()'s "what's in the current recall()
+// cascade" above, so this is its own function against its own section's
+// elements, following the exact same setStatus()/hidden-table-toggling/
+// error-handling conventions as loadPersonaLayerStack() above.
+async function loadMemoryLevels() {
+  // Guards against running against an older served index.html that predates
+  // this section (e.g. a stale cached page) -- never throws either way.
+  if (!memoryLevelsStatusEl || !memoryLevelsTableEl || !memoryLevelsTbodyEl) return;
+
+  setStatus(memoryLevelsStatusEl, "loading", "loading…");
+  memoryLevelsTbodyEl.textContent = "";
+  memoryLevelsTableEl.hidden = true;
+  if (memoryLevelsEmptyEl) memoryLevelsEmptyEl.hidden = true;
+
+  try {
+    const res = await fetch(mnemosyneClientApiBase() + "/memory-levels");
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      setStatus(
+        memoryLevelsStatusEl,
+        "fail",
+        `FAIL — GET /memory-levels returned ${res.status}${body.error ? `: ${body.error.message || body.error}` : ""}`,
+      );
+      return;
+    }
+    const body = await res.json();
+    const levels = Array.isArray(body.levels) ? body.levels : [];
+    if (!levels.length) {
+      setStatus(memoryLevelsStatusEl, "pass", "no memory levels reported");
+      if (memoryLevelsEmptyEl) memoryLevelsEmptyEl.hidden = false;
+      return;
+    }
+    levels.forEach((l) => {
+      const tr = document.createElement("tr");
+      tr.appendChild(memoryLevelsCell(l && l.id != null ? String(l.id) : "?"));
+      tr.appendChild(memoryLevelsCell(l && l.label ? String(l.label) : "?"));
+      tr.appendChild(memoryLevelsCell(l && l.storeType ? String(l.storeType) : "?"));
+      const configured = l && l.configured ? "configured" : "not configured";
+      const active = l && typeof l.activeInCascade === "boolean" ? (l.activeInCascade ? ", active" : ", inactive") : "";
+      tr.appendChild(memoryLevelsCell(`${configured}${active}`));
+      memoryLevelsTbodyEl.appendChild(tr);
+    });
+    memoryLevelsTableEl.hidden = false;
+    setStatus(memoryLevelsStatusEl, "pass", `${levels.length} level(s), 0-4`);
+  } catch (err) {
+    setStatus(memoryLevelsStatusEl, "fail", "FAIL — could not reach GET /memory-levels");
+  }
+}
+// ==================== end ml-05-memory-levels-ui ====================
+
 async function refreshAll() {
   refreshBtn.disabled = true;
   try {
@@ -1397,7 +2218,9 @@ async function refreshAll() {
       loadGraph(),
       loadReindexLanes(),
       loadPersonas(),
+      loadDrafts(),
       loadPersonaLayerStack(),
+      loadMemoryLevels(),
     ]);
     lastRefreshedEl.textContent = `last refreshed ${new Date().toLocaleTimeString()}`;
   } finally {

@@ -1,0 +1,97 @@
+id: ml-09-doc-reconciliation
+epic: mnemosyne-memory-levels
+title: "Doc reconciliation -- correct docs/layer-architecture-v2-plan.md's conflated Layer 1/2/3 table"
+status: complete
+complexity: low
+methodology: tdd
+depends_on: [ml-03-sync-three-source-composition, ml-05-memory-levels-ui, ml-08-file-store-index-rebuild]
+
+note_on_completion: >
+  Merged 2026-08-16 (commit d34ad32, pushed directly to
+  feat/mnemosyne-memory-levels as a docs-only, low-risk change).
+  Independently verified: confirmed the diff is purely additive (32
+  insertions, 0 deletions -- the old table is byte-for-byte preserved).
+  Read the new note in place -- confirmed it accurately describes the
+  conflation (harness-sync module mislabeled Layer 1, hive-memory/KG+vector
+  merged into Layer 2, Graphify doc-index+code-graph merged into Layer 3),
+  correctly disambiguates all three pre-existing "layer" vocabularies, and
+  both new cross-links (lib/mnemosyne/memory-levels/levels.ts,
+  .pHive/epics/mnemosyne-memory-levels/) resolve to real files/dirs on disk
+  -- confirmed directly, not assumed. Grep sweep results (docs/ tree +
+  README.md) reported in the commit message match what I'd expect from this
+  repo's known layer-vocabulary usage. All acceptance criteria met.
+
+description: |
+  Closes the loop on the exact miscommunication this epic exists to correct
+  (research-brief.md §0, design-discussion.md §0). Without this story, the
+  new, correct 5-level model (ml-01's taxonomy, ml-04/05's UI/route) and
+  docs/layer-architecture-v2-plan.md §1's OLD, conflated "reconciled
+  architecture" table (which calls the harness-sync mechanism "Layer 1,"
+  merges hive-memory+vector into one "Layer 2" row, and merges Graphify's
+  doc-index+code-graph into one "Layer 3" row) would coexist indefinitely —
+  reintroducing the same confusion for the next reader who finds that doc
+  first.
+
+  This is a correction WITH a preserved historical record, not a silent
+  rewrite — matching this repo's own established pattern for documenting
+  "what we used to think and why we changed it" (e.g. cr-01-graphify-default-layer's
+  own doc comment in config.ts, which explains and preserves the OLD default
+  reasoning even while changing it). §1's table gets an explicit
+  superseded/corrected note pointing at ml-01's taxonomy module and this
+  epic's docs — the old table stays legible as historical record, with a
+  clear pointer to the corrected model.
+
+acceptance_criteria:
+  - "Given docs/layer-architecture-v2-plan.md §1's existing table, when this story's changes are applied, then the table itself is NOT deleted or silently rewritten — an explicit, dated note is added directly above or below it stating it conflated memory-store types with the harness-sync/tier mechanism, and pointing at lib/mnemosyne/memory-levels/levels.ts + .pHive/epics/mnemosyne-memory-levels/ as the corrected model"
+  - "Given a grep across README.md and any other top-level doc for the old 'Layer 1/2/3' vocabulary used to describe memory-store types (not the harness-sync module name or the orchestration tiers, both of which are legitimate, unchanged uses of similar words), when found, then each gets a cross-link to the new taxonomy — a real grep check performed and its results reported in this story's completion note, not assumed clean"
+  - "Given the corrected doc note, when read by someone unfamiliar with this epic, then it clearly states which of the three pre-existing 'layer' vocabularies (research-brief.md §0) means what, and where the definitive, current model now lives"
+
+steps:
+  - id: research
+    description: Grep the full docs/ tree and README.md for "Layer 1"/"Layer 2"/"Layer 3" and bare "layer N" usages describing memory-store types (as opposed to the harness-sync module or the retrieval-cascade adapters, both legitimate unchanged uses) to build a complete, real list of what needs a cross-link — not assumed from memory.
+    agent: researcher
+  - id: implement
+    description: Add the superseded/corrected note to docs/layer-architecture-v2-plan.md §1; add cross-links wherever the research step found a stale reference.
+    agent: developer
+    depends_on: [research]
+  - id: review
+    description: Confirm the old table is preserved (not deleted), confirm the new note accurately describes the correction, confirm every cross-link resolves to a real, current file.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-memory-levels.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: docs/layer-architecture-v2-plan.md
+      purpose: "§1's 'reconciled architecture' table (lines ~21-29) is the exact conflation this story corrects — read in full before writing the correction note, to describe accurately what was wrong, not a vague gesture at it."
+    - path: docs/cba-memory-layers.md
+      purpose: "The CBA doc's own 1-5 numbering (research-brief.md §0) is a THIRD prior scheme worth a brief cross-reference in the correction note, for completeness."
+
+files_to_modify:
+  - file: docs/layer-architecture-v2-plan.md
+    change: "Add a superseded/corrected note to §1's table, pointing at the new canonical taxonomy. Table itself preserved as historical record."
+  - file: README.md
+    change: "Cross-link to the new taxonomy, if the research step's grep finds a stale reference here."
+
+design_decisions:
+  - decision: "Correct with a preserved historical record, not a silent rewrite"
+    rationale: "Matches this repo's own established documentation convention (e.g. config.ts's cr-01 doc comment) of explaining and preserving prior reasoning even while superseding it — a silent rewrite would erase the useful record of why the model changed."
+
+risks:
+  - severity: low
+    description: "A grep-based sweep for stale references could miss a doc this story's author doesn't think to check."
+    mitigation: "The research step's grep is performed against the full docs/ tree and README.md, not a hand-picked subset, and its actual results (not just 'looked fine') are recorded in this story's completion note."
+
+references:
+  - path: .pHive/epics/mnemosyne-memory-levels/docs/research-brief.md
+    relevant_excerpt: |
+      §0: three different numbering schemes already exist in this
+      codebase's docs/code, none of which is the operator's actual 5-level
+      memory-store-type model — this story is where that finding gets
+      closed out in the docs themselves.
+
+cross_cutting: []

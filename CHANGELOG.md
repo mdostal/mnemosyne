@@ -2,6 +2,172 @@
 
 All notable changes to Mnemosyne are documented here.
 
+## [0.9.0] — 2026-08-16
+
+Full `mnemosyne-memory-levels` epic (`ml-01`..`ml-10`) — corrects the
+operator-facing memory-STORE-TYPE model from a stale, conflated 3-tier
+picture to the real 5-level taxonomy (0-4), and builds the three concrete
+gaps that taxonomy exposed: the missing `mnemosyne.md` canonical Level 1
+source, a `GET /memory-levels` route + UI section giving the taxonomy a
+real surface, and a persisted Level 4 file-store sub-index with
+area-scoped query-time narrowing. Every story independently verified
+against real fixtures (real on-disk manifests, real HTTP round-trips, real
+adversarial staleness/false-negative probes) before merging — zero
+regressions found across the epic; the only failures on either side of the
+`git diff` are pre-existing and unrelated (see Verification below).
+
+### Added
+
+- **Canonical memory-level taxonomy module** (`lib/mnemosyne/memory-levels/levels.ts`,
+  ml-01) — the single source of truth for the 5 real memory-STORE-TYPE
+  levels (0: operator-global rules, 1: role-scoped meta file, 2: enterprise/
+  KG+vector, 3: project graph/doc-index, 4: file-store sub-index), each
+  disambiguated in its own doc comments against the two other, unrelated
+  "layer"/"tier" vocabularies already in this codebase (the retrieval-cascade
+  layer stack in `lib/mnemosyne/layers/`, and the orchestration-tier
+  hierarchy in `layer1/tiers.ts`) so the three never get conflated again.
+- **`mnemosyne.md` canonical Level 1 source + `level1Source.ts` reader**
+  (ml-02) — `mnemosyne.md` is now the single authored source for Level 1's
+  mandate content; `MANDATE_SECTIONS` is generated from it at module load
+  (anchored to the module's own file location, never `process.cwd()`
+  dependent), replacing what had been implicit/undocumented sourcing.
+- **`sync.ts` 3-part composition** (ml-03) — the existing harness-sync
+  pipeline (`block.ts`/`lock.ts`/`harness.ts`, all unchanged) now composes
+  Level 0 → Level 1 (`mnemosyne.md`) → tier content when Level 1 content is
+  present, and falls back to the original 2-part (Level 0 → tier) output,
+  byte-identical to the pre-epic behavior, when it is absent.
+- **`GET /memory-levels` route** (`lib/mnemosyne/server.ts`, ml-04) — a new,
+  parallel route (never a repurposing of the existing `GET /layers`) that
+  surfaces all 5 levels with their live configured/available status: levels
+  0/1 via a direct file-existence check, levels 2-4 via the already-resolved
+  layer-stack output (no second resolution). `GET /layers`'s own response
+  shape is unchanged (purely additive diff, byte-for-byte regression-proofed
+  against a pre-capture baseline).
+- **"Memory Levels (0-4)" UI section** (`ui/index.html`, `ui/app.js`, ml-05)
+  — the standalone UI's former "Memory Layer Stack" panel is renamed
+  "Retrieval Layer Stack" (to stop implying it's the whole taxonomy), and a
+  new, separate "Memory Levels (0-4)" section renders `GET /memory-levels`'s
+  output. Both panels carry explicit disambiguation text; `ui/app.js`'s diff
+  is purely additive.
+- **Level 4 file-store sub-index build** (`lib/mnemosyne/layers/FileStoreIndex.ts`,
+  a shared `fileWalk.ts` extracted from `FileLayerAdapter.ts`, ml-06) — a
+  persisted, directory+markdown-heading-granularity manifest of the file
+  store, with graceful empty-manifest degradation when the target directory
+  is missing or empty.
+- **Query-time area-scoped narrowing** (`FileLayerAdapter.ts`, ml-07) — file
+  recall can now narrow a query to a specific indexed area (falling back to
+  a full walk when no area applies), always reading live content rather
+  than the persisted manifest's text — proven via two independent
+  adversarial checks (a file added to an area after indexing is still
+  found; a file's content modified after indexing is never served stale).
+- **`mnemosyne-file-index` CLI verb** (`bin/mnemosyne-file-index.mjs`, ml-08)
+  — an operator-triggered rebuild of the Level 4 sub-index, calling ml-06's
+  `writeFileStoreIndex` directly (always a full from-scratch walk +
+  overwrite, no merge path). Fixed a real bug found during this story: the
+  index's own `.mnemosyne` manifest directory was missing from
+  `DEFAULT_IGNORED_DIRECTORIES`, which caused a second build to self-index
+  its own prior manifest.
+
+### Fixed
+
+- **`docs/layer-architecture-v2-plan.md`'s conflated Layer 1/2/3 table**
+  (ml-09) — added a note correcting the document's old table, which had
+  mislabeled the harness-sync module as "Layer 1", merged hive-memory's
+  KG+vector retrieval into "Layer 2", and merged Graphify's doc-index and
+  code-graph into "Layer 3" — none of which match this epic's real 5-level
+  taxonomy. The old table is preserved byte-for-byte (purely additive diff);
+  the new note disambiguates all three "layer" vocabularies in one place and
+  cross-links to `lib/mnemosyne/memory-levels/levels.ts` and this epic's own
+  `.pHive/epics/mnemosyne-memory-levels/` ticket set.
+
+### Verification
+
+- Full suite (`npm test`'s vitest + `.mjs` subprocess composition) and
+  `npx tsc --noEmit` run clean on this epic's final state, with the sole
+  exception of 3 pre-existing, already-independently-documented-as-unrelated
+  `test/http-api.mjs` assertion failures on `POST /remember`'s default-layer
+  behavior (`ok:true` / `layer:file (default)` / `has provenance` — the
+  route's real default is `'vector'`, a `pluggable-layers-implementation`
+  epic decision that predates `mnemosyne-memory-levels` entirely; first
+  flagged in ml-04's own completion note). Confirmed via a real
+  stash-and-reproduce proof: checked out this branch's merge-base with
+  `main` (commit `e079b17`, pre-epic), reran the identical full suite +
+  `tsc --noEmit` there, and got the exact same 3 failures — nothing else —
+  proving they predate this epic and are not caused by it.
+
+## [0.10.0] — 2026-08-16
+
+Full `mnemosyne-persona-ux` epic (`pu-01`..`pu-15`) — a heavy UI/UX
+redesign of the Personas panel plus a real agent-assisted "crawl, propose,
+human-approve" authoring flow, both driven by a genuine multi-swarm design
+pass (3 options → 7 named-lens review → 3 synthesized options → a
+cross-checked selection). Every ticket independently verified with real
+tests (real subprocesses, real HTTP calls, real disk read-backs, a real
+end-to-end loop from a live CLI interview through UI-simulated review to a
+committed persona) before merging; a closing design-fidelity review found
+4 real, honestly-logged deviations from the chosen design (tracked as a
+follow-up, not silently absorbed — see below).
+
+### Added
+
+- **Draft-persona staging/approval infrastructure** — a structurally
+  separate, home-rooted draft store (`~/.mnemosyne/persona-drafts`, never
+  inside a consuming repo's git tree), addressed by the same `{tier,
+  scopeId}` identity as the real persona store, disposed by archive-by-move
+  (never a hard delete). New `/persona/draft/*` HTTP routes
+  (list/read/propose/approve/discard), a `mnemosyne persona draft
+  propose|show|approve|discard` CLI, and matching skill-harness/MCP tool
+  wraps — verified leak-proof and consistent across all 4 transports
+  (CLI/skill-harness/MCP/HTTP): a discarded draft is unreachable through
+  every real-store read path, an approved one becomes visible through all
+  of them, and concurrent proposals against the same identity never
+  corrupt state.
+- **`remember()` fires only on draft approval, never on draft creation** —
+  verified end-to-end: a `recall()` query during the pending-review window
+  returns nothing; after approval, the same query finds the real, indexed
+  content.
+- **Bounded crawl-context tool for agent-assisted persona authoring**
+  (`crawl-context.mjs`) — an agent proposing a persona now crawls a small,
+  capped set of real project signals (never an unbounded drill-down) to
+  produce a `sourceSummary` a human reviewer can see and judge before
+  approving.
+- **Interview skill now defaults to proposing a draft**, not committing
+  directly — `skills/mnemosyne-persona-interview` writes via `persona
+  draft propose` by default; a `--commit-directly` flag reproduces the old
+  (pre-epic) immediate-commit behavior exactly, byte-for-byte, for
+  backward compatibility.
+- **Personas panel rebuilt** against a genuine multi-swarm design pass's
+  chosen option ("Trust-Gated Unified Queue"): a single grouped/filterable
+  list (group by Tier/Repo/Status, a status filter, sticky group headers),
+  a jargon glossary, status always rendered as real text (never a glyph),
+  and `parentRefs` upgraded from inert pointer-only text into an
+  interactive-but-still-pointer-only in-page focus jump — never fetching a
+  parent's actual content.
+- **Draft review/approve UI** — the old single free-text create/edit form
+  is retargeted to propose a draft instead of writing directly; a unified
+  list shows both agent-proposed drafts (with their `sourceSummary`,
+  visibly labeled) and human-typed drafts (without one, never a fabricated
+  label); a read-before-edit trust gate (never a `disabled` attribute —
+  gating is structural, controls simply don't exist in the DOM until the
+  raw proposal has been read) precedes Approve/Discard, each requiring
+  explicit confirmation.
+
+### Known gaps (found by this epic's own closing design-fidelity review,
+### tracked as follow-up work, not fixed here)
+
+- The status filter defaults to "All" instead of the design's specified
+  "Needs review".
+- The design's own "central bet" batch-approve mechanism (review N drafts,
+  one reload) was never built — each approve/discard today triggers its
+  own full reload.
+- No persistent post-approval provenance note survives approval, and the
+  `Persona` data model has no field to hold one — once approved, an
+  agent-proposed persona is indistinguishable from a hand-typed one.
+- The repo-hierarchy fix that was the literal deciding factor for choosing
+  this design over its alternative is correctly coded but structurally
+  unreachable today — no code path in the shipped panel ever fetches
+  repo-scoped (`code-architect`) personas or drafts.
+
 ## [0.8.0] — 2026-08-16
 
 Full `mnemosyne-persona-wizard` epic (`pw-01`..`pw-17`) — Epic 2 of 2 in the

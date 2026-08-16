@@ -1,0 +1,49 @@
+id: puf-03-post-approval-provenance-note
+epic: mnemosyne-persona-panel-fidelity-followups
+title: Persist a post-approval provenance note (Persona schema + render)
+status: planned
+complexity: medium
+methodology: tdd
+depends_on: []
+
+description: |
+  Closes pu-14's FLAGGED finding D3 (fidelity-review.md): pu-01's chosen
+  synthesized option calls for a persistent, one-line note on a now-live
+  persona that originated from an agent proposal ("Originally proposed by
+  agent, approved <date>."). This does not exist, and the `Persona`
+  interface (lib/mnemosyne/layer1/persona.ts) has no field to hold one --
+  once approved, an agent-proposed persona is indistinguishable from a
+  hand-typed one. agent-provenance-trust.md named this "a distinctive,
+  concrete strength" of the design lineage this option builds on, and
+  selection.md itself credits it as one of the two things that made this
+  lens's pick defensible -- this is a real, verified regression on the
+  exact lens this epic was commissioned to get right.
+
+  Requires a real schema addition (an optional origin field on Persona,
+  populated at approve time from the draft's proposedBy/proposedAt), not
+  just a UI-layer tweak -- the write path (writeGlobalPersona/
+  writeRepoLocalPersona, called from pu-03's approve route) must actually
+  persist it.
+
+acceptance_criteria:
+  - "Given the Persona interface (persona.ts), when this ticket ships, then it carries an optional origin field (e.g. {proposedBy, proposedAt} or equivalent) alongside the existing fields -- schema-validated, not an untyped bag"
+  - "Given a draft with proposedBy/proposedAt set (agent-proposed), when it is approved via pu-03's real approve route, then the committed persona file on disk carries that origin data -- verified via a direct filesystem read, not just the HTTP response"
+  - "Given a human-typed draft with no proposedBy/proposedAt, when it is approved, then the committed persona has no origin field at all -- never a fabricated one"
+  - "Given a live persona row in the Personas panel that carries origin data, when rendered, then a persistent one-line note (e.g. \"Originally proposed by agent, approved <date>\") is visible -- not just present in the underlying data"
+  - "Given the SAME persona is later edited directly (not through a draft), when re-saved, then the existing origin note's fate (kept vs. cleared) is an explicit, documented decision in this ticket, not an accidental side effect"
+
+files_to_modify:
+  - file: lib/mnemosyne/layer1/persona.ts
+    change: "Add an optional origin field to the Persona interface."
+  - file: lib/mnemosyne/server.ts
+    change: "Approve route populates origin from the draft's proposedBy/proposedAt when writing the real persona."
+  - file: ui/app.js
+    change: "Render the persistent provenance note for a live persona that carries origin data."
+
+references:
+  - path: .pHive/design/mnemosyne-persona-ux/fidelity-review.md
+    relevant_excerpt: |
+      D3 | ... FLAGGED ... a real, verified regression on the exact lens
+      (agent-provenance-trust) this epic was explicitly commissioned to get
+      right. Needs a schema addition ... plus a render, not just a UI
+      tweak.

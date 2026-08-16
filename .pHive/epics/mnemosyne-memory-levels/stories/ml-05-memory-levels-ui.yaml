@@ -1,0 +1,112 @@
+id: ml-05-memory-levels-ui
+epic: mnemosyne-memory-levels
+title: "UI: rename Memory Layer Stack -> Retrieval Layer Stack + new Memory Levels (0-4) section"
+status: complete
+complexity: medium
+methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 9974331). Independently verified: read
+  ui/index.html's diff in full -- confirmed both sections carry the exact
+  required disambiguation sentences (neither is the retrieval cascade vs.
+  taxonomy, neither is the orchestration tier hierarchy). Confirmed via
+  git diff -U0 that ui/app.js's diff is purely additive (zero deletions).
+  Killed a stale, hours-old leftover src/server.mjs process squatting on
+  port 8477 (unrelated to this story, left over from earlier session
+  activity) and started a fresh server from this worktree's actual code to
+  verify for real. Reran tsc --noEmit (clean), test/ui-shell.mjs (all
+  pass), and test/persona-layer-stack.mjs (all pass, including the
+  explicit byte-for-byte pin proving loadPersonaLayerStack() is genuinely
+  unchanged) myself against the real served UI. All acceptance criteria
+  met.
+depends_on: [ml-04-memory-levels-route]
+
+description: |
+  Completes the UI half of this epic's core architectural decision
+  (design-discussion.md §5): the existing "Memory Layer Stack" panel
+  (ui/index.html:276-294, ui/app.js's loadPersonaLayerStack()) is renamed
+  "Retrieval Layer Stack" with revised hint copy making explicit it is the
+  runtime recall()/remember() cascade order, not the canonical memory-level
+  taxonomy — its data source (GET /layers) and fetch logic
+  (loadPersonaLayerStack()) are otherwise UNCHANGED. A new, structurally and
+  visually distinct section, "Memory Levels (0-4)," is added alongside it,
+  fetching ml-04's new GET /memory-levels route via a new
+  loadMemoryLevels() function, wired into refreshAll().
+
+  Per the operator's own emphatic distinction ("the levels are not the
+  orchestration or personal LEVEL -- coder isn't level 6 ... that is not
+  MEMORY LAYERS but team/orchestration layers"), BOTH sections must carry
+  explicit copy stating neither is the team/orchestration tier hierarchy —
+  a literal sentence in each section's hint text, not left implicit.
+
+  Carries forward, unmodified, two standing conventions from prior epics
+  touching this exact UI area: GET /layers stays reused exactly as pw-04
+  shipped it (never a second implementation), and Level 0 stays
+  view-only-with-a-pointer everywhere this story's UI work touches it (no
+  edit affordance introduced anywhere, in either section).
+
+acceptance_criteria:
+  - "Given the UI is opened, when the (renamed) Retrieval Layer Stack section loads, then it fetches GET /layers exactly as pw-04 shipped it — no new route, no change to loadPersonaLayerStack()'s fetch call"
+  - "Given the renamed section's heading and hint text, when read, then the heading is 'Retrieval Layer Stack' (not 'Memory Layer Stack') and the hint text explicitly states this is the runtime recall()/remember() cascade order, not the canonical 5-level memory-store-type model"
+  - "Given the UI is opened, when the new Memory Levels section loads, then it fetches GET /memory-levels (ml-04) and renders all 5 levels (0-4) in order, each showing level id, label, store type, and configured/active status"
+  - "Given both sections, when visually/structurally compared, then they are two clearly separate <section> elements (own heading, own status element, own table) — never merged into one list or one table"
+  - "Given either section's hint text, when read, then each contains an explicit sentence stating it is NOT the team/orchestration tier hierarchy (top-orchestrator/company-director/project-orchestrator/code-architect)"
+  - "Given Level 0's display within the new Memory Levels section, when inspected, then it shows configured/pointer status only — no edit form, no edit affordance anywhere, carrying forward pw-04's already-shipped Level-0-view-only convention"
+  - "Given refreshAll(), when it runs, then it includes loadMemoryLevels() alongside the existing loadPersonaLayerStack() call — both load on page open/refresh, no auto-polling (matching this file's existing 'no auto-polling in v1' convention)"
+
+steps:
+  - id: research
+    description: Re-read ui/index.html's existing persona-layer-stack section (lines 268-299) and ui/app.js's loadPersonaLayerStack()/refreshAll() (lines 1346-1400) in full, plus ml-04's GET /memory-levels response shape, immediately before writing the new markup/JS.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests (extending test/ui-shell.mjs or an equivalent DOM/fetch-mock convention already used in this repo) asserting the renamed heading/copy, the new section's presence and correct rendering of 5 levels, the explicit disambiguation copy in both sections, and zero edit affordance near Level 0.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Rename the existing section's heading/hint text (no other change to it); add the new Memory Levels section markup + loadMemoryLevels() function; wire into refreshAll().
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm GET /layers's existing fetch call is genuinely unmodified (diff loadPersonaLayerStack() before/after), confirm both sections carry the required disambiguation copy, confirm no edit affordance was introduced anywhere near Level 0.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-memory-levels.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: ui/index.html
+      purpose: "Lines 268-299: the existing persona-layer-stack section this story renames, and the exact structural pattern (panel/table/status-element convention) the new Memory Levels section must match."
+    - path: ui/app.js
+      purpose: "loadPersonaLayerStack() (lines 1346-1387) and refreshAll() (lines 1389+) — the exact conventions the new loadMemoryLevels() function must follow (setStatus() usage, hidden/shown table toggling, error handling)."
+    - path: .pHive/epics/mnemosyne-memory-levels/stories/ml-04-memory-levels-route.yaml
+      purpose: "The GET /memory-levels response shape this story's UI code consumes."
+
+files_to_modify:
+  - file: ui/index.html
+    change: "Rename existing persona-layer-stack section's heading/hint copy; add new memory-levels section markup."
+  - file: ui/app.js
+    change: "Add loadMemoryLevels() function; wire into refreshAll(). loadPersonaLayerStack() itself unmodified except (if needed) internal element-id references for the renamed section."
+
+design_decisions:
+  - decision: "Rename copy only, zero change to the existing section's data source or fetch logic"
+    rationale: "design-discussion.md §5: GET /layers and pw-04's shipped, tested behavior must not regress — this story's job is disambiguating labeling, not re-architecting an already-working feature."
+  - decision: "Explicit, literal disambiguation sentences in both sections' hint text"
+    rationale: "design-discussion.md §5's stated requirement, directly responding to the operator's own emphatic distinction between memory levels and the orchestration hierarchy — left implicit, this is exactly the kind of ambiguity that caused the miscommunication this epic corrects."
+
+risks:
+  - severity: medium
+    description: "A UI rework touching the same section pw-04 shipped could accidentally regress pw-04's own acceptance criteria (GET /layers reused as-is, Level 0 view-only) if not reviewed carefully against that story's exact criteria."
+    mitigation: "Review step explicitly re-checks pw-04's acceptance criteria against this story's changes, not just this story's own new criteria."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-wizard/stories/pw-04-layer-stack-visibility.yaml
+    relevant_excerpt: |
+      A Level 0 pointer (path to ~/.mnemosyne/level0-rules.md) is shown,
+      with NO edit form or edit affordance anywhere. Carried forward,
+      unmodified, by this story.
+
+cross_cutting: []

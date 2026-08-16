@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { syncAllHarnesses, syncHarnessFile } from '../sync.js';
+import { buildManagedBody, syncAllHarnesses, syncHarnessFile } from '../sync.js';
 import { HARNESS_TARGETS } from '../harness.js';
 import { BLOCK_END, BLOCK_START } from '../block.js';
 import { writeRepoLocalPersona } from '../persona-store-repo-local.js';
@@ -26,6 +26,13 @@ async function makeLevel0(root: string, content: string): Promise<string> {
   const level0Path = path.join(root, 'level0-rules.md');
   await writeFile(level0Path, content, 'utf8');
   return level0Path;
+}
+
+/** Writes a `mnemosyne.md` (Level 1) file at repo root -- ml-03's own fixture helper. */
+async function makeMnemosyneMd(repoRoot: string, content: string): Promise<string> {
+  const mnemosyneMdPath = path.join(repoRoot, 'mnemosyne.md');
+  await writeFile(mnemosyneMdPath, content, 'utf8');
+  return mnemosyneMdPath;
 }
 
 describe('syncHarnessFile', () => {
@@ -258,5 +265,118 @@ describe('sync.ts persona-aware content resolution (pf-02)', () => {
 
     expect(written).toContain('Project Orchestrator');
     expect(written).not.toContain('Should Not Appear');
+  });
+});
+
+describe('ml-03: 3-part/2-part composition (Level 0 + Level 1 (mnemosyne.md) + tier)', () => {
+  it('2-part fallback: buildManagedBody output is byte-identical to the pre-epic Level0+tier join when mnemosyne.md is absent', async () => {
+    const root = await makeTempRoot();
+    const repoRoot = path.join(root, 'repo-no-mnemosyne-md');
+    await (await import('node:fs/promises')).mkdir(repoRoot, { recursive: true });
+    expect(existsSync(path.join(repoRoot, 'mnemosyne.md'))).toBe(false);
+
+    const level0Content = '# Level 0\n\nPull first. Never commit to main.\n';
+    const body = buildManagedBody('code-architect', SCOPE_ID, repoRoot, level0Content);
+
+    // Exactly the pre-epic 2-part join: Level 0, blank, '---', blank, tier markdown.
+    expect(body.startsWith(level0Content.trim())).toBe(true);
+    expect(body).not.toContain('mnemosyne.md');
+    // Exactly ONE '---' divider -- a 3rd part would add a second one.
+    expect(body.split('\n---\n')).toHaveLength(2);
+  });
+
+  it('given mnemosyne.md is present, when syncHarnessFile runs, then the managed block contains Level 0 first, Level 1 second, tier third, in that exact order', async () => {
+    const root = await makeTempRoot();
+    const repoRoot = path.join(root, 'repo-with-mnemosyne-md');
+    await (await import('node:fs/promises')).mkdir(repoRoot, { recursive: true });
+    const level0Path = await makeLevel0(root, 'LEVEL0_MARKER — pull first, never commit to main.');
+    await makeMnemosyneMd(repoRoot, '# Repo memory notes\n\nLEVEL1_MARKER — this repo uses trunk-based dev.\n');
+
+    const targetPath = path.join(repoRoot, 'CLAUDE.md');
+    syncHarnessFile(targetPath, 'project-orchestrator', 'claude-code', SCOPE_ID, { level0Path });
+    const written = await readFile(targetPath, 'utf8');
+
+    const level0Idx = written.indexOf('LEVEL0_MARKER');
+    const level1Idx = written.indexOf('LEVEL1_MARKER');
+    const tierHeadingIdx = written.indexOf('Project Orchestrator');
+
+    expect(level0Idx).toBeGreaterThan(-1);
+    expect(level1Idx).toBeGreaterThan(-1);
+    expect(tierHeadingIdx).toBeGreaterThan(-1);
+    expect(level0Idx).toBeLessThan(level1Idx);
+    expect(level1Idx).toBeLessThan(tierHeadingIdx);
+
+    // Level 1 content is verbatim.
+    expect(written).toContain('this repo uses trunk-based dev.');
+
+    // Exactly 2 '---' dividers separate the 3 parts (Level0|Level1, Level1|tier) -- never a 4th part.
+    const bodyOnly = written.slice(written.indexOf(BLOCK_START), written.indexOf(BLOCK_END));
+    expect((bodyOnly.match(/^---$/gm) ?? []).length).toBe(2);
+  });
+
+  it('first-time adoption: sync run with mnemosyne.md absent produces the 2-part block; adding mnemosyne.md and re-running (same sync verb) grows it to 3-part with no manual re-trigger step', async () => {
+    const root = await makeTempRoot();
+    const repoRoot = path.join(root, 'repo-first-time-adoption');
+    await (await import('node:fs/promises')).mkdir(repoRoot, { recursive: true });
+    const level0Path = await makeLevel0(root, 'Shared level 0 rule.');
+    const targetPath = path.join(repoRoot, 'CLAUDE.md');
+
+    // First sync: no mnemosyne.md yet -- 2-part composition.
+    syncHarnessFile(targetPath, 'code-architect', 'claude-code', SCOPE_ID, { level0Path });
+    const beforeAdoption = await readFile(targetPath, 'utf8');
+    expect(beforeAdoption).not.toContain('mnemosyne.md');
+    expect(beforeAdoption).not.toContain('ADOPTED_LEVEL1_MARKER');
+
+    // Repo adopts Level 1 by adding the file.
+    await makeMnemosyneMd(repoRoot, 'ADOPTED_LEVEL1_MARKER — newly adopted repo memory notes.\n');
+
+    // Re-run the SAME existing sync verb -- no new CLI flag, no new function.
+    syncHarnessFile(targetPath, 'code-architect', 'claude-code', SCOPE_ID, { level0Path });
+    const afterAdoption = await readFile(targetPath, 'utf8');
+
+    expect(afterAdoption).toContain('ADOPTED_LEVEL1_MARKER');
+    // Still exactly one managed block -- no duplication from the composition change.
+    expect(afterAdoption.split(BLOCK_START)).toHaveLength(2);
+    expect(afterAdoption.split(BLOCK_END)).toHaveLength(2);
+  });
+
+  it('idempotency: two successive syncs with mnemosyne.md present both times produce byte-identical output, no duplication of any of the 3 parts', async () => {
+    const root = await makeTempRoot();
+    const repoRoot = path.join(root, 'repo-idempotent-3-part');
+    await (await import('node:fs/promises')).mkdir(repoRoot, { recursive: true });
+    const level0Path = await makeLevel0(root, 'Shared level 0 rule.');
+    await makeMnemosyneMd(repoRoot, 'IDEMPOTENT_LEVEL1_MARKER — stable repo memory notes.\n');
+    const targetPath = path.join(repoRoot, 'CLAUDE.md');
+
+    syncHarnessFile(targetPath, 'code-architect', 'claude-code', SCOPE_ID, { level0Path });
+    const first = await readFile(targetPath, 'utf8');
+
+    syncHarnessFile(targetPath, 'code-architect', 'claude-code', SCOPE_ID, { level0Path });
+    const second = await readFile(targetPath, 'utf8');
+
+    expect(second).toBe(first);
+    expect(second.split(BLOCK_START)).toHaveLength(2);
+    expect(second.split(BLOCK_END)).toHaveLength(2);
+    expect(second.split('IDEMPOTENT_LEVEL1_MARKER')).toHaveLength(2);
+  });
+
+  it('syncAllHarnesses: 3-part composition holds consistently across all three harness targets when mnemosyne.md is present', async () => {
+    const root = await makeTempRoot();
+    const repoRoot = path.join(root, 'repo-all-harnesses-3-part');
+    await (await import('node:fs/promises')).mkdir(repoRoot, { recursive: true });
+    const level0Path = await makeLevel0(root, 'Shared level 0 rule.');
+    await makeMnemosyneMd(repoRoot, 'ALL_HARNESS_LEVEL1_MARKER — shared repo memory notes.\n');
+
+    const results = syncAllHarnesses(repoRoot, 'code-architect', SCOPE_ID, { level0Path });
+    expect(results).toHaveLength(3);
+
+    const fileNames = HARNESS_TARGETS.map((t) => t.fileName);
+    const contents = await Promise.all(
+      fileNames.map((name) => readFile(path.join(repoRoot, name), 'utf8')),
+    );
+    for (const content of contents) {
+      expect(content).toContain('ALL_HARNESS_LEVEL1_MARKER');
+      expect(content.indexOf('Shared level 0 rule.')).toBeLessThan(content.indexOf('ALL_HARNESS_LEVEL1_MARKER'));
+    }
   });
 });

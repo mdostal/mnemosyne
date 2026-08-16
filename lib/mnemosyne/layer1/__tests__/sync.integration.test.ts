@@ -932,3 +932,100 @@ describe('standing copy-down regression (pf-14): parent persona content never be
     );
   });
 });
+
+/**
+ * ml-03: wires ml-02's mnemosyne.md (Level 1) reader into the real
+ * splice/lock sync pipeline. buildManagedBody grows from a 2-part
+ * (Level 0 + tier) join to a conditional 2-or-3-part (Level 0 + Level 1 +
+ * tier) join, depending only on whether the target repo has a mnemosyne.md
+ * at its root -- see design-discussion.md §4c/§7.1.
+ *
+ * This block is the first-time-adoption install-mechanism proof, run
+ * against a real-world (marker-free, human-edited) fixture through the real
+ * `mnemosyne persona sync` CLI subprocess -- the SAME `sync` verb pf-04
+ * exercised, no new CLI surface, per this story's acceptance criteria.
+ */
+describe('ml-03: Level 1 (mnemosyne.md) install-mechanism regression -- real CLI subprocess, real-world fixture', () => {
+  it('first-time adoption: a repo with NO mnemosyne.md syncs 2-part (byte-identical to pre-epic output); adding mnemosyne.md and re-running the SAME `sync` verb grows the managed block to 3-part, with Level 0 first, Level 1 second, tier third', async () => {
+    const home = await makeFakeHome('ML03_ADOPTION_L0_MARKER');
+    const repo = await makeTempRoot('mnemosyne-layer1-integration-ml03-adoption-');
+    const original = await copyFixtureTo(FIXTURES.noMarkers, path.join(repo, 'CLAUDE.md'));
+
+    // Sanity: repo genuinely has no mnemosyne.md yet.
+    const { existsSync } = await import('node:fs');
+    expect(existsSync(path.join(repo, 'mnemosyne.md'))).toBe(false);
+
+    // First sync: no mnemosyne.md -- must be byte-identical to the pre-epic 2-part composition.
+    const first = await runCli(['sync', '--repo', repo, '--tier', 'code-architect', '--scope-id', SCOPE_ID], home);
+    expect(first.code, `cli sync stderr: ${first.stderr}`).toBe(0);
+    const beforeAdoption = await readFile(path.join(repo, 'CLAUDE.md'), 'utf8');
+    const trimmedOriginal = original.replace(/\n+$/, '');
+    expect(beforeAdoption.startsWith(trimmedOriginal)).toBe(true);
+    expect(beforeAdoption).not.toContain('ML03_LEVEL1_ADOPTED_MARKER');
+    // Exactly one '---' divider inside the managed block -- the 2-part join, not 3-part.
+    const beforeBody = beforeAdoption.slice(
+      beforeAdoption.indexOf(BLOCK_START),
+      beforeAdoption.indexOf(BLOCK_END),
+    );
+    expect((beforeBody.match(/^---$/gm) ?? []).length).toBe(1);
+
+    // Repo adopts Level 1 by adding mnemosyne.md at its root.
+    await writeFile(
+      path.join(repo, 'mnemosyne.md'),
+      '# Repo memory notes\n\nML03_LEVEL1_ADOPTED_MARKER — this repo now has repo-owned Level 1 guidance.\n',
+      'utf8',
+    );
+
+    // Re-run the EXISTING `sync` verb -- no new CLI flag, no manual re-trigger step beyond it.
+    const second = await runCli(['sync', '--repo', repo, '--tier', 'code-architect', '--scope-id', SCOPE_ID], home);
+    expect(second.code, `cli sync (adoption run) stderr: ${second.stderr}`).toBe(0);
+    const afterAdoption = await readFile(path.join(repo, 'CLAUDE.md'), 'utf8');
+
+    // Human content still an untouched prefix; still exactly one managed block.
+    expect(afterAdoption.startsWith(trimmedOriginal)).toBe(true);
+    expect(afterAdoption.split(BLOCK_START)).toHaveLength(2);
+    expect(afterAdoption.split(BLOCK_END)).toHaveLength(2);
+
+    // The composition genuinely grew to 3-part: Level 0 first, Level 1 second, tier third.
+    expect(afterAdoption).toContain('ML03_ADOPTION_L0_MARKER');
+    expect(afterAdoption).toContain('ML03_LEVEL1_ADOPTED_MARKER');
+    const l0Idx = afterAdoption.indexOf('ML03_ADOPTION_L0_MARKER');
+    const l1Idx = afterAdoption.indexOf('ML03_LEVEL1_ADOPTED_MARKER');
+    const tierIdx = afterAdoption.indexOf(TIER_CONTENT['code-architect'].displayName);
+    expect(l0Idx).toBeLessThan(l1Idx);
+    expect(l1Idx).toBeLessThan(tierIdx);
+
+    const afterBody = afterAdoption.slice(
+      afterAdoption.indexOf(BLOCK_START),
+      afterAdoption.indexOf(BLOCK_END),
+    );
+    expect((afterBody.match(/^---$/gm) ?? []).length).toBe(2);
+
+    // Idempotency: a THIRD run (mnemosyne.md present both times now) is byte-identical to the second.
+    const third = await runCli(['sync', '--repo', repo, '--tier', 'code-architect', '--scope-id', SCOPE_ID], home);
+    expect(third.code, `cli sync (idempotency run) stderr: ${third.stderr}`).toBe(0);
+    const afterThird = await readFile(path.join(repo, 'CLAUDE.md'), 'utf8');
+    expect(afterThird).toBe(afterAdoption);
+    expect(afterThird.split(BLOCK_START)).toHaveLength(2);
+    expect(afterThird.split(BLOCK_END)).toHaveLength(2);
+    expect(afterThird.split('ML03_LEVEL1_ADOPTED_MARKER')).toHaveLength(2);
+  }, 20_000);
+
+  it('block.ts and lock.ts need zero awareness of Level 1 -- spliceManagedBlock/withLock operate on the composed body string regardless of how many logical parts fed into it', async () => {
+    const root = await makeTempRoot('mnemosyne-layer1-integration-ml03-block-agnostic-');
+    const level0Path = await makeLevel0(root, 'Shared level 0 rule.');
+    const repoRoot = path.join(root, 'repo-block-agnostic');
+    await mkdir(repoRoot, { recursive: true });
+    await writeFile(path.join(repoRoot, 'mnemosyne.md'), 'ML03_BLOCK_AGNOSTIC_LEVEL1_MARKER\n', 'utf8');
+
+    const targetPath = path.join(repoRoot, 'CLAUDE.md');
+    syncHarnessFile(targetPath, 'code-architect', 'claude-code', SCOPE_ID, { level0Path });
+    const written = await readFile(targetPath, 'utf8');
+
+    // block.ts's own markers wrap the WHOLE composed body -- a single begin/end pair regardless
+    // of it being a 2-part or 3-part join underneath.
+    expect(written.split(BLOCK_START)).toHaveLength(2);
+    expect(written.split(BLOCK_END)).toHaveLength(2);
+    expect(written).toContain('ML03_BLOCK_AGNOSTIC_LEVEL1_MARKER');
+  });
+});

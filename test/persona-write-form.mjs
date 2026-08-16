@@ -1,20 +1,23 @@
-// persona-write-form.mjs — TDD tests for pw-17-personas-panel-write-form:
-// the Personas panel's create/edit form. This closes the
-// mnemosyne-persona-wizard epic (Slice 4).
+// persona-write-form.mjs — TDD tests for pw-17-personas-panel-write-form,
+// RETARGETED by pu-12-draft-review-approve-ui.
 //
-// This story adds no new backend route -- it wires a form to the
-// ALREADY-SHIPPED POST /persona/:tier/:scopeId route (pw-15) on
-// lib/mnemosyne/server.ts. This file's job is the UI side: prove the served
-// ui/index.html renders the form with the fields the route's persona
-// candidate shape needs (tier, scopeId, displayName, scope, a section
-// heading+body, optional repo), prove ui/app.js's submit handler POSTs to
-// the right route with the right method and body shape, calls loadPersonas()
-// (pw-03's existing function, not a second rendering path) on success, and
-// calls setStatus() on both the pass and fail paths -- matching
-// test/persona-layer-stack.mjs's and test/graph-route.mjs's established
-// convention of static-assertion checks against the real served UI files
-// (this repo has no DOM-rendering/jsdom test harness, so this is the
-// established convention to follow, not a gap in this file).
+// pw-17 originally wired #persona-form to POST directly to pw-15's
+// POST /persona/:tier/:scopeId route (an immediate, uncommitted write).
+// pu-12 retargets that exact submit handler to POST to pu-03's
+// POST /persona/draft/:tier/:scopeId route instead -- a human typing a
+// persona by hand now produces an active DRAFT, reviewed/approved through
+// the same queue as an agent-proposed draft (design-discussion.md §9
+// judgment call #4), never an immediate commit. This file replaces
+// pw-17's original assertions (which pinned the OLD direct-write behavior)
+// with assertions for the NEW retargeted behavior -- the form's field
+// markup/conventions carry forward unchanged, only the submit target and
+// post-success refresh call change.
+//
+// Matching test/persona-layer-stack.mjs's and test/personas-panel-shell.mjs's
+// established convention: this repo has no DOM-rendering/jsdom test harness,
+// so this file does static-assertion checks against the real served
+// ui/index.html and ui/app.js (spawning src/server.mjs, the UI's own static
+// file server) rather than executing app.js in a browser-like environment.
 //
 // Usage: node test/persona-write-form.mjs
 import { spawn } from "node:child_process";
@@ -72,9 +75,11 @@ try {
   ok(/<form id="persona-form"/.test(personasSection),
     "the Personas <section> contains <form id=\"persona-form\">");
 
-  // Fields the route's persona-candidate shape needs (persona.ts's
-  // assertValidPersona / server.ts's POST /persona/:tier/:scopeId):
-  // tier, scopeId, displayName, scope, a section (heading+body), repo.
+  // Fields the draft route's persona-candidate shape needs (same shape as
+  // before -- pu-03's writeDraftPersona is deliberately looser than
+  // assertValidPersona, but this form still collects the full candidate so
+  // it's ready for approval): tier, scopeId, displayName, scope, a section
+  // (heading+body), repo.
   ok(/<select id="persona-tier" name="tier"/.test(personasSection),
     "form has a tier <select> (name=\"tier\")");
   ok(
@@ -127,48 +132,62 @@ try {
   ok(/new FormData\(personaForm\)/.test(handler),
     "submit handler reads the form via FormData(personaForm)");
 
-  // POSTs to pw-15's route with the exact expected method + URL shape:
-  // `${origin}/persona/${tier}/${scopeId}`, using personaServiceOrigin()'s
-  // cross-origin pattern (same one loadPersonas() already uses).
+  // --- THE RETARGETING ITSELF: POSTs to pu-03's draft route, NEVER pw-15's
+  // real POST /persona/:tier/:scopeId route ---------------------------------
   ok(/personaServiceOrigin\(\)/.test(handler),
     "submit handler uses personaServiceOrigin() -- same cross-origin pattern as loadPersonas()");
-  ok(/\/persona\/\$\{encodeURIComponent\(tier\)\}\/\$\{encodeURIComponent\(scopeId\)\}/.test(handler),
-    "submit handler builds the URL as /persona/:tier/:scopeId (encoded)");
+  ok(/\/persona\/draft\/\$\{encodeURIComponent\(tier\)\}\/\$\{encodeURIComponent\(scopeId\)\}/.test(handler),
+    "submit handler builds the URL as /persona/draft/:tier/:scopeId (encoded) -- the DRAFT route");
+  ok(!/`\$\{origin\}\/persona\/\$\{encodeURIComponent\(tier\)\}\/\$\{encodeURIComponent\(scopeId\)\}`/.test(handler),
+    "submit handler's fetch target is NEVER the bare /persona/:tier/:scopeId direct-write URL");
   ok(/method:\s*["'`]POST["'`]/.test(handler),
     "submit handler POSTs (method: \"POST\")");
   ok(/["'`]content-type["'`]:\s*["'`]application\/json["'`]/.test(handler),
     "submit handler sends content-type: application/json");
 
-  // Body shape: bare persona candidate {tier, scopeId, displayName, scope,
-  // sections: [{heading, body}], repo?} -- never mandateSections.
+  // Body shape unchanged: bare persona candidate {tier, scopeId, displayName,
+  // scope, sections: [{heading, body}], repo?} -- never mandateSections.
   ok(/sections:\s*\[\s*\{\s*heading:\s*sectionHeading,\s*body:\s*sectionBody\s*\}\s*\]/.test(handler),
     "submit handler's body includes sections: [{heading, body}] (single section, v1 minimum)");
   ok(!/mandateSections/.test(handler),
-    "submit handler never sends mandateSections (server-side assertValidPersona rejects mere presence)");
+    "submit handler never sends mandateSections");
   ok(/JSON\.stringify\(candidate\)/.test(handler),
     "submit handler sends the candidate as the JSON body");
 
-  // On success: loadPersonas() again (pw-03's function, not a rebuilt
-  // rendering path) + setStatus() pass.
-  ok(/await loadPersonas\(\)/.test(handler),
-    "submit handler calls loadPersonas() again on success (pw-03's existing function)");
+  // On success: loadDrafts() (pu-12's new function) -- NEVER loadPersonas()
+  // directly from THIS handler, since proposing/editing a draft never
+  // touches the real persona store (only Approve does that, tested
+  // separately in test/persona-draft-review-approve-ui.mjs).
+  ok(/await loadDrafts\(\)/.test(handler),
+    "submit handler calls loadDrafts() on success (pu-12's new function)");
+  ok(!/await loadPersonas\(\)/.test(handler),
+    "submit handler never calls loadPersonas() directly -- proposing a draft never writes to the real persona store");
   ok(/setStatus\(personaFormStatusEl,\s*["'`]pass["'`]/.test(handler),
     "submit handler calls setStatus(..., \"pass\", ...) on success");
 
   // On failure: setStatus() fail, matching every other form's convention;
   // no second/duplicate persona-rendering path is introduced by this file.
   ok(/setStatus\(personaFormStatusEl,\s*["'`]fail["'`]/.test(handler),
-    "submit handler calls setStatus(..., \"fail\", ...) on failure");
+    "submit handler surfaces failure via setStatus() on both the !res.ok path and the catch path");
   ok((handler.match(/setStatus\(personaFormStatusEl,\s*["'`]fail["'`]/g) || []).length >= 2,
     "submit handler surfaces failure via setStatus() on both the !res.ok path and the catch path");
 
+  // --- the review step's own explicit gate: no remaining POST to
+  // /persona/:tier/:scopeId (the real, direct-write route) ANYWHERE in
+  // ui/app.js's form-submit code paths. This is a whole-file grep, not
+  // scoped to `handler`, so it also catches a stray second wiring elsewhere.
+  ok(
+    !/fetch\(\s*`\$\{origin\}\/persona\/\$\{encodeURIComponent\(tier\)\}\/\$\{encodeURIComponent\(scopeId\)\}`/.test(appJs),
+    "no remaining fetch() to the real, direct-write /persona/:tier/:scopeId route anywhere in ui/app.js",
+  );
+
   // Reuses pw-03's loadPersonas() -- the whole file has exactly one
-  // function that builds <tr> rows into personasTbodyEl, not two.
+  // function that appends rows into personasTbodyEl, not two.
   const rowBuilders = (appJs.match(/personasTbodyEl\.appendChild/g) || []).length;
   ok(rowBuilders === 1,
     `exactly one place appends rows to personasTbodyEl (found ${rowBuilders}) -- no second persona-rendering path`);
-  ok(!/function\s+loadPersonas2|function\s+renderPersonas\b|function\s+loadPersonaForm\b/.test(appJs),
-    "no rebuilt second persona-list loader/renderer function exists");
+  ok(!/function\s+loadPersonas2|function\s+loadPersonaForm\b/.test(appJs),
+    "no rebuilt second persona-list loader function exists");
 
   // Direct source-file read too (belt-and-suspenders vs. the served copy
   // above, same double-check convention as test/persona-layer-stack.mjs).

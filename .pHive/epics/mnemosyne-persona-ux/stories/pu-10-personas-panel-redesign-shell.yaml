@@ -1,0 +1,155 @@
+id: pu-10-personas-panel-redesign-shell
+epic: mnemosyne-persona-ux
+title: Personas panel shell rebuild per pu-01's chosen synthesized option
+status: complete
+complexity: high
+methodology: tdd
+depends_on: [pu-01-multi-swarm-design-exploration]
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 0fe3a67). Independently verified: read
+  selection.md and synthesized/option-2.md in full, cross-checked the
+  shipped shell's structure against it (single grouped/filterable list, no
+  tabs; group-by radiogroup reusing the .mode-toggle idiom; native <select>
+  status filter; Repo-grouping keeps the 3 global tiers as labeled
+  sub-groups per the "deciding factor" fix named in selection.md; glossary
+  <details> block; parentRefs upgraded to an interactive-but-still-
+  pointer-only focus jump with filter self-heal + aria-live announcement).
+  Confirmed the deliberate scope boundary (no draft-review accordion/
+  approve/discard/batch-approve here) is legitimate, not a shortfall --
+  cross-checked directly against this ticket's own acceptance criteria
+  (view-layer only, GET /persona/draft explicitly out of scope) and
+  horizontal-plan.md H7's component split, which assigns that surface to
+  pu-12. Read the full ui/app.js diff -- confirmed loadPersonas()'s fetch
+  logic is byte-for-byte unchanged (same fetch calls, same
+  personaServiceOrigin() pattern), only its final render loop was replaced
+  with a call to the new renderPersonas(), which itself makes zero fetch
+  calls. Confirmed the one modified pre-existing test assertion
+  (persona-write-form.mjs) is an honest, well-justified update, not a
+  weakened guard. Confirmed via merge-base check this worktree's base was
+  STALE (missing pu-09's merge) -- resolved by merging via commit hash into
+  the up-to-date integration worktree, not a branch-name merge. Reran the
+  full UI test suite myself in both the builder's worktree and the merged
+  integration worktree (personas-panel-shell.mjs: 47/47, persona-write-
+  form.mjs, persona-layer-stack.mjs, ui-shell.mjs: all passing), tsc
+  --noEmit (clean both times), and vitest lib/mnemosyne/layer1 (246/246) in
+  the merged tree as a broader regression check. Did not independently
+  reproduce the builder's own Playwright keyboard-walk, but the static
+  assertion suite's non-disabled/real-button/no-href=#/tabindex checks
+  substantiate the same keyboard-reachability claims from a different
+  angle. All acceptance criteria met.
+
+description: |
+  Implements horizontal-plan.md H7's shell component: the actual "heavy
+  UI/UX lift" the operator asked for -- replaces the current single flat
+  table + single flat 7-field form (research-brief.md §1) with the new
+  structural shell described in whichever of pu-01's 3 synthesized options
+  was selected (.pHive/design/mnemosyne-persona-ux/synthesized/, selection.md).
+  This ticket is a pure view-layer rebuild: it still reads the same, unchanged
+  GET /persona / GET /persona/:tier/:scopeId routes underneath -- no data-
+  model or backend change happens in this ticket.
+
+acceptance_criteria:
+  - "Given pu-01's selection.md names one of the 3 synthesized options as chosen, when this ticket's implementation is reviewed, then its layout, navigation, and structural decisions match that option's documented brief -- not a different option, not an ad-hoc reinterpretation"
+  - "Given the new shell, when the Personas panel loads, then it still calls loadPersonas() (pw-03's existing function, reused not rebuilt) against the same GET /persona routes -- confirmed by grep that no new persona-fetching function duplicates its role"
+  - "Given the new shell, when it is wired into refreshAll(), then it participates in the existing manual-refresh-only convention (no auto-polling introduced) exactly as every other panel already does"
+  - "Given the redesigned shell, when compared against the existing 6 other panels (Liveliness, Settings, Lanes, Search, Graph, Operations), then it uses the same underlying CSS custom-property/table/monospace conventions (ui/style.css) -- consistent with lens 6 (existing-shell design-language consistency) from pu-01's review panel, not a visually foreign island"
+  - "Given a screen reader or keyboard-only navigation path through the new shell, when exercised, then every interactive element (any new navigation/filter/grouping control this ticket introduces) is reachable and operable without a mouse -- lens 3 (accessibility) from pu-01's review panel, checked directly, not assumed from the design brief alone"
+
+steps:
+  - id: research
+    description: >
+      Read pu-01's chosen synthesized option in full
+      (.pHive/design/mnemosyne-persona-ux/synthesized/option-N.md per
+      selection.md) plus its own citations back to the 7 lens critiques.
+      Read ui/index.html's current Personas panel markup and ui/app.js's
+      loadPersonas()/personaCell/parentRefsText in full as the exact
+      current-state code this ticket rebuilds the VIEW layer of, while
+      reusing its data-fetching logic unchanged. Read ui/style.css for the
+      existing CSS custom-property/table conventions every other panel uses.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Write failing tests (DOM-structure assertions, following whatever test
+      convention this repo already uses for ui/app.js's existing functions --
+      confirm and reuse that convention rather than inventing a new UI test
+      harness) for: the new shell renders correctly against a populated
+      GET /persona response and an empty one; loadPersonas() is called, not
+      duplicated; the shell is wired into refreshAll(); new interactive
+      elements are keyboard-reachable.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Rebuild ui/index.html's #personas section markup and the corresponding
+      rendering logic in ui/app.js per pu-01's chosen option -- reusing
+      loadPersonas()'s existing fetch/data logic, changing only how the
+      result is rendered/organized (e.g. new navigation, filtering, grouping,
+      or list+detail structure, per whatever the chosen option specifies).
+      Reuse ui/style.css's existing custom properties; extend, don't replace,
+      unless the chosen option explicitly calls for new tokens.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: >
+      Confirm, side-by-side, that the shipped shell matches pu-01's chosen
+      option's documented layout/interaction decisions -- not a superficial
+      resemblance. Confirm loadPersonas() is reused, not duplicated. Confirm
+      no new fetch call was introduced that bypasses the existing
+      personaServiceOrigin()/CORS-aware pattern ui/app.js already establishes.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: ui/index.html
+      purpose: "The current #personas section markup (lines 195-266) this ticket replaces the structure of, and the other 6 panels' markup (Liveliness/Settings/Lanes/Search/Graph/Operations) as the design-language-consistency baseline (lens 6)."
+    - path: ui/app.js
+      purpose: "loadPersonas() (lines 1229-1277) -- the data-fetching logic this ticket reuses unchanged; personaServiceOrigin()'s cross-origin fetch pattern every persona-related fetch must keep using."
+    - path: ui/style.css
+      purpose: "The existing dark-only CSS custom-property/table/monospace conventions every other panel already uses -- the baseline this ticket's new shell must extend, not diverge from, per lens 6."
+    - path: .pHive/design/mnemosyne-persona-ux/synthesized/
+      purpose: "pu-01's 3 synthesized design options and selection.md's documented, reasoned pick -- the actual source of truth for this ticket's layout/interaction decisions."
+
+files_to_modify:
+  - file: ui/index.html
+    change: "#personas section markup rebuilt per pu-01's chosen synthesized option."
+  - file: ui/app.js
+    change: "Rendering logic rebuilt to match the new markup structure; loadPersonas()'s existing fetch logic reused unchanged."
+  - file: ui/style.css
+    change: "Extended (not replaced) with any new tokens/classes the chosen option's layout requires."
+
+design_decisions:
+  - decision: "This ticket's structural/layout decisions are dictated by pu-01's selection.md, not re-derived or reinterpreted during implementation."
+    rationale: "design-discussion.md §5 risk table: 'The multi-swarm design pass (pu-01) is treated as decorative and the UI tickets get built against ad-hoc judgment instead of its actual synthesized output' is an explicitly named risk this ticket's own acceptance criteria directly guards against."
+  - decision: "loadPersonas() and the existing GET /persona routes are reused completely unchanged -- this ticket is view-layer only."
+    rationale: "horizontal-plan.md H7 component 1: 'still reading the same GET /persona/... routes underneath (no data-model change at this layer, pure view rebuild)' -- keeps this large, high-complexity ticket scoped to what it actually needs to touch, not entangled with pu-02 through pu-06's backend work."
+
+cross_cutting: []
+
+risks:
+  - severity: medium
+    description: "This is the epic's single highest-complexity UI story -- real risk of scope creep beyond what pu-01's chosen option actually specifies, especially given how much surrounding context (draft review, layer-stack, 7 lens critiques) is available to second-guess the chosen design against."
+    mitigation: "Acceptance criteria explicitly require matching the CHOSEN option's documented brief, not synthesizing a fourth option during implementation -- the review step is a named, explicit side-by-side comparison gate, not a general code-quality pass."
+  - severity: low
+    description: "A rebuilt shell could accidentally regress the existing pointer-only parentRefs rendering guarantee (never fetching/inlining a parent's real content) if the new rendering logic isn't carefully ported from the existing parentRefsText() function."
+    mitigation: "parentRefsText()'s existing pointer-only logic (ui/app.js) is explicitly named in the research step as code to port forward, not rewrite from scratch."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-ux/docs/design-discussion.md
+    relevant_excerpt: |
+      §3d: "The Personas panel gets rebuilt against whichever of the 3
+      synthesized design.pu-01 options is selected: a new structural shell
+      (pu-10)... A final design-fidelity pass (pu-14) checks the shipped UI
+      against pu-01's chosen option, closing the loop on the 'heavy UI/UX
+      lift' ask concretely rather than just asserting it was done."
+  - path: .pHive/epics/mnemosyne-persona-wizard/stories/pw-03-personas-panel-view.yaml
+    relevant_excerpt: |
+      The original view-only panel's own established convention this
+      ticket's rebuild must remain grounded in for its DATA-fetching half,
+      even while its RENDERING half changes substantially.

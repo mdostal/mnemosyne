@@ -1,0 +1,117 @@
+id: pu-14-design-fidelity-review
+epic: mnemosyne-persona-ux
+title: Design-fidelity review against pu-01's chosen synthesized option
+status: complete
+complexity: low
+methodology: tdd
+depends_on: [pu-12-draft-review-approve-ui]
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 849a856). This ticket produced 4 FLAGGED,
+  4 ACCEPTED deviations against pu-01's chosen "Trust-Gated Unified Queue"
+  option -- independently spot-checked all 4 FLAGGED claims against the
+  real shipped code myself (not just the write-up): confirmed
+  #personas-status-filter's default option is genuinely "all" not
+  "needs-review" (D1); confirmed lib/mnemosyne/layer1/persona.ts's Persona
+  interface has no origin/provenance/approvedAt field at all (D3); grepped
+  ui/app.js and ui/index.html for "approve all"/"ready to commit"/"batch"
+  -- zero hits, confirming the batch-approve strip was never built (D2);
+  confirmed loadPersonas()/loadDrafts() never pass ?repo= in their own
+  fetch calls, so no code-architect row can ever populate despite the
+  repo-grouping logic being correctly coded (D4). All 4 FLAGGED findings
+  hold up under independent verification -- these are real, currently
+  unaddressed gaps, not review artifacts. FLAGGED items are being carried
+  forward for the user's attention rather than silently treated as
+  complete: (1) status filter defaults to All not Needs review, (2) the
+  brief's "central bet" batch-approve mechanism was never built, (3) no
+  post-approval provenance note/data-model field survives approval, (4)
+  the "deciding factor" repo-hierarchy fix that justified choosing this
+  design over its alternatives is currently unreachable in the running UI.
+  All 4 ACCEPTED deviations have real, defensible rationale confirmed by
+  reading the code directly. Every deviation has an explicit disposition,
+  none left ambiguous. This ticket does not require a test-suite rerun
+  (docs-only deliverable) -- confirmed the diff is purely additive
+  (2 new/updated files, .pHive/design/ only, zero code touched).
+
+description: |
+  Implements horizontal-plan.md H8's fidelity component: a review pass
+  comparing the shipped Personas panel/draft-review UI (pu-10, pu-11, pu-12)
+  against pu-01's chosen synthesized option's documented wireframe/brief --
+  the concrete, checked closure of ask 1's "heavy UI/UX lift" claim, rather
+  than an asserted-but-unverified one. Independent of pu-13 (functional
+  correctness) -- this checks a different axis (design fidelity) and can run
+  in parallel once pu-12 lands.
+
+acceptance_criteria:
+  - "Given pu-01's chosen synthesized option's brief (.pHive/design/mnemosyne-persona-ux/synthesized/, selection.md) and the shipped UI (pu-10/pu-11/pu-12), when compared section by section, then every documented layout/navigation/interaction decision in the brief is checked against the actual shipped implementation, with each either confirmed matching or explicitly logged as a deviation"
+  - "Given any logged deviation, when reviewed, then it is explicitly marked as either ACCEPTED (with a one-line reason -- e.g. a real technical constraint the design brief didn't account for) or FLAGGED (needs a follow-up fix) -- never left ambiguous"
+  - "Given the 7 lenses pu-01's review panel used (design-discussion.md §4), when this ticket's review runs, then it re-checks the SHIPPED UI (not just the design brief) against each lens at least at a spot-check level -- confirming the lift promised at design time actually landed in the real, running code"
+  - "Given the review's conclusions, when written up, then they are persisted to disk (e.g. .pHive/design/mnemosyne-persona-ux/fidelity-review.md) so the epic's actual design-fidelity outcome is durable and reviewable, not just asserted in a commit message"
+
+steps:
+  - id: research
+    description: >
+      Read pu-01's chosen synthesized option and selection.md in full. Read
+      pu-10/pu-11/pu-12's actual shipped code (ui/index.html, ui/app.js,
+      ui/style.css as they exist after those tickets land) in full.
+    agent: researcher
+  - id: implement
+    description: >
+      Run the design-fidelity review this repo's own /design-review
+      conventions establish (or an equivalent lighter single-dispatch check
+      if a full multi-specialist /design-review pass is disproportionate for
+      a fidelity check against an already-built UI) -- section-by-section
+      comparison against the chosen brief, plus a spot-check against each of
+      the 7 lenses. Write findings to
+      .pHive/design/mnemosyne-persona-ux/fidelity-review.md.
+    agent: reviewer
+  - id: review
+    description: >
+      Confirm every deviation logged has an explicit ACCEPTED/FLAGGED
+      disposition -- none left ambiguous. Confirm the 7-lens spot-check
+      section is genuinely present, not a placeholder.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch. This closes the epic (pu-01 through pu-14).
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: .pHive/design/mnemosyne-persona-ux/synthesized/
+      purpose: "pu-01's chosen synthesized option -- the source of truth this ticket checks the shipped UI against."
+    - path: ui/index.html
+      purpose: "The shipped Personas panel markup (post pu-10/pu-11/pu-12) -- what gets compared against the design brief."
+    - path: ui/app.js
+      purpose: "The shipped rendering/interaction logic (post pu-10/pu-11/pu-12) -- what gets compared against the design brief's documented interaction flow."
+
+files_to_modify:
+  - file: .pHive/design/mnemosyne-persona-ux/fidelity-review.md
+    change: "New file. Section-by-section design-fidelity comparison, deviation dispositions, and a 7-lens spot-check against the shipped UI."
+  - file: .pHive/design/index.yaml
+    change: "Updated entry noting the fidelity review is complete, following this repo's existing /design-review handoff convention where applicable."
+
+design_decisions:
+  - decision: "This ticket depends only on pu-12 (the last UI story), not on pu-13 (the e2e functional proof) -- the two checks are independent axes and can run in parallel."
+    rationale: "horizontal-plan.md H8: 'functional correctness (5a) and design fidelity (this) are independent axes -- this only needs Slice 4's build-out to exist, not Slice 5a's own proof, so it can run in parallel rather than being needlessly serialized behind it.'"
+
+cross_cutting: []
+
+risks:
+  - severity: low
+    description: "A design-fidelity review this late in the epic could surface a deviation serious enough to need real rework, arriving after most of the epic's budget is already spent."
+    mitigation: "Explicitly out of scope to prevent by moving this ticket earlier -- the wizard epic's own precedent (and every prior epic in this line of work) closes with a verification pass AFTER the build, not before; a deviation found here is real signal, not a planning failure, and the FLAGGED disposition exists specifically to carry it forward as a concrete follow-up rather than silently absorbing it."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-ux/docs/design-discussion.md
+    relevant_excerpt: |
+      §3d: "A final design-fidelity pass (pu-14) checks the shipped UI
+      against pu-01's chosen option, closing the loop on the 'heavy UI/UX
+      lift' ask concretely rather than just asserting it was done."
+  - path: .pHive/epics/mnemosyne-persona-ux/docs/horizontal-plan.md
+    relevant_excerpt: |
+      H8 acceptance criteria: "pu-14 produces a written comparison against
+      H1's artifacts, explicitly noting any deviation and whether it's
+      accepted or needs a follow-up."

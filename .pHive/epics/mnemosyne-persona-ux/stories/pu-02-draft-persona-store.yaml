@@ -1,0 +1,146 @@
+id: pu-02-draft-persona-store
+epic: mnemosyne-persona-ux
+title: Draft persona store (home-rooted, archive-by-move disposal)
+status: complete
+complexity: medium
+methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 444937a). Independently verified: read
+  lib/mnemosyne/layer1/persona-draft-store.ts in full -- confirmed zero
+  imports from persona-store-global.ts/persona-store-repo-local.ts (grep
+  confirmed, only doc-comment mentions), confirmed home-rooted paths for
+  both global and repo-local tiers, confirmed one-active-draft-per-identity
+  overwrite semantics, confirmed disposeDraftPersona moves (renameSync)
+  rather than unlinks, confirmed assertValidPersona is never called at this
+  layer (deliberately deferred to approval time per design-discussion.md
+  §3b), confirmed the repo-local sanitization rule matches
+  resolveRememberScope()'s exact regex minus the tag-specific truncation.
+  Reran the 21 new tests (21/21), tsc --noEmit (clean), and vitest
+  lib/mnemosyne/layer1 (217/217, no regressions) myself. All acceptance
+  criteria met.
+depends_on: []
+
+description: |
+  Implements horizontal-plan.md H2: a new, structurally separate persistence
+  layer for in-review persona drafts, distinct from Epic 1's real
+  writeGlobalPersona/writeRepoLocalPersona stores. This is the real
+  architectural decision the operator explicitly asked to be made and
+  documented, not hand-waved (design-discussion.md §3b): drafts live
+  home-rooted (~/.mnemosyne/persona-drafts/...), never inside a consuming
+  repo's git-tracked tree, addressed by the same {tier, scopeId} identity the
+  real store already uses, with disposition tracked by archive-move (never a
+  hard delete) rather than a status field.
+
+acceptance_criteria:
+  - "Given no prior draft exists for a {tier, scopeId}, when writeDraftPersona is called, then a new active draft file is created at the correct home-rooted path (global: ~/.mnemosyne/persona-drafts/<tier>/<scopeId>.yaml; repo-local: ~/.mnemosyne/persona-drafts/repo-local/<repoSlug>/<scopeId>.yaml) and readDraftPersona returns it back unchanged"
+  - "Given an active draft already exists for a {tier, scopeId}, when writeDraftPersona is called again for the same identity, then the existing active draft file is overwritten in place -- never a second active draft file for the same identity"
+  - "Given an active draft exists, when disposeDraftPersona(tier, scopeId, 'approved') or (..., 'discarded') is called, then the draft file is MOVED (never fs.unlink'd) to the corresponding home-rooted approved/ or discarded/ archive subtree with a timestamped filename, and it no longer appears in listDraftPersonas' active-draft output"
+  - "Given a repo-local ({code-architect}) draft is written for repoRoot X, when the filesystem under X is inspected afterward, then no file exists anywhere under X/.mnemosyne/ as a result of this write -- the draft never touches the target repo's own working tree"
+  - "Given a candidate missing a valid tier or a non-empty scopeId, when writeDraftPersona is called, then it throws without writing anything -- structural sanity is checked, but full assertValidPersona-strength schema validation is deliberately NOT required at this layer (a draft may be incomplete while under review)"
+
+steps:
+  - id: research
+    description: >
+      Read lib/mnemosyne/layer1/persona-store-global.ts and
+      persona-store-repo-local.ts in full (path convention, withLock usage,
+      assertValidPersona call site) as the shape this new module's API
+      mirrors. Read persona.ts's resolveRememberScope() doc comment and
+      implementation for the exact sanitization rule
+      (.replace(/[^a-zA-Z0-9_-]/g, '-')) this ticket reuses for repo-slug
+      derivation. Confirm via a direct read of persona-store-repo-local.ts's
+      own doc comment that the real repo-local store is deliberately NOT
+      gitignored, which is the concrete reason drafts must NOT live inside
+      any repo's tree.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Write failing tests for: global-tier write/read/list/dispose round-trip;
+      repo-local write/read/list/dispose round-trip against a temp repoRoot,
+      including the "no file under repoRoot/.mnemosyne/" negative assertion;
+      overwrite-in-place semantics for a second write to the same identity;
+      archive-by-move semantics (file present under approved/ or discarded/
+      after disposal, absent from the active listing, and NOT deleted from
+      disk entirely); rejection of a structurally invalid candidate (bad
+      tier, empty scopeId) without writing anything.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Write lib/mnemosyne/layer1/persona-draft-store.ts: writeDraftPersona,
+      readDraftPersona, listDraftPersonas, disposeDraftPersona. Dispatches on
+      PERSONA_STORE_BY_TIER (persona.ts) the same way the real stores'
+      callers already do, but resolves to the new home-rooted paths, never
+      the real store's paths. Reuses withLock (lock.ts) around every write/
+      dispose exactly as the real stores do -- no new locking mechanism.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: >
+      Confirm the module imports nothing from persona-store-global.ts/
+      persona-store-repo-local.ts (a structurally separate store, not a
+      thin layer over the real one) and that assertValidPersona is NEVER
+      called from this module (full-strength validation stays exclusively at
+      approval time, pu-03's job, not this ticket's). Confirm the repo-slug
+      sanitization is byte-for-byte the same regex resolveRememberScope()
+      already uses, not a second, subtly different one.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/layer1/persona-store-global.ts
+      purpose: "The real global store's exact write/read/list shape (globalPersonaPath, withLock usage) this new module's API mirrors structurally, without sharing any storage location."
+    - path: lib/mnemosyne/layer1/persona-store-repo-local.ts
+      purpose: "The real repo-local store's exact shape -- and its own doc comment's explicit 'not gitignored' statement, the concrete evidence this ticket's home-rooted design decision is grounded in."
+    - path: lib/mnemosyne/layer1/persona.ts
+      purpose: "PERSONA_STORE_BY_TIER (the dispatch map this module reuses) and resolveRememberScope's sanitization regex (reused for repo-slug derivation, not reinvented)."
+    - path: lib/mnemosyne/layer1/lock.ts
+      purpose: "withLock -- the same file-scoped advisory locking primitive this new store reuses unchanged, no new locking design."
+
+files_to_modify:
+  - file: lib/mnemosyne/layer1/persona-draft-store.ts
+    change: "New file. writeDraftPersona/readDraftPersona/listDraftPersonas/disposeDraftPersona."
+  - file: lib/mnemosyne/layer1/__tests__/persona-draft-store.test.ts
+    change: "New file. Full round-trip, overwrite, archive-by-move, negative-tree-write, and structural-validation-rejection coverage."
+
+design_decisions:
+  - decision: "One module (persona-draft-store.ts) dispatching internally by PERSONA_STORE_BY_TIER, not two separate files mirroring persona-store-global.ts/persona-store-repo-local.ts's own split."
+    rationale: "design-discussion.md §9 judgment call #2 (vertical-plan.md's own Resolved Ambiguities #2): unlike the real store, where the split predates any shared abstraction, this store is new from scratch and the two locations' read/write/list/dispose shape is otherwise identical -- one module with an internal path-resolution branch avoids duplicating the same logic twice."
+  - decision: "Disposal moves the file to a timestamped path under approved/ or discarded/, never fs.unlink."
+    rationale: "design-discussion.md §9 judgment call #5: mirrors this codebase's own already-shipped flight-status philosophy (provisional/confirmed/superseded, never deleted -- docs/layer-architecture-v2-plan.md) rather than inventing a different retention posture for this one new store."
+  - decision: "Repo-local drafts are keyed by a sanitized absolute-path slug under a home-rooted repo-local/ subtree, never written inside the target repo's own tree."
+    rationale: "design-discussion.md §9 judgment call #6 and §3b: persona-store-repo-local.ts's own doc comment confirms the real store is deliberately not gitignored -- an in-tree draft location would either force Mnemosyne to mutate every consuming repo's .gitignore (a burden it takes on nowhere else) or risk an in-progress/rejected draft landing in that repo's git history by accident."
+  - decision: "Full assertValidPersona-strength schema validation is deliberately NOT applied at this layer -- only structural sanity (valid tier, non-empty scopeId)."
+    rationale: "vertical-plan.md's Resolved Ambiguities #3: a draft is explicitly allowed to be incomplete while a human is still reviewing/editing it (design-discussion.md §3b); assertValidPersona remains the single real enforcement point, exercised unchanged only at approval (pu-03)."
+
+cross_cutting: []
+
+risks:
+  - severity: high
+    description: "If this module's paths ever drift close enough to the real store's paths (e.g. a typo'd root, or a future refactor that accidentally shares a path-building helper with persona-store-global.ts), an in-review draft could become reachable by getPersonaContent/sync.ts and leak into a live CLAUDE.md/AGENTS.md sync before being approved."
+    mitigation: "Structural separation is proven, not just asserted: the negative-existence test (no file under repoRoot/.mnemosyne/ for a repo-local draft) is a hard acceptance criterion, and the review step explicitly confirms zero import from persona-store-global.ts/persona-store-repo-local.ts in this new module."
+  - severity: low
+    description: "Archive-by-move disposal lets ~/.mnemosyne/persona-drafts/{approved,discarded}/ grow unbounded over the life of a Mnemosyne install."
+    mitigation: "Explicitly accepted per design-discussion.md's risk table -- matches this codebase's existing 'never delete, mark disposition' posture for flight-status memory. A future retention/cleanup ticket is out of this epic's scope, not silently deferred without acknowledgment."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-ux/docs/design-discussion.md
+    relevant_excerpt: |
+      §3b: "A new, structurally separate draft persona store, home-rooted
+      (never inside a consuming repo's git-tracked tree), addressed by the
+      same {tier, scopeId} identity the real store already uses, with
+      disposition tracked by file location rather than a status field, and
+      approval performed by calling the EXISTING real write primitive
+      unchanged -- never a second write path."
+  - path: .pHive/epics/mnemosyne-persona-ux/docs/horizontal-plan.md
+    relevant_excerpt: |
+      H2 acceptance criteria: "disposal MOVES the file (never unlink's it)...
+      a repo-local draft is never written anywhere inside the target repo's
+      own working tree (verified by asserting no file exists under
+      <repoRoot>/.mnemosyne/ after a repo-local draft write)."

@@ -1,0 +1,189 @@
+id: pu-01-multi-swarm-design-exploration
+epic: mnemosyne-persona-ux
+title: "Multi-swarm design pass: 3 options -> 7-lens review panel -> 3 synthesized options"
+status: complete
+complexity: high
+methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 6445423, produced via a 14-agent Workflow-tool
+  run: 3 option-generation + 7 lens-review + 3 synthesis + 1 selection,
+  zero agent errors). Independently verified with real scrutiny given the
+  size of this deliverable: confirmed all 15 artifacts exist on disk (3
+  options, 7 critiques, 3 synthesized options, selection.md, index.yaml).
+  Read selection.md in full -- confirmed the reasoning is genuinely
+  substantive (not a coin flip): it explicitly cross-checked each
+  synthesized option's self-reported critique-response claims against the
+  actual critique text, catching a real discrepancy (synthesized option 3
+  claimed to fix hierarchy-legibility's two named gaps in original option 3
+  but had actually fixed two different, unrelated gaps from a different
+  critique). Independently spot-checked this claim myself by reading
+  hierarchy-legibility.md directly -- confirmed its two named gaps
+  ("global tiers collapse into one bucket when grouped by Repo", "parent
+  anchor could point at a filtered-out target") match selection.md's
+  citations exactly. Read the winning synthesized option (option-2.md,
+  "Trust-Gated Unified Queue") in full -- confirmed it is a real,
+  buildable wireframe-level spec against this repo's actual zero-dependency
+  vanilla-JS/HTML/CSS shell, with explicit citations back to which lens
+  finding drove which specific decision, not generic prose. Confirmed
+  index.yaml correctly registers the topic and selected option for pu-10/
+  pu-11/pu-12/pu-14 to build against. All acceptance criteria met.
+depends_on: []
+
+description: |
+  Implements horizontal-plan.md H1 in full: a genuine 3-phase fan-out-then-
+  synthesize design pass for the redesigned Personas panel and the new
+  agent-assisted build/approve interaction — direct operator mandate, quoted
+  verbatim in design-discussion.md §0 ask 1: "take this through a real multi
+  swarm design phase, come up with options, have 7 personas review and give
+  feedback and then make 3 new options from all of the feedback -- use the
+  frontend design skill and other plugins to nail that out because it needs
+  some heavy UI/UX lift."
+
+  This is NOT `/design`'s default single-ui-designer-dispatch shape
+  (research-brief.md §5 confirms `/design` produces exactly one wireframe set
+  per topic, critique happens downstream in a separate skill) — this ticket
+  is genuinely new orchestration for this repo: 3 independent option-
+  generation dispatches, a 7-distinct-lens review panel that reviews ALL 3
+  options, then synthesis agents producing 3 NEW refined options informed by
+  the combined feedback (not a pick-one-of-the-original-3). Must land FIRST
+  in this epic's dependency graph — pu-10 and pu-12 build directly against
+  this ticket's chosen output, per the operator's own explicit sequencing
+  instruction.
+
+acceptance_criteria:
+  - "Given the two design briefs (heavy Personas panel redesign + new agent-assisted build/approve interaction), when option generation runs, then exactly 3 independent, distinct initial design directions are produced, each covering both surfaces (panel redesign AND crawl->propose->approve flow) at wireframe level (layout, navigation, interaction flow)"
+  - "Given the 3 initial directions, when the 7-lens review panel runs, then each of the 7 named lenses (design-discussion.md §4) independently reviews ALL 3 directions and produces one written critique per lens -- 7 critique documents total, none skipped, none merged into a single generic pass"
+  - "Given the 3 initial directions and 7 critiques, when synthesis runs, then exactly 3 NEW refined options are produced that visibly incorporate specific feedback from the critiques (not a restatement of one of the original 3 renamed), plus a documented, reasoned selection among them (design-discussion.md §9 judgment call #2 -- no interactive operator touchpoint in this unattended pass)"
+  - "Given the completed pass, when its output is inspected, then every artifact (3 initial briefs, 7 lens critiques, 3 synthesized option briefs, the selection rationale) is persisted to disk under .pHive/design/mnemosyne-persona-ux/, in a form pu-10/pu-12 can read and build against directly without re-deriving intent from a chat transcript"
+
+steps:
+  - id: research
+    description: >
+      Read skills/design/SKILL.md (plugin-hive's /design skill) and
+      hive/workflows/design-review.workflow.yaml + ui-design.workflow.yaml in
+      full to ground this pass's artifact-directory convention
+      (.pHive/design/<topic>/) and step-graph shape (id/agent/depends_on/
+      inputs/outputs) in real precedent rather than inventing a new shape.
+      Read ui/index.html's current Personas panel (lines 195-266) and
+      ui/app.js's loadPersonas()/personaForm handler in full, plus
+      skills/mnemosyne-persona-interview/SKILL.md in full, so the option-
+      generation dispatches are briefed against the REAL current state, not
+      an assumed one. Read design-discussion.md §3a/§4 for the 7 lens
+      definitions and the 3-initial/7-lens/3-final scope this ticket must
+      hold to exactly.
+    agent: researcher
+  - id: option-generation
+    description: >
+      Dispatch 3 independent agents, each producing one initial design
+      direction (wireframe-level: layout, navigation, interaction flow) for
+      BOTH the redesigned Personas panel and the new crawl->propose->approve
+      interaction, following /design's own wireframe-protocol conventions
+      for artifact shape where applicable. Write each to
+      .pHive/design/mnemosyne-persona-ux/options/option-{1,2,3}.md.
+    agent: developer
+    depends_on: [research]
+  - id: review-panel
+    description: >
+      Dispatch 7 independent lens-review agents (design-discussion.md §4:
+      operator/power-user efficiency, new-user onboarding clarity,
+      accessibility, agent-provenance/trust-calibration,
+      information-density/scannability, existing-shell design-language
+      consistency, multi-tier/multi-repo hierarchy legibility), each given
+      ALL 3 option-generation outputs and asked to critique all 3 through its
+      named lens. Write each critique to
+      .pHive/design/mnemosyne-persona-ux/critiques/{lens-slug}.md.
+    agent: developer
+    depends_on: [option-generation]
+  - id: synthesis
+    description: >
+      Dispatch synthesis agent(s) given all 3 initial options and all 7
+      critiques, producing 3 NEW refined options that visibly respond to
+      specific critique points (cite which critique informed which decision),
+      plus a documented selection among the 3 with reasoning. Write to
+      .pHive/design/mnemosyne-persona-ux/synthesized/option-{1,2,3}.md and
+      .pHive/design/mnemosyne-persona-ux/selection.md.
+    agent: developer
+    depends_on: [review-panel]
+  - id: review
+    description: >
+      Confirm all 14 artifacts exist (3 initial + 7 critiques + 3 synthesized
+      + 1 selection), confirm the selection.md gives real, traceable
+      reasoning (not a coin flip), and confirm the synthesized options are
+      genuinely new syntheses (visibly cite critique feedback) rather than a
+      renamed copy of one of the 3 initial directions.
+    agent: reviewer
+    depends_on: [synthesis]
+  - id: integrate
+    description: >
+      Update .pHive/design/index.yaml with an entry for this topic
+      (mnemosyne-persona-ux), following /design's own handoff-record
+      convention, so pu-14's design-fidelity review has a registered entry to
+      check against. Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: ui/index.html
+      purpose: "The current Personas panel markup (lines 195-266, pw-03/pw-04/pw-17) -- what the redesign replaces. Option-generation dispatches must be briefed against this real current state."
+    - path: ui/app.js
+      purpose: "loadPersonas()/personaForm's submit handler (lines 1229-1344) -- the current single-form, immediate-write interaction the new crawl->propose->approve flow replaces."
+    - path: skills/mnemosyne-persona-interview/SKILL.md
+      purpose: "The already-shipped adaptive interview skill this epic's agent-assisted flow builds on -- option-generation must design a UI/interaction that surfaces this skill's crawl->propose loop, not invent a competing conversational mechanism."
+  external_references:
+    - path: "~/.claude/plugins/cache/plugin-hive/plugin-hive/2.15.0/skills/design/SKILL.md"
+      purpose: "The `/design` skill's artifact-directory convention (.pHive/design/<topic>/, index.yaml handoff shape) this ticket's output follows, without using /design's own single-dispatch process."
+    - path: "~/.claude/plugins/cache/plugin-hive/plugin-hive/2.15.0/hive/workflows/design-review.workflow.yaml"
+      purpose: "Real precedent for the N-specialist-critiques-then-one-synthesis step shape this ticket's 7-lens-panel-then-synthesis structure mirrors."
+
+files_to_modify:
+  - file: .pHive/design/mnemosyne-persona-ux/options/option-1.md
+    change: "New file. Initial design direction 1."
+  - file: .pHive/design/mnemosyne-persona-ux/options/option-2.md
+    change: "New file. Initial design direction 2."
+  - file: .pHive/design/mnemosyne-persona-ux/options/option-3.md
+    change: "New file. Initial design direction 3."
+  - file: .pHive/design/mnemosyne-persona-ux/critiques/*.md
+    change: "New files. One per named lens (7 total)."
+  - file: .pHive/design/mnemosyne-persona-ux/synthesized/option-{1,2,3}.md
+    change: "New files. 3 synthesized final options."
+  - file: .pHive/design/mnemosyne-persona-ux/selection.md
+    change: "New file. Documented, reasoned selection among the 3 synthesized options."
+  - file: .pHive/design/index.yaml
+    change: "New or extended entry registering this topic, following /design's own handoff-record shape."
+
+design_decisions:
+  - decision: "3 initial directions, not more or fewer."
+    rationale: "design-discussion.md §9 judgment call #1: the operator said 'come up with options' (plural, uncounted) for generation but explicitly counted 3 for synthesis -- 3 initial directions gives the 7-lens panel real variety without tripling an already-large review burden, and keeps the initial count from outnumbering the 3 final options the operator explicitly asked for."
+  - decision: "Selection among the 3 synthesized options happens inside this ticket via a documented, reasoned pick, not a blocking interactive touchpoint."
+    rationale: "design-discussion.md §9 judgment call #2: /design's own wireframe-protocol AskUserQuestion touchpoints assume an interactive operator; this epic is explicitly planned/executed without one available. The rationale is written to selection.md specifically so it is reviewable and reversible by a human at execution time, not silently baked in."
+  - decision: "7 lenses are named concretely for THIS surface (design-discussion.md §4), not reused from any generic example list verbatim."
+    rationale: "The operator explicitly instructed against verbatim reuse of any example lens list ('pick 7 that make sense for THIS specific UI, don't just reuse this example list verbatim without thinking about it'). Each of the 7 lenses chosen here is grounded in a specific, cited research finding (jargon density confirmed in ui/index.html's own panel-hint copy; no brand-system.yaml present; the new agent-authored-content-approval interaction unique to this epic)."
+
+cross_cutting: []
+
+risks:
+  - severity: medium
+    description: "7 independent review-lens dispatches + 3-direction option generation + synthesis is a genuinely large number of agent calls for one ticket -- real risk of runaway cost/time or of the panel/synthesis steps degrading into shallow, interchangeable output if not scoped tightly."
+    mitigation: "Acceptance criteria cap scope explicitly at the operator's own stated numbers (3/7/3) -- not expanded during execution. The review step explicitly checks that synthesized options are genuinely new syntheses, not renamed originals, as a concrete quality gate."
+  - severity: low
+    description: "The synthesized options could describe UI/interaction decisions that are technically infeasible against this repo's real constraints (zero-dep vanilla JS, no third-party UI framework, cross-origin persona service on a different port)."
+    mitigation: "The research step briefs every dispatch against the real current ui/index.html + ui/app.js + server.ts CORS conventions before any option is generated, the same 'ground in real source, not assumption' discipline every prior epic in this line of work has held to."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-ux/docs/design-discussion.md
+    relevant_excerpt: |
+      §3a: "A new, EARLY ticket (pu-01) that is a genuine 3-phase
+      fan-out-then-synthesize pass, not /design's default single dispatch...
+      All later UI tickets in this epic (pu-10, pu-11, pu-12) build against
+      whichever ONE of the 3 synthesized options gets selected."
+  - path: .pHive/epics/mnemosyne-persona-ux/docs/research-brief.md
+    relevant_excerpt: |
+      §5: "there is no repo-local custom-workflow directory or
+      hive.config.yaml hook for registering a new first-class .workflow.yaml
+      ... A genuinely new, repo-specific 3-phase fan-out ... is therefore not
+      a call to some pre-existing 7-persona review workflow -- none exists --
+      but a new step sequence this epic's own first ticket must define and
+      execute directly."
