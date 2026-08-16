@@ -16,6 +16,18 @@
 // (this repo has no DOM-rendering/jsdom test harness, so this is the
 // established convention to follow, not a gap in this file).
 //
+// ml-05-memory-levels-ui (epic mnemosyne-memory-levels) extends this same
+// file with two more things, since it's the exact section this story
+// touches: (1) the "Memory Layer Stack" heading above is RENAMED to
+// "Retrieval Layer Stack" with revised hint copy -- GET /layers and
+// loadPersonaLayerStack() stay byte-for-byte unchanged, only the label
+// copy moves; and (2) a NEW, structurally separate "Memory Levels (0-4)"
+// section is added, fetching ml-04's GET /memory-levels route via a new
+// loadMemoryLevels() function. Both sections must carry an explicit
+// sentence disambiguating themselves from the team/orchestration tier
+// hierarchy (top-orchestrator/company-director/project-orchestrator/
+// code-architect) -- design-discussion.md §5.
+//
 // Usage: node test/persona-layer-stack.mjs
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
@@ -67,9 +79,38 @@ try {
     /id="persona-layer-stack"/.test(indexBody),
     "GET /ui body has a dedicated layer-stack section (id=\"persona-layer-stack\")",
   );
+
+  // ml-05-memory-levels-ui: renamed heading + revised hint copy -- the
+  // section's id/data-source/fetch logic are otherwise untouched (checked
+  // further below).
+  const layerStackSectionMatch = indexBody.match(/<section id="persona-layer-stack"[\s\S]*?<\/section>/);
+  const layerStackSection = layerStackSectionMatch ? layerStackSectionMatch[0] : "";
   ok(
-    /Memory Layer Stack/i.test(indexBody),
-    "GET /ui body's layer-stack section has its own distinct heading, not a persona-list label",
+    /<h2>Retrieval Layer Stack<\/h2>/.test(layerStackSection),
+    "GET /ui body's layer-stack section heading is 'Retrieval Layer Stack' (renamed from 'Memory Layer Stack')",
+  );
+  ok(
+    !/Memory Layer Stack/.test(indexBody),
+    "GET /ui body no longer contains the old 'Memory Layer Stack' heading text anywhere",
+  );
+  ok(
+    /recall\(\)/.test(layerStackSection) && /remember\(\)/.test(layerStackSection) && /cascade/i.test(layerStackSection),
+    "Retrieval Layer Stack section's hint text states this is the runtime recall()/remember() cascade order",
+  );
+  ok(
+    /not the canonical|5-level|memory-level/i.test(layerStackSection),
+    "Retrieval Layer Stack section's hint text explicitly contrasts itself with the canonical 5-level memory-store-type model",
+  );
+  ok(
+    /top-orchestrator/.test(layerStackSection) &&
+      /company-director/.test(layerStackSection) &&
+      /project-orchestrator/.test(layerStackSection) &&
+      /code-architect/.test(layerStackSection),
+    "Retrieval Layer Stack section's hint text names the team/orchestration tier hierarchy it is NOT (top-orchestrator/company-director/project-orchestrator/code-architect)",
+  );
+  ok(
+    /not[^<.]{0,80}(team\/orchestration|orchestration\/team|team.{0,20}orchestration)/i.test(layerStackSection),
+    "Retrieval Layer Stack section's hint text explicitly states it is NOT the team/orchestration tier hierarchy",
   );
 
   // Structurally distinct from a persona list: the layer-stack section's
@@ -85,6 +126,52 @@ try {
         indexBody.match(/id="persona-layer-stack"[\s\S]{0,4000}?<\/section>/)?.[0] ?? "",
       ),
     "layer-stack section's own markup never contains a persona-list id/class -- it's not merged into one list",
+  );
+
+  // --- ml-05-memory-levels-ui: new, structurally separate Memory Levels
+  // (0-4) section ------------------------------------------------------------
+  ok(
+    /id="memory-levels"/.test(indexBody),
+    "GET /ui body has a dedicated Memory Levels section (id=\"memory-levels\")",
+  );
+  const memoryLevelsSectionMatch = indexBody.match(/<section id="memory-levels"[\s\S]*?<\/section>/);
+  const memoryLevelsSection = memoryLevelsSectionMatch ? memoryLevelsSectionMatch[0] : "";
+  ok(
+    /<h2>Memory Levels \(0-4\)<\/h2>/.test(memoryLevelsSection),
+    "Memory Levels section heading reads 'Memory Levels (0-4)'",
+  );
+  ok(
+    /top-orchestrator/.test(memoryLevelsSection) &&
+      /company-director/.test(memoryLevelsSection) &&
+      /project-orchestrator/.test(memoryLevelsSection) &&
+      /code-architect/.test(memoryLevelsSection),
+    "Memory Levels section's hint text names the team/orchestration tier hierarchy it is NOT",
+  );
+  ok(
+    /not[^<.]{0,80}(team\/orchestration|orchestration\/team|team.{0,20}orchestration)/i.test(memoryLevelsSection),
+    "Memory Levels section's hint text explicitly states it is NOT the team/orchestration tier hierarchy",
+  );
+  ok(
+    /id="memory-levels-status"/.test(memoryLevelsSection),
+    "Memory Levels section has its own status element (id=\"memory-levels-status\")",
+  );
+  ok(
+    /id="memory-levels-table"/.test(memoryLevelsSection) && /id="memory-levels-tbody"/.test(memoryLevelsSection),
+    "Memory Levels section has its own table/tbody, never sharing persona-layer-stack's",
+  );
+  ok(
+    memoryLevelsSection.length > 0 && !/id="persona-layer-stack"/.test(memoryLevelsSection),
+    "Memory Levels section is a structurally distinct <section>, not folded into persona-layer-stack",
+  );
+  ok(
+    layerStackSection.length > 0 && !/id="memory-levels"/.test(layerStackSection),
+    "Retrieval Layer Stack section does not contain the Memory Levels section either -- two separate siblings",
+  );
+  // Level 0 stays view-only in the new section too: no edit affordance
+  // anywhere inside it.
+  ok(
+    !/<(form|input|button|textarea)/i.test(memoryLevelsSection),
+    "Memory Levels section renders no form/input/button/textarea anywhere -- Level 0 (and every level) stays view-only",
   );
 
   // --- static Level 0 pointer: path shown, NO edit form/affordance --------
@@ -130,6 +217,87 @@ try {
   ok(
     !/addEventListener\(\s*["'`]submit["'`][\s\S]{0,300}?level0/i.test(appJs),
     "ui/app.js wires no submit-event handler near \"level0\" -- no edit form exists to wire one to",
+  );
+
+  // ml-05-memory-levels-ui: loadPersonaLayerStack()'s body itself -- byte
+  // for byte -- is genuinely unmodified by this story. Pinning the exact,
+  // known-good function body (as shipped by pw-04) rather than a loose
+  // regex, so any change at all to its logic fails this check.
+  const loadPersonaLayerStackBody = [
+    "async function loadPersonaLayerStack() {",
+    "  // Guards against running against an older served index.html that predates",
+    "  // this section (e.g. a stale cached page) -- never throws either way.",
+    "  if (!personaLayerStackStatusEl || !personaLayerStackTableEl || !personaLayerStackTbodyEl) return;",
+    "",
+    "  setStatus(personaLayerStackStatusEl, \"loading\", \"loading…\");",
+    "  personaLayerStackTbodyEl.textContent = \"\";",
+    "  personaLayerStackTableEl.hidden = true;",
+    "  if (personaLayerStackEmptyEl) personaLayerStackEmptyEl.hidden = true;",
+    "",
+    "  try {",
+    "    const res = await fetch(mnemosyneClientApiBase() + \"/layers\");",
+    "    if (!res.ok) {",
+    "      const body = await res.json().catch(() => ({}));",
+    "      setStatus(",
+    "        personaLayerStackStatusEl,",
+    "        \"fail\",",
+    "        `FAIL — GET /layers returned ${res.status}${body.error ? `: ${body.error.message || body.error}` : \"\"}`,",
+    "      );",
+    "      return;",
+    "    }",
+    "    const body = await res.json();",
+    "    const layers = Array.isArray(body.layers) ? body.layers : [];",
+    "    if (!layers.length) {",
+    "      setStatus(personaLayerStackStatusEl, \"pass\", \"no layers configured\");",
+    "      if (personaLayerStackEmptyEl) personaLayerStackEmptyEl.hidden = false;",
+    "      return;",
+    "    }",
+    "    layers.forEach((l, i) => {",
+    "      const tr = document.createElement(\"tr\");",
+    "      tr.appendChild(personaLayerStackCell(String(i + 1)));",
+    "      tr.appendChild(personaLayerStackCell(l && l.layer != null ? String(l.layer) : \"?\"));",
+    "      tr.appendChild(personaLayerStackCell(l && l.writable ? \"yes\" : \"no\"));",
+    "      personaLayerStackTbodyEl.appendChild(tr);",
+    "    });",
+    "    personaLayerStackTableEl.hidden = false;",
+    "    setStatus(personaLayerStackStatusEl, \"pass\", `${layers.length} layer(s), cascade order`);",
+    "  } catch (err) {",
+    "    setStatus(personaLayerStackStatusEl, \"fail\", \"FAIL — could not reach GET /layers\");",
+    "  }",
+    "}",
+  ].join("\n");
+  ok(
+    appJs.includes(loadPersonaLayerStackBody),
+    "ui/app.js's loadPersonaLayerStack() function body is byte-for-byte unchanged from pw-04's shipped version",
+  );
+
+  // --- ml-05-memory-levels-ui: new loadMemoryLevels() function + wiring ----
+  ok(
+    /async function loadMemoryLevels\s*\(\s*\)\s*\{/.test(appJs),
+    "ui/app.js defines a new loadMemoryLevels() function",
+  );
+  ok(
+    /fetch\([\s\S]{0,160}?["'`]\/memory-levels["'`]\)/.test(appJs),
+    "loadMemoryLevels() fetches GET /memory-levels (ml-04's route)",
+  );
+  ok(
+    /function refreshAll[\s\S]*?loadPersonaLayerStack\(\)[\s\S]*?\}/.test(appJs) &&
+      /function refreshAll[\s\S]{0,600}loadMemoryLevels\(\)/.test(appJs),
+    "refreshAll() calls loadMemoryLevels() alongside the existing loadPersonaLayerStack() call",
+  );
+  // No auto-polling: loadMemoryLevels itself is only ever called from
+  // refreshAll()/initial load, never from a setInterval/setTimeout loop.
+  ok(
+    !/setInterval\([\s\S]{0,200}?loadMemoryLevels/.test(appJs) && !/setTimeout\([\s\S]{0,200}?loadMemoryLevels/.test(appJs),
+    "loadMemoryLevels() is never wired to setInterval/setTimeout -- no auto-polling, matching this file's existing convention",
+  );
+  // No edit-Level-0 affordance anywhere near the new function either.
+  const loadMemoryLevelsMatch = appJs.match(/async function loadMemoryLevels\s*\([^)]*\)\s*\{[\s\S]*?\n\}/);
+  const loadMemoryLevelsBody = loadMemoryLevelsMatch ? loadMemoryLevelsMatch[0] : "";
+  ok(
+    loadMemoryLevelsBody.length > 0 &&
+      !/method:\s*["'`](POST|PUT|PATCH|DELETE)["'`]/i.test(loadMemoryLevelsBody),
+    "loadMemoryLevels() issues no POST/PUT/PATCH/DELETE request -- read-only, Level 0 stays view-only",
   );
 
   // Direct source-file read too (belt-and-suspenders vs. the served copy
