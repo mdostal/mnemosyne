@@ -34,6 +34,8 @@ The operator's 3-layer simplification and the CBA's 5-layer research map onto ea
 
 Cross-project impact is still answered by querying **up** to the company director, never held locally at the code tier — that part of the CBA's design holds regardless of 3 vs 4 tiers.
 
+**Made concrete in code by `pf-12` (2026-08-15, epic `mnemosyne-persona-foundation`):** `lib/mnemosyne/layer1/persona.ts`'s `getPersonaContent` renders a `parentRefs`-bearing code-architect persona's parent tier(s)/scopeId(s) as a pointer-only "Parent context (query up)" section (`buildParentContextSections`) — naming where to look, never inlining the parent's actual `sections` content. This is the first place this principle is enforced by a hard, automated non-inlining test rather than by convention alone (`lib/mnemosyne/layer1/__tests__/persona.test.ts`).
+
 ## 1a. `la-09` finding: `graphify global`/`merge-graphs` evaluated for the company-director tier — **don't adopt as the tier's data source** (2026-08-14)
 
 `docs/cba-memory-layers.md`'s "New finding" flagged Graphify's cross-repo merge commands

@@ -1,0 +1,110 @@
+id: pf-05-realworld-fixtures-integration-tests
+epic: mnemosyne-persona-foundation
+title: Real-world fixture corpus + integration test suite (Slice 1)
+status: complete
+complexity: medium
+methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-15 (commit 4e61333), closing Slice 1. Took 3 dispatch
+  attempts due to two transient "machine went to sleep" API interruptions
+  (not the work's fault) -- resolved by starting caffeinate before the third
+  attempt. Independently verified: reran vitest (85/85) and tsc myself,
+  confirmed the partial-marker fixture genuinely has an unclosed BLOCK_START
+  with no BLOCK_END. Found and fixed a real, epic-wide bug in block.ts:
+  spliceManagedBlock/extractManagedBlockBody used indexOf (first marker
+  pair) instead of lastIndexOf (most recent pair) -- a stray unclosed marker
+  ahead of a real pair would silently delete human content on a second sync.
+  This benefits every story that calls through block.ts, not just this one.
+  All acceptance criteria met.
+depends_on: [pf-03-file-locking, pf-04-cli-persona-sync-dry-run]
+
+description: |
+  Implements horizontal-plan.md H7 (subset): tests that exercise the
+  sync/splice mechanism against realistic, marker-free, human-edited files —
+  not just the existing clean Vitest fixtures (sync.test.ts currently only
+  ever constructs files via writeFile in a temp dir with fully-controlled
+  content). This closes the TPM-lens review finding: production would
+  otherwise be the first real-world test of the splice mechanism against a
+  file that matters. Completes Slice 1 — this story's passing is the
+  concrete proof the slice's non-regression and safety claims are true, not
+  just asserted.
+
+acceptance_criteria:
+  - "Given a fixture corpus of marker-free, human-edited CLAUDE.md/AGENTS.md/GEMINI.md-style files (mixed heading levels, trailing whitespace variance, an unrelated pre-existing --- divider), when synced via the pf-04 CLI, then human content outside the managed block survives byte-for-byte and no marker duplication occurs"
+  - "Given a fixture with a partial/malformed marker pair (only BLOCK_START present, no matching BLOCK_END), when synced, then spliceManagedBlock falls back to append-mode correctly rather than corrupting the file"
+  - "Given the pf-03 locking mechanism, when two sync invocations race against the same real-world fixture, then no corruption occurs — this is the same concurrency guarantee as pf-03's unit test, now proven against realistic content"
+  - "Given --dry-run against every real-world fixture, when compared to a real (non-dry-run) run's output, then the preview matches exactly, and the fixture file's mtime/checksum is provably unchanged after the dry-run"
+
+steps:
+  - id: research
+    description: Read block.ts's spliceManagedBlock (block.ts:37-57) closely, especially the startIdx !== -1 && endIdx !== -1 guard that governs the partial-marker fallback path, to design a fixture that exercises exactly that branch.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Author the fixture corpus first (as test data, not implementation):
+      marker-free files, mixed formatting, one partial-marker file. Then
+      write the integration test suite (sync.integration.test.ts) asserting
+      round-trip correctness, no corruption, and dry-run no-op — against
+      copies of the fixtures, never the originals.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      This story is primarily test/fixture authoring — "implement" here means
+      fixing any real bug the integration tests surface in pf-01 through
+      pf-04's code (expected: minor edge cases in spliceManagedBlock's
+      partial-marker path or the CLI's dry-run diff logic, not a rewrite).
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review that fixtures are genuinely realistic (not disguised clean fixtures) and that the partial-marker case actually exercises block.ts's fallback branch, not a different code path.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch. This is Slice 1's final story — confirm the full Slice 1 story set (pf-01 through pf-05) is green together before moving to Slice 2.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/layer1/block.ts
+      purpose: "spliceManagedBlock (block.ts:37-57), specifically the startIdx !== -1 && endIdx !== -1 guard (block.ts:44-51) — the exact code path the partial-marker fixture exercises."
+    - path: lib/mnemosyne/layer1/__tests__/sync.test.ts
+      purpose: "The existing clean-fixture unit test suite this story's integration suite is explicitly NOT replacing — it's additive, a separate file."
+
+files_to_modify:
+  - file: lib/mnemosyne/layer1/__tests__/fixtures/real-world/claude-md-no-markers.md
+    change: "New fixture. Human-edited-looking CLAUDE.md, no mnemosyne:layer1 markers."
+  - file: lib/mnemosyne/layer1/__tests__/fixtures/real-world/agents-md-mixed-formatting.md
+    change: "New fixture. Mixed heading levels, trailing whitespace variance, unrelated --- divider."
+  - file: lib/mnemosyne/layer1/__tests__/fixtures/real-world/gemini-md-partial-marker.md
+    change: "New fixture. Only BLOCK_START present, no matching BLOCK_END — exercises the fallback-to-append path."
+  - file: lib/mnemosyne/layer1/__tests__/sync.integration.test.ts
+    change: "New file, separate from sync.test.ts. Integration tests against copies of the real-world fixtures."
+
+design_decisions:
+  - decision: "Integration tests live in a separate file (sync.integration.test.ts) from the existing unit-style sync.test.ts, not merged into it."
+    rationale: "horizontal-plan.md H7.2: keeps the fast, clean-fixture unit suite separate from the (necessarily messier) realistic-fixture integration suite."
+  - decision: "Tests run against copies of the fixtures, never the fixture files themselves."
+    rationale: "Fixtures must remain byte-for-byte stable across test runs so regressions are detectable — mutating the source fixture would make the test suite itself non-deterministic."
+
+cross_cutting: []
+
+risks:
+  - severity: high
+    description: "Without this story, pf-01 through pf-04 have never been proven against anything resembling a real, human-maintained file — the epic's entire non-regression claim rests on this story actually finding and fixing edge cases, not just passing trivially."
+    mitigation: "The partial-marker fixture is specifically designed to hit a real, previously-unexercised branch in block.ts — if it passes without any code change, that's worth double-checking (it may mean the fixture isn't exercising the branch it's supposed to)."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-foundation/docs/design-discussion.md
+    relevant_excerpt: |
+      that test suite never exercises the splice against realistic,
+      marker-free, human-edited real files — production would be the first
+      real-world test of that mechanism.
+  - path: .pHive/epics/mnemosyne-persona-foundation/docs/horizontal-plan.md
+    relevant_excerpt: |
+      H7: one file with a partial/malformed marker pair (only BLOCK_START
+      present, no matching BLOCK_END) to confirm spliceManagedBlock falls
+      back to append-mode correctly rather than corrupting the file.

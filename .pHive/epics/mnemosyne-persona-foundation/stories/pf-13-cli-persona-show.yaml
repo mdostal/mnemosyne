@@ -1,0 +1,82 @@
+id: pf-13-cli-persona-show
+epic: mnemosyne-persona-foundation
+title: "CLI: persona show"
+status: complete
+complexity: low
+methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-15 (commit 4655786; took a re-dispatch to fix a dispatch
+  framing issue where the first attempt misread the team-of-one instructions
+  as "brief a separate teammate" and did no real work -- resolved with
+  explicit "YOU are the builder" language). Real TDD with a genuine red/green
+  proof. Independently verified: reran vitest (135/135), persona-cli tests,
+  tsc clean. Confirmed genuinely read-only (recursive $HOME snapshot proves
+  zero writes anywhere) and a real live read (edit persona file directly,
+  second show run reflects the edit, no repo-local sync needed). All
+  acceptance criteria met.
+depends_on: [pf-12-pointer-rendering-query-up]
+
+description: |
+  Implements horizontal-plan.md H5.3/H6 (remainder): the on-demand fetch
+  surface an agent uses after following pf-12's rendered pointer. A thin,
+  read-only wrapper over pf-06's global-store read function — no harness
+  file involvement at all. This is also the harness-agnostic fetch contract
+  design-discussion.md §7a identifies as the thing a future non-markdown
+  adapter (a different harness, eventually Pantheon) would call instead of
+  reading persona YAML files directly.
+
+acceptance_criteria:
+  - "Given `mnemosyne persona show project-orchestrator default`, when run, then it returns that persona's real, current content, read-only — no harness file is touched or written"
+  - "Given a persona's content is edited (directly, or via a future authoring flow) and `persona show` is run again immediately after, when compared to before the edit, then the new content is reflected without any repo-local re-sync being required — this proves it's a live, on-demand read, not a cached/synced copy"
+
+steps:
+  - id: research
+    description: Re-read pf-06's global-store read function and pf-09's existing CLI dispatcher (bin/mnemosyne-persona.mjs, now extended twice) to add this subcommand consistently.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for the show subcommand's read-only behavior (assert zero filesystem writes anywhere) and the live-read-reflects-edits assertion.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add `persona show <tier> <scope-id>` to bin/mnemosyne-persona.mjs, calling pf-06's global-store read function directly.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review that this subcommand truly never touches a harness file or takes any lock — it's the one read-only, no-side-effect verb in the whole persona CLI group.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: bin/mnemosyne-persona.mjs
+      purpose: "pf-04/pf-09's existing CLI dispatcher — this story adds the third and final subcommand to it."
+    - path: lib/mnemosyne/layer1/persona-store-global.ts
+      purpose: "pf-06's read function, called directly by this subcommand — no new store-access logic needed."
+
+files_to_modify:
+  - file: bin/mnemosyne-persona.mjs
+    change: "Add `show <tier> <scope-id>` subcommand."
+  - file: test/persona-cli.mjs
+    change: "Extend with show subcommand's read-only and live-read tests."
+
+design_decisions:
+  - decision: "persona show is the harness-agnostic fetch contract that any future adapter (per design-discussion.md §7a) would call instead of reading persona YAML files directly."
+    rationale: "design-discussion.md §7a: 'H5's query-up/persona show mechanism already supports either style' of future adapter — this story is what makes that concretely true, not just a design intention."
+
+cross_cutting: []
+
+risks: []
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-foundation/docs/horizontal-plan.md
+    relevant_excerpt: |
+      H5.3: An agent following the rendered pointer calls this (via the CLI
+      verb, not by writing new vector-recall integration) to actually
+      retrieve the parent tier's content when it's needed for a specific
+      decision.

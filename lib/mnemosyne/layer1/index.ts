@@ -1,5 +1,8 @@
-export { TIERS, TIER_CONTENT, getTierContent, renderTierContentMarkdown } from './tiers.js';
+export { TIERS, TIER_CONTENT, renderTierContentMarkdown } from './tiers.js';
 export type { Tier, TierContent, TierContentSection } from './tiers.js';
+
+export { PERSONA_STORE_BY_TIER, assertValidPersona, getPersonaContent } from './persona.js';
+export type { Persona, PersonaContentContext, PersonaStoreKind } from './persona.js';
 
 export { HARNESS_TARGETS, getHarnessTarget } from './harness.js';
 export type { HarnessId, HarnessTarget } from './harness.js';
