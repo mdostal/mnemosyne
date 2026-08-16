@@ -16,16 +16,54 @@
  *   GET  /health            -> layer availability status
  *   GET  /layers            -> the resolved layer stack (pl-03-layer-ab-testing):
  *                               names in cascade order + write-capability per layer
+ *   GET  /persona           -> list personas (pw-02-get-persona-routes-cors):
+ *                               global tiers by default, or ?repo=<path>'s
+ *                               code-architect personas -- wraps pw-01's
+ *                               listGlobalPersonas/listRepoLocalPersonas
+ *                               directly, no re-implementation
+ *   GET  /persona/:tier/:scopeId  -> read one persona (?repo=<path> required
+ *                               for tier=code-architect) -- wraps
+ *                               readGlobalPersona/readRepoLocalPersona
+ *   POST /persona/:tier/:scopeId  -> write one persona (pw-15-post-persona-
+ *                               routes): body is the persona candidate
+ *                               itself ({tier, scopeId, displayName, scope,
+ *                               sections, parentRefs?} -- the same bare
+ *                               shape the CLI's --file YAML / MCP's
+ *                               persona_create / skill-harness's
+ *                               personaCreateAction already accept), plus an
+ *                               optional `repo` field (or ?repo= query,
+ *                               required for tier=code-architect) -- wraps
+ *                               writeGlobalPersona/writeRepoLocalPersona
+ *                               directly, the 4th write-capable transport
+ *                               alongside CLI/MCP/skill-harness
  *   POST /recall  {query, scope, intent?}            -> RecallResult
  *   POST /remember {content: {text, metadata?}, scope, layer?} -> RememberResult
  *
  * No authentication — localhost-only for this slice; auth is future work.
+ *
+ * CORS: /persona/* and /layers responses carry an Access-Control-Allow-Origin
+ * header (pw-02-get-persona-routes-cors; extended to /layers by
+ * pw-04-layer-stack-visibility) -- the standalone UI is served from
+ * src/server.mjs on a DIFFERENT port (8477 by default) than this service
+ * (3141 by default), so a browser fetch from the UI to either is a real
+ * cross-origin request that gets silently blocked without it. Scoped to the
+ * UI's known origins (127.0.0.1:8477, localhost:8477), never a wildcard "*"
+ * -- see UI_ORIGINS/applyPersonaCors below.
  */
 
 import http from 'node:http';
 import { stat } from 'node:fs/promises';
 import { MnemosyneClient } from './client.js';
 import type { Layer, Scope } from './interfaces.js';
+import { PERSONA_STORE_BY_TIER } from './layer1/persona.js';
+import { listGlobalPersonas, readGlobalPersona, writeGlobalPersona } from './layer1/persona-store-global.js';
+import {
+  listRepoLocalPersonas,
+  readRepoLocalPersona,
+  REPO_LOCAL_PERSONA_TIER,
+  writeRepoLocalPersona,
+} from './layer1/persona-store-repo-local.js';
+import { TIERS, type Tier } from './layer1/tiers.js';
 
 const PORT = Number(process.env.MNEMOSYNE_PORT || 3141);
 const ROOT_DIRECTORY = process.env.MNEMOSYNE_ROOT_DIR || process.cwd();
@@ -58,6 +96,32 @@ const LAYERS: ReadonlySet<Layer> = new Set([
   // other optional layer in this set (see comment above).
   'keyword',
 ]);
+
+// pw-02-get-persona-routes-cors: the standalone UI's real, known origins
+// (src/server.mjs's static /ui handler, default PORT 8477 -- confirmed by
+// reading that file, not guessed). Deliberately an allow-list, not "*": a
+// wildcard would work for a locally-run tool but is looser than necessary
+// (vertical-plan.md's stated recommendation) -- reflected back verbatim only
+// when the request's Origin header is an exact match to one of these.
+const UI_ORIGINS: ReadonlySet<string> = new Set(['http://127.0.0.1:8477', 'http://localhost:8477']);
+
+/**
+ * Sets Access-Control-Allow-Origin (scoped, never "*") on /persona/*
+ * responses when the request's Origin header matches one of UI_ORIGINS.
+ * `res.setHeader` here merges with the headers object `sendJson`'s later
+ * `res.writeHead` call passes (Node merges setHeader()-set headers with
+ * writeHead()'s, precedence to writeHead() only on a literal key clash --
+ * there is none here), so calling this before `sendJson`/`badRequest` is
+ * sufficient. No-op (sends no CORS header at all) for any other origin --
+ * this is the "scoped, not wildcarded" contract pw-02 requires.
+ */
+function applyPersonaCors(req: http.IncomingMessage, res: http.ServerResponse): void {
+  const origin = req.headers.origin;
+  if (typeof origin === 'string' && UI_ORIGINS.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+  }
+}
 
 const client = new MnemosyneClient({ rootDirectory: ROOT_DIRECTORY });
 
@@ -133,6 +197,28 @@ const server = http.createServer(async (req, res) => {
   const route = `${req.method} ${url.pathname}`;
 
   try {
+    // CORS preflight (pw-17 follow-up): a browser sends a real OPTIONS
+    // preflight before POST /persona/:tier/:scopeId, since that request
+    // carries a `content-type: application/json` body -- one of the
+    // conditions that makes a cross-origin request non-"simple" per the
+    // Fetch spec, requiring the browser to get an explicit go-ahead first.
+    // Without an OPTIONS handler here, that preflight fell through to the
+    // 404 catch-all below with no CORS header on it, so the browser blocked
+    // the real POST before it was ever sent -- discovered when pw-17's UI
+    // write form was checked against this server directly rather than only
+    // against unit tests that call fetch() server-side (which never enforce
+    // preflight the way a real browser does). Scoped to /persona/*, the
+    // only route this UI actually POSTs cross-origin with a JSON body;
+    // reuses applyPersonaCors as-is (same allow-listed origins, same
+    // scoped-not-wildcard posture), never a second CORS implementation.
+    if (req.method === 'OPTIONS' && url.pathname.startsWith('/persona/')) {
+      applyPersonaCors(req, res);
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'content-type');
+      res.writeHead(204);
+      return res.end();
+    }
+
     if (route === 'GET /health') {
       const layers = [await fileLayerHealth()];
       const ok = layers.every((l) => l.available);
@@ -143,7 +229,161 @@ const server = http.createServer(async (req, res) => {
       // Read-only introspection of what MnemosyneClient actually resolved
       // (registry + config), never a hardcoded/stale echo — see
       // client.ts's getConfiguredLayers() and layers/config.ts.
+      //
+      // pw-04-layer-stack-visibility: this route itself is reused exactly
+      // as Epic pl-03 shipped it (no new route, no new logic) -- but the
+      // Personas panel's layer-stack section is the first browser caller,
+      // and pw-02-get-persona-routes-cors's CORS fix was scoped only to
+      // /persona/* (server.ts's route review for that story explicitly
+      // confirmed "GET /layers confirmed untouched"). Without the same
+      // Access-Control-Allow-Origin header applied here, the same
+      // cross-origin block vertical-plan.md's Decision 1 already
+      // identified for /persona/* would silently break this route's only
+      // browser consumer too. Reusing applyPersonaCors as-is (same
+      // allow-listed origins, same scoped-not-wildcard posture) rather
+      // than duplicating its logic.
+      applyPersonaCors(req, res);
       return sendJson(res, 200, { layers: client.getConfiguredLayers() });
+    }
+
+    if (route === 'GET /persona') {
+      // pw-02-get-persona-routes-cors: no ?repo -> global tiers
+      // (top-orchestrator/company-director/project-orchestrator), wrapping
+      // pw-01's listGlobalPersonas directly. ?repo=<path> SWITCHES to that
+      // repo's code-architect personas (listRepoLocalPersonas) -- not
+      // merged with the global list (vertical-plan.md's Resolved
+      // Ambiguities #2: "?repo= switches to repo-local").
+      applyPersonaCors(req, res);
+      const repo = url.searchParams.get('repo');
+      if (repo) {
+        const personas = listRepoLocalPersonas(repo).map((p) => ({
+          tier: REPO_LOCAL_PERSONA_TIER,
+          scopeId: p.scopeId,
+        }));
+        return sendJson(res, 200, { personas });
+      }
+      return sendJson(res, 200, { personas: listGlobalPersonas() });
+    }
+
+    if (req.method === 'GET' && url.pathname.startsWith('/persona/')) {
+      // GET /persona/:tier/:scopeId -- read one persona back, wrapping
+      // readGlobalPersona/readRepoLocalPersona directly (no re-implemented
+      // parsing/validation -- pw-01's write-path non-duplication concern
+      // applies equally to these read wrappers).
+      applyPersonaCors(req, res);
+      const segments = url.pathname.slice('/persona/'.length).split('/').filter(Boolean);
+      if (segments.length !== 2) {
+        return sendJson(res, 404, { error: { code: 'not_found', message: `no route for ${route}` } });
+      }
+      const [tierParam, scopeId] = segments as [string, string];
+      if (!(TIERS as readonly string[]).includes(tierParam)) {
+        return badRequest(res, 'invalid_tier', `"tier" must be one of: ${TIERS.join(', ')}`);
+      }
+      const tier = tierParam as Tier;
+
+      try {
+        if (PERSONA_STORE_BY_TIER[tier] === 'global') {
+          return sendJson(res, 200, { persona: readGlobalPersona(tier, scopeId) });
+        }
+        // repo-local (code-architect): requires ?repo=<path> -- there is no
+        // ambient "current repo" for this HTTP service to guess at.
+        const repo = url.searchParams.get('repo');
+        if (!repo) {
+          return badRequest(res, 'missing_repo', '"repo" query parameter is required to read a code-architect persona');
+        }
+        return sendJson(res, 200, { persona: readRepoLocalPersona(repo, scopeId) });
+      } catch (error) {
+        // readGlobalPersona/readRepoLocalPersona throw for "no persona at
+        // this path" (and for on-disk schema-validation failure) -- both are
+        // "this persona is not available", i.e. 404, not a 500.
+        return sendJson(res, 404, {
+          error: {
+            code: 'persona_not_found',
+            message: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
+    }
+
+    if (req.method === 'POST' && url.pathname.startsWith('/persona/')) {
+      // POST /persona/:tier/:scopeId -- pw-15-post-persona-routes: the 4th
+      // write-capable transport alongside CLI/MCP/skill-harness. Wraps
+      // writeGlobalPersona/writeRepoLocalPersona directly -- no
+      // re-implemented validation/locking logic here, the exact same
+      // "wrap, never re-derive" principle the GET routes above already
+      // follow. Reuses applyPersonaCors as-is (no second CORS block).
+      applyPersonaCors(req, res);
+      const segments = url.pathname.slice('/persona/'.length).split('/').filter(Boolean);
+      if (segments.length !== 2) {
+        return sendJson(res, 404, { error: { code: 'not_found', message: `no route for ${route}` } });
+      }
+      const [tierParam, urlScopeId] = segments as [string, string];
+      if (!(TIERS as readonly string[]).includes(tierParam)) {
+        return badRequest(res, 'invalid_tier', `"tier" must be one of: ${TIERS.join(', ')}`);
+      }
+      const tier = tierParam as Tier;
+
+      let body: Record<string, unknown>;
+      try {
+        body = await readJsonBody(req);
+      } catch (error) {
+        const e = error as HttpError;
+        return badRequest(res, e.code ?? 'invalid_body', e.message);
+      }
+
+      // The request body IS the persona candidate itself -- the same bare
+      // {tier, scopeId, displayName, scope, sections, parentRefs?} shape the
+      // CLI's --file YAML, MCP's persona_create tool, and skill-harness's
+      // personaCreateAction all already accept, just parsed as JSON instead
+      // of YAML here. `repo`, when present, is THIS route's own routing
+      // metadata (which store to write to) -- not a persona field -- so
+      // it's stripped out before the rest is passed through UNCHANGED as
+      // the write functions' candidate argument. The URL's :tier segment
+      // only selects which store to call (mirrors the GET route's dispatch
+      // above); it is deliberately NOT cross-checked against the body's own
+      // `tier` field here -- that's exactly the "tier/target mismatch" case
+      // writeGlobalPersona/writeRepoLocalPersona's own assertGlobalTier/
+      // assertRepoLocalTier guards already reject (a code-architect
+      // candidate routed at the global store, or vice versa), so re-checking
+      // it here would be the reimplemented-validation this story explicitly
+      // rules out.
+      const { repo: bodyRepo, ...candidate } = body;
+
+      try {
+        if (PERSONA_STORE_BY_TIER[tier] === 'global') {
+          const filePath = writeGlobalPersona(candidate);
+          return sendJson(res, 201, { created: true, store: 'global', tier, scopeId: urlScopeId, path: filePath });
+        }
+        // repo-local (code-architect): requires a repo target -- same
+        // convention as the GET repo-local routes' ?repo=, accepted from
+        // either the request body (`repo`) or the query string (?repo=)
+        // (vertical-plan.md's Resolved Ambiguities #2: "repo-local writes
+        // need repo in the request body or query, same convention as the
+        // GET").
+        const repo = (typeof bodyRepo === 'string' && bodyRepo) || url.searchParams.get('repo');
+        if (!repo) {
+          return badRequest(
+            res,
+            'missing_repo',
+            '"repo" (request body field or query parameter) is required to write a code-architect persona',
+          );
+        }
+        const filePath = writeRepoLocalPersona(repo, candidate);
+        return sendJson(res, 201, { created: true, store: 'repo-local', tier, scopeId: urlScopeId, path: filePath });
+      } catch (error) {
+        // writeGlobalPersona/writeRepoLocalPersona throw -- writing nothing
+        // to disk -- for every validation failure: mandateSections
+        // smuggling, tier/store mismatch, or a schema violation
+        // (persona.ts's assertValidPersona/assertGlobalTier/
+        // assertRepoLocalTier). All of these are "the caller sent an
+        // invalid candidate," i.e. a 400 via the existing badRequest
+        // convention, never a 500.
+        return badRequest(
+          res,
+          'invalid_persona',
+          error instanceof Error ? error.message : String(error),
+        );
+      }
     }
 
     if (route === 'POST /recall') {

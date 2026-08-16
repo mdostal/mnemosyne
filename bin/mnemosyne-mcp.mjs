@@ -60,6 +60,7 @@ import {
   personaSyncAction,
   personaSeedAction,
   personaShowAction,
+  personaCreateAction,
 } from "./mnemosyne-skill-helper.mjs";
 import {
   isGraphifyConfigured,
@@ -230,13 +231,14 @@ export function createServer({ port = DEFAULT_PORT } = {}) {
       : wrapAction(port, (p, { node, depth }) => graphDepsAction(p, node, { depth })),
   );
 
-  // persona_* tools (mnemosyne-persona-mcp-tools) -- unlike every tool above,
-  // these never fetch() the HTTP API at all; they shell out to the already-
-  // tested bin/mnemosyne-persona.mjs CLI (via mnemosyne-skill-helper.mjs's
-  // personaSyncAction/personaSeedAction/personaShowAction), since Layer 1
-  // persona sync/seed/show has no HTTP route (see that file's header for
-  // why). `port` is still threaded through wrapAction for a uniform handler
-  // shape; these three actions ignore it.
+  // persona_* tools (mnemosyne-persona-mcp-tools, extended by pw-07 with
+  // persona_create) -- unlike every tool above, these never fetch() the HTTP
+  // API at all; they shell out to the already-tested bin/mnemosyne-persona.mjs
+  // CLI (via mnemosyne-skill-helper.mjs's personaSyncAction/personaSeedAction/
+  // personaShowAction/personaCreateAction), since Layer 1 persona sync/seed/
+  // show/create has no HTTP route (see that file's header for why). `port` is
+  // still threaded through wrapAction for a uniform handler shape; these four
+  // actions ignore it.
 
   server.registerTool(
     "persona_sync",
@@ -280,6 +282,21 @@ export function createServer({ port = DEFAULT_PORT } = {}) {
       },
     },
     wrapAction(port, (p, { tier, scopeId }) => personaShowAction(p, tier, scopeId)),
+  );
+
+  server.registerTool(
+    "persona_create",
+    {
+      title: "Persona create",
+      description:
+        "Write a full persona candidate (tier/scopeId/displayName/scope/sections/parentRefs?) parsed from --file's YAML into either the global or repo-local persona store -- a thin wrap of pw-06's personaCreateAction, itself a pass-through to `mnemosyne persona create`. --file is required. Without --repo the write routes to the global store; with --repo (required for a code-architect candidate) it routes to that repo's repo-local store. --root overrides the global store's root when --repo is not given (test isolation, mirrors persona_seed's own root). The candidate is passed through UNCHANGED -- a smuggled mandateSections key is rejected by the store's own guard, not stripped here.",
+      inputSchema: {
+        file: z.string().describe("Path to a YAML file containing the full persona candidate"),
+        repo: z.string().optional().describe("Route the write to this repo's repo-local persona store (required for code-architect)"),
+        root: z.string().optional().describe("Override the global persona store's root (only used when repo is not given)"),
+      },
+    },
+    wrapAction(port, personaCreateAction),
   );
 
   return server;

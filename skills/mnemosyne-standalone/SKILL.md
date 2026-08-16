@@ -1,6 +1,6 @@
 ---
 name: mnemosyne-standalone
-description: Drive a standalone Mnemosyne memory-god instance directly from a bare Claude Code session — no Pantheon host required. Starts the service if it isn't already running (health-checked first, never a second instance), then exposes recall, remember, grep, reindex, graph-query, and Layer 1 persona sync/seed/show as thin pass-throughs over Mnemosyne's own HTTP API (or, for persona-*, the already-tested persona CLI). Use when an operator wants to recall/remember/search/reindex/inspect-the-graph/manage-personas via this repo's standalone Mnemosyne without wiring in Pantheon's L2 plugin lifecycle.
+description: Drive a standalone Mnemosyne memory-god instance directly from a bare Claude Code session — no Pantheon host required. Starts the service if it isn't already running (health-checked first, never a second instance), then exposes recall, remember, grep, reindex, graph-query, and Layer 1 persona sync/seed/show/create as thin pass-throughs over Mnemosyne's own HTTP API (or, for persona-*, the already-tested persona CLI). Use when an operator wants to recall/remember/search/reindex/inspect-the-graph/manage-personas via this repo's standalone Mnemosyne without wiring in Pantheon's L2 plugin lifecycle.
 ---
 
 # Mnemosyne Standalone
@@ -19,9 +19,9 @@ by hand.
 
 **Input:** `$ARGUMENTS` names an action (`recall`, `remember`, `grep`,
 `reindex`, `graph-stats`, `graph-edges`, `graph-impact`, `graph-deps`,
-`persona-sync`, `persona-seed`, `persona-show`, or bare `ensure` to just
-start/confirm the service) plus whatever arguments that action needs (see
-the table below).
+`persona-sync`, `persona-seed`, `persona-show`, `persona-create`, or bare
+`ensure` to just start/confirm the service) plus whatever arguments that
+action needs (see the table below).
 
 ## Process
 
@@ -69,8 +69,8 @@ the table below).
 Every `recall`/`remember`/`grep`/`reindex`/`graph-*` action is a **thin
 pass-through** to the corresponding `src/server.mjs` route — same request
 shape, same response shape, no new business logic invented in the skill
-layer. The three `persona-*` actions are a deliberate exception: Layer 1
-persona sync/seed/show has no HTTP route at all (it operates directly
+layer. The four `persona-*` actions are a deliberate exception: Layer 1
+persona sync/seed/show/create has no HTTP route at all (it operates directly
 against the filesystem via TS imports), so they instead shell out to the
 already-tested `bin/mnemosyne-persona.mjs` CLI as a subprocess — same "wrap
 an existing, separately-tested module, invent nothing new here" principle,
@@ -89,6 +89,7 @@ just via a subprocess boundary instead of `fetch()`.
 | `persona-sync` | `node bin/mnemosyne-skill-helper.mjs persona-sync '{"repo":"...","tier":"...","scopeId":"...","dryRun":false}'` | `bin/mnemosyne-persona.mjs sync` (subprocess) |
 | `persona-seed` | `node bin/mnemosyne-skill-helper.mjs persona-seed '{"root":"...","scopeId":"..."}'` | `bin/mnemosyne-persona.mjs seed` (subprocess) |
 | `persona-show` | `node bin/mnemosyne-skill-helper.mjs persona-show <tier> <scopeId>` | `bin/mnemosyne-persona.mjs show` (subprocess) |
+| `persona-create` | `node bin/mnemosyne-skill-helper.mjs persona-create '{"file":"...","repo":"...","root":"..."}'` | `bin/mnemosyne-persona.mjs create` (subprocess) |
 | `ensure` | `node bin/mnemosyne-skill-helper.mjs ensure` | (no route — just the start-check itself) |
 
 `reindex`'s `collection` and at least one `paths[]` entry are required
@@ -104,6 +105,16 @@ tier; for the 3 global tiers (`top-orchestrator`/`company-director`/
 vs-content-source distinction. `persona-show` only reads the 3 global tiers
 (`code-architect` personas live in a repo-local store this action does not
 read).
+
+`persona-create`'s `file` is required — a path to a YAML document with the
+full persona candidate (`{tier, scopeId, displayName, scope, sections,
+parentRefs?}`), passed through unchanged to the underlying store write, so a
+smuggled `mandateSections` key is rejected by the store's own guard, not
+silently stripped here. `repo`, when given, routes the write to the
+repo-local store (required for a `code-architect` candidate); without it,
+the write routes to the global store, and `root` (only meaningful without
+`repo`) overrides that global store's root — mirrors `persona-seed`'s own
+`root`, primarily for test isolation.
 
 ## What this skill is NOT
 

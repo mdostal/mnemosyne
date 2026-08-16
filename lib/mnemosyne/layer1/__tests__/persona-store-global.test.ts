@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { Persona } from '../persona.js';
 import {
   globalPersonaPath,
+  listGlobalPersonas,
   readGlobalPersona,
   writeGlobalPersona,
 } from '../persona-store-global.js';
@@ -132,6 +133,84 @@ describe('writeGlobalPersona / readGlobalPersona', () => {
 
     const readBack = readGlobalPersona('company-director', 'overwrite-check', root);
     expect(readBack.displayName).toBe('v2');
+  });
+});
+
+describe('listGlobalPersonas', () => {
+  it('returns an empty array, not a throw, for a never-written-to (missing) store root', async () => {
+    const root = await makeTempGlobalRoot();
+    // Remove the temp dir itself so `root` doesn't even exist on disk -- the
+    // "fresh/never-seeded environment" case the story calls out.
+    await rm(root, { recursive: true, force: true });
+
+    expect(listGlobalPersonas(root)).toEqual([]);
+  });
+
+  it('returns an empty array for a store root that exists but has no tier subdirectories', async () => {
+    const root = await makeTempGlobalRoot();
+    expect(listGlobalPersonas(root)).toEqual([]);
+  });
+
+  it('returns every persona present across multiple tiers with correct {tier, scopeId} pairs', async () => {
+    const root = await makeTempGlobalRoot();
+    const companyDirector = validCompanyDirectorPersona({ scopeId: 'pantheon' });
+    const topOrchestrator = validCompanyDirectorPersona({
+      tier: 'top-orchestrator',
+      scopeId: 'auriga',
+      displayName: 'Top Orchestrator (Auriga)',
+    });
+    const projectOrchestrator = validCompanyDirectorPersona({
+      tier: 'project-orchestrator',
+      scopeId: 'mnemosyne',
+      displayName: 'Project Orchestrator — mnemosyne',
+    });
+
+    writeGlobalPersona(companyDirector, root);
+    writeGlobalPersona(topOrchestrator, root);
+    writeGlobalPersona(projectOrchestrator, root);
+
+    const listed = listGlobalPersonas(root);
+    expect(listed).toHaveLength(3);
+    expect(listed).toEqual(
+      expect.arrayContaining([
+        { tier: 'company-director', scopeId: 'pantheon' },
+        { tier: 'top-orchestrator', scopeId: 'auriga' },
+        { tier: 'project-orchestrator', scopeId: 'mnemosyne' },
+      ]),
+    );
+  });
+
+  it('lists multiple scopeIds within the same tier', async () => {
+    const root = await makeTempGlobalRoot();
+    writeGlobalPersona(validCompanyDirectorPersona({ scopeId: 'pantheon' }), root);
+    writeGlobalPersona(validCompanyDirectorPersona({ scopeId: 'other-co' }), root);
+
+    const listed = listGlobalPersonas(root);
+    expect(listed).toHaveLength(2);
+    expect(listed).toEqual(
+      expect.arrayContaining([
+        { tier: 'company-director', scopeId: 'pantheon' },
+        { tier: 'company-director', scopeId: 'other-co' },
+      ]),
+    );
+  });
+
+  it('ignores non-.yaml files in a tier directory', async () => {
+    const root = await makeTempGlobalRoot();
+    writeGlobalPersona(validCompanyDirectorPersona({ scopeId: 'pantheon' }), root);
+
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(path.join(root, 'company-director', 'README.md'), 'not a persona', 'utf8');
+
+    const listed = listGlobalPersonas(root);
+    expect(listed).toEqual([{ tier: 'company-director', scopeId: 'pantheon' }]);
+  });
+
+  it('defaults to DEFAULT_GLOBAL_PERSONA_ROOT when no root is given', () => {
+    // Just confirms the default-root call shape doesn't throw -- the real
+    // $HOME store is very likely empty/missing in CI, which is exactly the
+    // "not an error" case this story cares about.
+    expect(() => listGlobalPersonas()).not.toThrow();
   });
 });
 

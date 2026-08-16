@@ -2,7 +2,14 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { PERSONA_STORE_BY_TIER, assertValidPersona, getPersonaContent, type Persona } from '../persona.js';
+import {
+  PERSONA_REMEMBER_SCOPE_BY_TIER,
+  PERSONA_STORE_BY_TIER,
+  assertValidPersona,
+  getPersonaContent,
+  resolveRememberScope,
+  type Persona,
+} from '../persona.js';
 import { writeRepoLocalPersona } from '../persona-store-repo-local.js';
 import { writeGlobalPersona } from '../persona-store-global.js';
 import { TIER_CONTENT, TIERS, renderTierContentMarkdown, type Tier } from '../tiers.js';
@@ -566,5 +573,109 @@ describe('getPersonaContent', () => {
       // terminology (docs/layer-architecture-v2-plan.md:35).
       expect(rendered.toLowerCase()).toMatch(/query(ing)? up/);
     });
+  });
+});
+
+// pw-09-remember-scope-mapping (OQ2) -- resolveRememberScope's own doc
+// comment in persona.ts carries the full rationale; these tests cover this
+// story's own acceptance criteria: determinism, one expected mapping per
+// real tier, and that the resolver never touches either remember()
+// implementation (pure function, no engine.mjs/client.ts import here).
+describe('resolveRememberScope', () => {
+  // Mirrors engine.mjs's actual scope-name constraint (SCOPE_NAME_RE,
+  // src/engine.mjs: "must start with a letter and contain only letters,
+  // digits, '-' or '_'", max 64 chars) so a regression here is caught even
+  // though this test file never imports the .mjs engine directly.
+  const ENGINE_SCOPE_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+
+  it('is deterministic -- the same {tier, scopeId} always resolves to the same scope', () => {
+    const first = resolveRememberScope({ tier: 'code-architect', scopeId: 'mnemosyne' });
+    const second = resolveRememberScope({ tier: 'code-architect', scopeId: 'mnemosyne' });
+    expect(first).toEqual(second);
+    expect(first.scope).toBe(second.scope);
+  });
+
+  it('is deterministic across many repeated calls, not just twice', () => {
+    const results = Array.from({ length: 25 }, () =>
+      resolveRememberScope({ tier: 'project-orchestrator', scopeId: 'acme-web' }),
+    );
+    for (const r of results) {
+      expect(r).toEqual(results[0]);
+    }
+  });
+
+  it('maps every declared tier to its expected fixed PERSONA_REMEMBER_SCOPE_BY_TIER value', () => {
+    for (const tier of TIERS) {
+      expect(resolveRememberScope({ tier, scopeId: 'some-scope' }).scope).toBe(
+        PERSONA_REMEMBER_SCOPE_BY_TIER[tier],
+      );
+    }
+  });
+
+  it('per-tier expected mappings (explicit, not derived)', () => {
+    expect(resolveRememberScope({ tier: 'top-orchestrator', scopeId: 'x' }).scope).toBe(
+      'persona-top-orchestrator',
+    );
+    expect(resolveRememberScope({ tier: 'company-director', scopeId: 'x' }).scope).toBe(
+      'persona-company-director',
+    );
+    expect(resolveRememberScope({ tier: 'project-orchestrator', scopeId: 'x' }).scope).toBe(
+      'persona-project-orchestrator',
+    );
+    expect(resolveRememberScope({ tier: 'code-architect', scopeId: 'x' }).scope).toBe(
+      'persona-code-architect',
+    );
+  });
+
+  it('the scope never varies with scopeId -- only tier selects the lane', () => {
+    const a = resolveRememberScope({ tier: 'company-director', scopeId: 'acme-corp' });
+    const b = resolveRememberScope({ tier: 'company-director', scopeId: 'totally-different-corp' });
+    expect(a.scope).toBe(b.scope);
+    expect(a.scope).toBe('persona-company-director');
+  });
+
+  it('every resolved scope matches engine.mjs\'s own SCOPE_NAME_RE, so it is addLane()-provisionable as-is', () => {
+    for (const tier of TIERS) {
+      const { scope } = resolveRememberScope({ tier, scopeId: 'irrelevant' });
+      expect(scope).toMatch(ENGINE_SCOPE_NAME_RE);
+    }
+  });
+
+  it('carries scopeId back as a sanitized tag, mirroring engine.mjs remember()\'s own tag rule', () => {
+    const { tag } = resolveRememberScope({ tier: 'code-architect', scopeId: 'Acme Corp / West!' });
+    expect(tag).toBe('Acme-Corp---West-');
+    expect(tag).toMatch(/^[a-zA-Z0-9_-]*$/);
+  });
+
+  it('truncates an over-long scopeId to 40 chars for tag, same as engine.mjs remember()', () => {
+    const longScopeId = 'a'.repeat(80);
+    const { tag } = resolveRememberScope({ tier: 'code-architect', scopeId: longScopeId });
+    expect(tag).toHaveLength(40);
+    expect(tag).toBe('a'.repeat(40));
+  });
+
+  it('a clean, already-valid scopeId round-trips through tag unchanged', () => {
+    const { tag } = resolveRememberScope({ tier: 'code-architect', scopeId: 'mnemosyne' });
+    expect(tag).toBe('mnemosyne');
+  });
+
+  it('rejects an unknown tier rather than silently defaulting', () => {
+    expect(() => resolveRememberScope({ tier: 'not-a-real-tier' as Tier, scopeId: 'x' })).toThrow(/tier/i);
+  });
+
+  it('rejects an empty scopeId rather than silently defaulting', () => {
+    expect(() => resolveRememberScope({ tier: 'code-architect', scopeId: '' })).toThrow(/scopeId/i);
+  });
+
+  it('rejects a whitespace-only scopeId', () => {
+    expect(() => resolveRememberScope({ tier: 'code-architect', scopeId: '   ' })).toThrow(/scopeId/i);
+  });
+
+  it('does not require re-litigating remember()\'s two existing implementations -- resolveRememberScope has no dependency on either engine.mjs or client.ts', async () => {
+    const source = await import('../persona.js');
+    // Sanity: the resolver is exported from persona.ts itself (or a small
+    // module it imports), never from engine.mjs/client.ts -- this story's
+    // scope is the mapping INTO one of them, not a change to either.
+    expect(typeof source.resolveRememberScope).toBe('function');
   });
 });

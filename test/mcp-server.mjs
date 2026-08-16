@@ -72,6 +72,7 @@ async function main() {
       "graph_impact",
       "graph_stats",
       "grep",
+      "persona_create",
       "persona_seed",
       "persona_show",
       "persona_sync",

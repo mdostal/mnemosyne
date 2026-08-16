@@ -6,6 +6,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Persona } from '../persona.js';
 import {
+  listRepoLocalPersonas,
   readRepoLocalPersona,
   repoLocalPersonaPath,
   writeRepoLocalPersona,
@@ -136,6 +137,43 @@ describe('writeRepoLocalPersona / readRepoLocalPersona', () => {
 
     const readBack = readRepoLocalPersona(root, 'overwrite-check');
     expect(readBack.displayName).toBe('v2');
+  });
+});
+
+describe('listRepoLocalPersonas', () => {
+  it('returns an empty array, not a throw, for a never-written-to (missing) store directory', async () => {
+    const root = await makeTempRepoRoot();
+    expect(listRepoLocalPersonas(root)).toEqual([]);
+  });
+
+  it('returns an empty array, not a throw, when the repoRoot itself does not exist', async () => {
+    const root = await makeTempRepoRoot();
+    await rm(root, { recursive: true, force: true });
+
+    expect(listRepoLocalPersonas(root)).toEqual([]);
+  });
+
+  it('returns every scopeId present in a populated store', async () => {
+    const root = await makeTempRepoRoot();
+    writeRepoLocalPersona(root, validCodeArchitectPersona({ scopeId: 'mnemosyne' }));
+    writeRepoLocalPersona(root, validCodeArchitectPersona({ scopeId: 'other-repo' }));
+
+    const listed = listRepoLocalPersonas(root);
+    expect(listed).toHaveLength(2);
+    expect(listed).toEqual(
+      expect.arrayContaining([{ scopeId: 'mnemosyne' }, { scopeId: 'other-repo' }]),
+    );
+  });
+
+  it('ignores non-.yaml files in the personas directory', async () => {
+    const root = await makeTempRepoRoot();
+    writeRepoLocalPersona(root, validCodeArchitectPersona({ scopeId: 'mnemosyne' }));
+
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(path.join(root, '.mnemosyne', 'personas', 'README.md'), 'not a persona', 'utf8');
+
+    const listed = listRepoLocalPersonas(root);
+    expect(listed).toEqual([{ scopeId: 'mnemosyne' }]);
   });
 });
 

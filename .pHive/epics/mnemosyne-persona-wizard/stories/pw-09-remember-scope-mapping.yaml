@@ -1,0 +1,110 @@
+id: pw-09-remember-scope-mapping
+epic: mnemosyne-persona-wizard
+title: "remember()-scope mapping decision + resolver (OQ2)"
+status: complete
+complexity: medium
+methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-15 (commit af47ca8, built directly on the branch).
+  Independently verified: read the actual resolveRememberScope()
+  implementation and its rationale comment in full, confirmed the tag
+  sanitization regex is byte-identical to engine.mjs's own opts.tag rule
+  (src/engine.mjs:484), confirmed the four fixed lane names all satisfy
+  engine.mjs's SCOPE_NAME_RE (src/engine.mjs:710), confirmed zero imports
+  from either remember() implementation (pure mapping function only), and
+  confirmed the design-discussion.md §8 addendum documents the decision
+  legibly (target: engine.mjs's free-form lane vocabulary via
+  src/server.mjs's real skill-reachable POST /remember, not client.ts's
+  closed Scope union on the separate, skill-unreachable port-3141
+  process; tier alone selects one of 4 fixed lanes, scopeId returned as a
+  sanitized tag rather than folded into the scope string, to avoid
+  unbounded per-persona lane provisioning). Reran tsc --noEmit (clean) and
+  vitest lib/mnemosyne/layer1 (163/163, including 65/65 in
+  persona.test.ts) myself. Deterministic, matches H7 option (b). All
+  acceptance criteria met.
+depends_on: [pw-08-cross-transport-roundtrip]
+
+description: |
+  Resolves design-discussion.md's OQ2, the epic's one genuinely blocking
+  open question (scoped to Slice 3 only, per the design discussion's
+  correction): how does a persona's {tier, scopeId} map to a remember()
+  call's scope argument? No existing convention to lean on -- src/engine.mjs's
+  remember() takes a free-form lane name; lib/mnemosyne/client.ts's
+  MnemosyneClient.remember() takes a closed Scope = 'project'|'enterprise'|
+  'meta' union. Neither maps onto persona {tier, scopeId} today.
+
+  Independent of pw-10 (interview mechanics) -- no code dependency either
+  direction, per vertical-plan.md Decision 3. Both depend on pw-08 (Slice 2
+  complete) but not on each other.
+
+acceptance_criteria:
+  - "A documented, code-enforced mapping exists from {tier, scopeId} to a remember() scope -- not an ad-hoc per-call guess inside the interview skill"
+  - "The same {tier, scopeId} always resolves to the same remember() scope across separate interview runs (deterministic, not randomized or context-dependent)"
+  - "The mapping's rationale is written down durably -- a code comment or a design-discussion addendum, not just a commit message"
+  - "The resolver does not require re-litigating remember()'s two existing implementations wholesale -- this story's scope is the mapping INTO one of them, not a remember() rewrite"
+
+steps:
+  - id: research
+    description: Re-read src/engine.mjs's remember(text, scope, opts) and lib/mnemosyne/client.ts's MnemosyneClient.remember(content, scope, layer?) signatures in full, plus horizontal-plan.md H7's three candidate option set, before making the decision.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for the resolver function's determinism (same input always produces same output) and for each real persona tier's expected mapping, once the decision is made.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      Make the decision (pick one of horizontal-plan.md H7's candidate
+      options, or a reasoned variant), implement a small resolver function,
+      and document the rationale in a code comment near the resolver
+      AND as a short addendum in design-discussion.md.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the decision doesn't require rewriting either remember() implementation, and that the rationale is genuinely documented (not just implied by the code).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: src/engine.mjs
+      purpose: "remember(text, scope, opts) -- free-form lane-name scope vocabulary (line 429)."
+    - path: lib/mnemosyne/client.ts
+      purpose: "MnemosyneClient.remember(content, scope, layer?) -- closed Scope union 'project'|'enterprise'|'meta' (line 447)."
+    - path: lib/mnemosyne/layer1/persona.ts
+      purpose: "Persona's {tier, scopeId} shape -- the input side of the mapping this story resolves."
+
+files_to_modify:
+  - file: lib/mnemosyne/layer1/persona.ts
+    change: "New resolver function (or a new small module) mapping {tier, scopeId} to a remember()-compatible scope."
+  - file: .pHive/epics/mnemosyne-persona-wizard/docs/design-discussion.md
+    change: "Short addendum documenting the resolved mapping and its rationale."
+  - file: lib/mnemosyne/layer1/__tests__/persona.test.ts
+    change: "New resolver determinism + per-tier mapping tests."
+
+design_decisions:
+  - decision: "This story owns the decision itself, not just the implementation -- horizontal-plan.md H7 explicitly left the decision unmade ('explicitly out of scope for this planning pass'), naming 3 candidate options."
+    rationale: "design-discussion.md's own bar: 'a wizard that guesses wrong here writes memory into the wrong lane silently... needs a real decision, not an assumption.'"
+
+cross_cutting:
+  - concern: documentation
+    action: "Document the resolved mapping's rationale in both a code comment and a design-discussion.md addendum, per this story's own acceptance criteria."
+
+risks:
+  - severity: high
+    description: "A wrong or under-specified mapping here means every future interview-driven remember() call writes into the wrong memory lane, silently -- this is the one open question the design discussion flagged as having no safe default."
+    mitigation: "Explicit determinism tests + durable documentation of the rationale, not a quick implicit choice."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-wizard/docs/horizontal-plan.md
+    relevant_excerpt: |
+      H7: real candidates worth naming as the starting option set: (a) map
+      each global tier to a fixed client.ts Scope value with scopeId folded
+      into remember()'s free-text/metadata; (b) map to engine.mjs's
+      free-form lane vocabulary instead; (c) a hybrid reconciling the two
+      remember() implementations as part of resolving this.

@@ -27,7 +27,7 @@
  * Story: pf-06-global-persona-store-module (epic: mnemosyne-persona-foundation)
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { parse, stringify } from 'yaml';
@@ -112,4 +112,40 @@ export function readGlobalPersona(
   const parsed: unknown = parse(raw);
   assertValidPersona(parsed, tier);
   return parsed;
+}
+
+/**
+ * Enumerates every persona on disk across all three global tiers --
+ * `readdir` + parse of the filename only, no file content is read or
+ * validated (story pw-01-listing-primitives: "readdir + parse only, no
+ * search, filter, or pagination"). A missing `<root>/<tier>` directory is
+ * NOT an error here, unlike `readGlobalPersona`'s missing-FILE contract --
+ * it just means that tier has never been seeded, i.e. legitimately empty. A
+ * missing `root` itself (a fresh/never-seeded environment) is the same case,
+ * one directory level up, and is handled identically.
+ *
+ * The tier list is read from `PERSONA_STORE_BY_TIER` inside the function
+ * body, not at module scope -- persona.ts and this module import each other
+ * (persona.ts consults `globalPersonaPath`/`readGlobalPersona`), so a
+ * module-scope read of `PERSONA_STORE_BY_TIER` can observe it mid-init
+ * depending on which side of the cycle loads first.
+ */
+export function listGlobalPersonas(root: string = DEFAULT_GLOBAL_PERSONA_ROOT): { tier: Tier; scopeId: string }[] {
+  const globalTiers = (Object.keys(PERSONA_STORE_BY_TIER) as Tier[]).filter(
+    (tier) => PERSONA_STORE_BY_TIER[tier] === 'global',
+  );
+  const entries: { tier: Tier; scopeId: string }[] = [];
+  for (const tier of globalTiers) {
+    const tierDir = path.join(root, tier);
+    if (!existsSync(tierDir)) {
+      continue;
+    }
+    for (const fileName of readdirSync(tierDir)) {
+      if (!fileName.endsWith('.yaml')) {
+        continue;
+      }
+      entries.push({ tier, scopeId: fileName.slice(0, -'.yaml'.length) });
+    }
+  }
+  return entries;
 }
