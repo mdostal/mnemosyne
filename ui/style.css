@@ -663,6 +663,107 @@ main {
   font-weight: normal;
 }
 
+/* pu-12-draft-review-approve-ui: unified drafts list -- Actions column
+   button, sourceSummary snippet under a collapsed draft row, and the
+   expandable draft-detail panel (read-only-first gate, edit/approve/discard
+   controls). Scoped entirely to these new classes -- no changes to the
+   #personas-table rules above. */
+.persona-action-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.3rem 0.6rem;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.persona-action-btn:hover,
+.persona-action-btn:focus {
+  opacity: 0.85;
+}
+
+.persona-source-snippet {
+  margin-top: 0.25rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
+.persona-draft-detail-row td {
+  padding: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.persona-draft-panel {
+  padding: 0.75rem 1rem 1rem;
+  background: var(--bg);
+}
+
+.persona-draft-panel h4 {
+  margin: 0.75rem 0 0.35rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.persona-draft-panel h4:first-child {
+  margin-top: 0;
+}
+
+.persona-draft-panel .fields {
+  margin-bottom: 0.5rem;
+}
+
+.persona-draft-provenance {
+  margin: 0 0 0.5rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.persona-draft-source-summary {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.persona-draft-compare-label {
+  margin: 0.5rem 0 0.2rem;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.persona-draft-agent-label {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #10131a;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.persona-draft-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.persona-draft-controls .persona-action-btn.destructive {
+  color: var(--fail);
+}
+
+.persona-draft-status {
+  margin: 0.5rem 0 0;
+}
+
 /* pw-17-personas-panel-write-form: create/edit form, styled to match
    #add-lane-form/#reindex-form's existing convention exactly (scoped
    #persona-form rules only -- no changes to existing rules above). */
