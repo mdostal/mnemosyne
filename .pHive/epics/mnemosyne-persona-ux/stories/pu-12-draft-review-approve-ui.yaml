@@ -1,10 +1,37 @@
 id: pu-12-draft-review-approve-ui
 epic: mnemosyne-persona-ux
 title: Draft review/approve UI (unifies agent-proposed and human-authored drafts)
-status: planned
+status: complete
 complexity: high
 methodology: tdd
 depends_on: [pu-01-multi-swarm-design-exploration, pu-03-draft-persona-routes, pu-10-personas-panel-redesign-shell]
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 9ffb33a). Given this ticket's own named risk
+  (retargeting pw-17's already-shipped form is a real behavior change to
+  existing working code), verified with extra rigor beyond the standard
+  pass: independently grepped ui/app.js myself (via `grep -a`, needed
+  because the file's UTF-8 em-dash content trips default binary detection)
+  and confirmed no fetch() anywhere posts to the real, direct-write
+  /persona/:tier/:scopeId route -- personaForm's submit handler now targets
+  /persona/draft/:tier/:scopeId exclusively and calls loadDrafts() (never
+  loadPersonas()) on success. Read approveDraft()/discardDraft() in full --
+  confirmed both make real fetch() calls to pu-03's actual routes (never a
+  client-side simulation), both require window.confirm() with specific,
+  non-generic copy before firing, and approveDraft()'s success path calls
+  Promise.all([loadDrafts(), loadPersonas()]) reusing the real,
+  unchanged loadPersonas(). Read isAgentProposedDraft() -- confirmed it
+  checks for a real non-empty sourceSummary string (mirroring server.ts's
+  own approve-route condition), not mere key presence, so a human-typed
+  draft can never show a fabricated agent-proposed label. Reran the new
+  persona-draft-review-approve-ui.mjs (58/58, including an explicit
+  never-uses-`disabled`-attribute accessibility gate check) plus all other
+  UI test files and persona-write-form.mjs's own new "no remaining
+  direct-write fetch" regression assertion, myself, in both the builder's
+  worktree and the merged integration worktree -- all passing both times.
+  tsc --noEmit clean both times. vitest lib/mnemosyne/layer1 (246/246) as a
+  broader regression check in both worktrees. Base was current (not stale)
+  at merge time. All acceptance criteria met.
 
 description: |
   Implements horizontal-plan.md H7's draft-review component: the concrete
