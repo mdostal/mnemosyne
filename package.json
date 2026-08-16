@@ -1,6 +1,6 @@
 {
   "name": "mnemosyne",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "description": "Pantheon's Memory god — thin HTTP service wrapping the swarm-memory engine over the Qdrant SSOT (recall / remember / scopes / health).",
   "type": "module",
@@ -51,7 +51,8 @@
     "test:skill-harness": "node test/skill-harness.mjs",
     "test:mcp-server": "node test/mcp-server.mjs",
     "test:graphify-bridge": "node test/graphify-bridge.mjs",
-    "test:mcp-server-graphify": "node test/mcp-server-graphify.mjs"
+    "test:mcp-server-graphify": "node test/mcp-server-graphify.mjs",
+    "test:mcp-server-persona": "node test/mcp-server-persona.mjs"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",

@@ -24,7 +24,7 @@
 //
 // Usage: node test/skill-harness.mjs
 import { spawn } from "node:child_process";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,6 +40,9 @@ import {
   graphEdgesAction,
   graphImpactAction,
   graphDepsAction,
+  personaSyncAction,
+  personaSeedAction,
+  personaShowAction,
 } from "../bin/mnemosyne-skill-helper.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -273,14 +276,96 @@ function stripVolatile(obj) {
 }
 
 // =========================================================================
-// Source-level: no bypass of the HTTP API anywhere in the helper.
+// persona-* action pass-throughs (mnemosyne-persona-mcp-tools): real
+// subprocess correctness against a real (throwaway) $HOME and a real
+// (temp) repo — never the operator's actual ~/.mnemosyne or a real repo.
+// No running Mnemosyne HTTP service is needed for any of this (unlike
+// every action above); the persona CLI operates directly on the
+// filesystem. Mirrors test/persona-cli.mjs's own makeFakeHome()/
+// writeFakeGlobalPersona() pattern so these tests don't re-derive a
+// second convention for the same real risk (accidentally touching
+// ~/.mnemosyne/personas).
+{
+  async function makeFakeHome() {
+    const home = await mkdtemp(path.join(tmpdir(), "mnemosyne-skill-harness-home-"));
+    await mkdir(path.join(home, ".mnemosyne"), { recursive: true });
+    await writeFile(
+      path.join(home, ".mnemosyne", "level0-rules.md"),
+      "# Level 0 fixture\n\nSKILL_HARNESS_LEVEL0_MARKER — pull first, never commit to main.\n",
+      "utf8",
+    );
+    return home;
+  }
+
+  const fakeHome = await makeFakeHome();
+  const fakeRepo = await mkdtemp(path.join(tmpdir(), "mnemosyne-skill-harness-repo-"));
+  const savedHome = process.env.HOME;
+
+  try {
+    // personaSyncAction — code-architect tier, content resolved entirely
+    // under the temp --repo (no $HOME involvement needed for this tier's
+    // content, only for Level 0, which fakeHome already covers).
+    process.env.HOME = fakeHome;
+    const syncResult = await personaSyncAction(RUNNING_PORT, {
+      repo: fakeRepo,
+      tier: "code-architect",
+      scopeId: "skill-harness-scope",
+      dryRun: true,
+    });
+    ok(syncResult.ok === true, `personaSyncAction() (dry-run) succeeds (got ${JSON.stringify(syncResult).slice(0, 200)})`);
+    ok(
+      /would create|would update/.test(syncResult.output),
+      "personaSyncAction() (dry-run) output describes a would-be preview, matching the CLI's own dry-run contract",
+    );
+    ok(
+      !/EACCES|ENOENT|TypeError/.test(syncResult.stderr || ""),
+      "personaSyncAction() (dry-run) produced no unexpected error text on stderr",
+    );
+
+    // personaSeedAction — global tiers, sandboxed via $HOME (personaSeedAction
+    // itself takes no root override; the underlying CLI/store resolve
+    // ~/.mnemosyne/personas from $HOME, which is the fakeHome set above).
+    const seedResult = await personaSeedAction(RUNNING_PORT, {});
+    ok(seedResult.ok === true, `personaSeedAction() succeeds against a fake $HOME (got ${JSON.stringify(seedResult).slice(0, 200)})`);
+    ok(
+      /seed(ed)?\s+top-orchestrator|top-orchestrator\/default/.test(seedResult.output),
+      "personaSeedAction() output reports seeding top-orchestrator's default scope",
+    );
+
+    // personaShowAction — reads back what personaSeedAction just wrote,
+    // proving the two actions' subprocess boundaries genuinely share the
+    // same $HOME-resolved global store, not two disconnected sandboxes.
+    const showResult = await personaShowAction(RUNNING_PORT, "top-orchestrator", "default");
+    ok(showResult.ok === true, `personaShowAction() succeeds reading the just-seeded persona (got ${JSON.stringify(showResult).slice(0, 200)})`);
+    ok(
+      /tier: top-orchestrator/.test(showResult.output) && /scopeId: default/.test(showResult.output),
+      "personaShowAction() output round-trips the seeded persona's real tier/scopeId",
+    );
+
+    // A genuinely unknown persona still comes back ok:false with a clear
+    // stderr message, not a thrown transport error — matching every other
+    // action's "let the underlying failure surface, don't swallow or
+    // rethrow as something else" contract.
+    const missingResult = await personaShowAction(RUNNING_PORT, "company-director", "no-such-scope-ever");
+    ok(missingResult.ok === false, "personaShowAction() on a genuinely unseeded scope returns ok:false, not a thrown error");
+  } finally {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    await rm(fakeHome, { recursive: true, force: true });
+    await rm(fakeRepo, { recursive: true, force: true });
+  }
+}
+
+// =========================================================================
+// Source-level: no bypass of the HTTP API anywhere in the helper, except
+// the deliberate, documented persona-* subprocess exception.
 // =========================================================================
 {
   const { readFile } = await import("node:fs/promises");
   const helperPath = path.join(__dirname, "..", "bin", "mnemosyne-skill-helper.mjs");
   const helperSrc = await readFile(helperPath, "utf8");
-  ok(!/execFile|child_process.*exec\b|from ["'`].*engine\.mjs["'`]/.test(helperSrc),
-    "mnemosyne-skill-helper.mjs never imports engine.mjs and never shells out to a CLI directly (execFile/exec) — every action is a fetch() against the HTTP API");
+  ok(!/from ["'`].*engine\.mjs["'`]/.test(helperSrc),
+    "mnemosyne-skill-helper.mjs never imports engine.mjs — every recall/remember/grep/reindex/graph-* action is a fetch() against the HTTP API");
   // The word "swarm-memory" legitimately appears in this file's own doc
   // comments (explaining what it deliberately does NOT do) — so check the
   // executable code only (comment lines stripped), not prose: no string
@@ -292,7 +377,16 @@ function stripVolatile(obj) {
   ok(!/["'`]swarm-memory["'`]/.test(codeOnly),
     "mnemosyne-skill-helper.mjs's executable code never references the swarm-memory binary as a string literal (no CLI invocation)");
   ok(/spawnFn\(/.test(helperSrc) && /BIN_PATH/.test(helperSrc),
-    "the only process this file spawns is bin/mnemosyne itself (the existing supervised-run entrypoint)");
+    "the only process ensureRunning() spawns is bin/mnemosyne itself (the existing supervised-run entrypoint)");
+  // execFile's ONLY reachable use is personaCliRun's fixed [TSX_BIN,
+  // PERSONA_CLI_PATH, ...args] invocation -- prove that constraint by
+  // construction (both constants referenced in the same call), not just
+  // "execFile exists somewhere" (which the old, now-superseded assertion
+  // above this block used to forbid entirely).
+  ok(/execFileAsync\(TSX_BIN, \[PERSONA_CLI_PATH/.test(helperSrc),
+    "the only execFile() call in this file targets exactly [TSX_BIN, PERSONA_CLI_PATH, ...] — the persona CLI, nothing else");
+  ok((helperSrc.match(/execFileAsync\(/g) || []).length === 1,
+    "execFileAsync is called from exactly one place — personaCliRun — not scattered across multiple shell-out sites");
 }
 
 console.log(fails ? `\n${fails} check(s) failed` : "\nall skill-harness checks passed");
