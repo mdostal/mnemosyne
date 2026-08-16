@@ -198,6 +198,28 @@ async function main() {
       "GET /layers -> every entry has a boolean writable flag",
     );
 
+    // pw-04-layer-stack-visibility: GET /layers is the Personas panel's
+    // layer-stack section's only data source, fetched cross-origin from the
+    // UI (port 8477) exactly like /persona/* is -- same CORS contract,
+    // extended here rather than duplicated (see server.ts's applyPersonaCors
+    // reuse). Mirrors the /persona CORS assertions below.
+    const layersCorsLoopback = await jOrigin("GET", "/layers", UI_ORIGIN_LOOPBACK);
+    ok(
+      layersCorsLoopback.headers.get("access-control-allow-origin") === UI_ORIGIN_LOOPBACK,
+      `GET /layers from ${UI_ORIGIN_LOOPBACK} -> Access-Control-Allow-Origin: ${UI_ORIGIN_LOOPBACK} (got ${layersCorsLoopback.headers.get("access-control-allow-origin")})`,
+    );
+    const layersCorsLocalhost = await jOrigin("GET", "/layers", UI_ORIGIN_LOCALHOST);
+    ok(
+      layersCorsLocalhost.headers.get("access-control-allow-origin") === UI_ORIGIN_LOCALHOST,
+      `GET /layers from ${UI_ORIGIN_LOCALHOST} -> Access-Control-Allow-Origin: ${UI_ORIGIN_LOCALHOST} (got ${layersCorsLocalhost.headers.get("access-control-allow-origin")})`,
+    );
+    const layersCorsDisallowed = await jOrigin("GET", "/layers", DISALLOWED_ORIGIN);
+    ok(
+      layersCorsDisallowed.headers.get("access-control-allow-origin") !== "*" &&
+        layersCorsDisallowed.headers.get("access-control-allow-origin") !== DISALLOWED_ORIGIN,
+      `GET /layers from an unknown origin -> Access-Control-Allow-Origin is NOT a wildcard and does NOT reflect the disallowed origin (got ${layersCorsDisallowed.headers.get("access-control-allow-origin")})`,
+    );
+
     // Runs its own separate server subprocess, so it's independent of this
     // block's child/root cleanup — positioned here (before POST /recall
     // below) for the same reason the GET /layers checks above are: POST

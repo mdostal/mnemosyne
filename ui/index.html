@@ -192,6 +192,52 @@
         </div>
       </div>
     </section>
+    <!-- ================================================================
+         pw-04-layer-stack-visibility: layer-stack visibility section.
+         ADDITIVE / SELF-CONTAINED — built in parallel with pw-03's
+         Personas panel markup (a separate worktree, not merged into this
+         copy of the file yet). This is deliberately its OWN <section>,
+         never folded into a persona list: it shows the currently
+         configured memory LAYER STACK (a different data model from
+         personas — research-brief.md §6) via the ALREADY-SHIPPED
+         GET /layers route, plus a static, view-only Level 0 pointer.
+         When pw-03's Personas panel lands, this section is meant to live
+         within/adjacent to it — kept structurally distinct on purpose, so
+         the merge should be additive, not a rewrite of either side.
+         ================================================================ -->
+    <section id="persona-layer-stack" class="panel panel-wide">
+      <h2>Memory Layer Stack</h2>
+      <p class="panel-hint">
+        The currently configured memory layer stack — not a persona list.
+        Read-only introspection via the existing <code>GET /layers</code>
+        route, shown in cascade order.
+      </p>
+      <p class="panel-status" id="persona-layer-stack-status">loading…</p>
+      <table id="persona-layer-stack-table" hidden>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Layer</th>
+            <th>Writable</th>
+          </tr>
+        </thead>
+        <tbody id="persona-layer-stack-tbody"></tbody>
+      </table>
+      <p class="panel-status" id="persona-layer-stack-empty" hidden>No layers configured.</p>
+
+      <div id="persona-level0-pointer">
+        <h3>Level 0</h3>
+        <p class="panel-hint">
+          Global rules file — view-only here. This UI never offers an edit
+          form for it; edit the file directly on disk.
+        </p>
+        <dl class="fields">
+          <dt>path</dt>
+          <dd id="persona-level0-path">~/.mnemosyne/level0-rules.md</dd>
+        </dl>
+      </div>
+    </section>
+    <!-- ==================== end pw-04 section ======================= -->
   </main>
 
   <footer>

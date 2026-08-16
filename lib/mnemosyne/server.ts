@@ -29,10 +29,11 @@
  *
  * No authentication — localhost-only for this slice; auth is future work.
  *
- * CORS: /persona/* responses carry an Access-Control-Allow-Origin header
- * (pw-02-get-persona-routes-cors) -- the standalone UI is served from
+ * CORS: /persona/* and /layers responses carry an Access-Control-Allow-Origin
+ * header (pw-02-get-persona-routes-cors; extended to /layers by
+ * pw-04-layer-stack-visibility) -- the standalone UI is served from
  * src/server.mjs on a DIFFERENT port (8477 by default) than this service
- * (3141 by default), so a browser fetch from the UI to /persona/* is a real
+ * (3141 by default), so a browser fetch from the UI to either is a real
  * cross-origin request that gets silently blocked without it. Scoped to the
  * UI's known origins (127.0.0.1:8477, localhost:8477), never a wildcard "*"
  * -- see UI_ORIGINS/applyPersonaCors below.
@@ -193,6 +194,20 @@ const server = http.createServer(async (req, res) => {
       // Read-only introspection of what MnemosyneClient actually resolved
       // (registry + config), never a hardcoded/stale echo — see
       // client.ts's getConfiguredLayers() and layers/config.ts.
+      //
+      // pw-04-layer-stack-visibility: this route itself is reused exactly
+      // as Epic pl-03 shipped it (no new route, no new logic) -- but the
+      // Personas panel's layer-stack section is the first browser caller,
+      // and pw-02-get-persona-routes-cors's CORS fix was scoped only to
+      // /persona/* (server.ts's route review for that story explicitly
+      // confirmed "GET /layers confirmed untouched"). Without the same
+      // Access-Control-Allow-Origin header applied here, the same
+      // cross-origin block vertical-plan.md's Decision 1 already
+      // identified for /persona/* would silently break this route's only
+      // browser consumer too. Reusing applyPersonaCors as-is (same
+      // allow-listed origins, same scoped-not-wildcard posture) rather
+      // than duplicating its logic.
+      applyPersonaCors(req, res);
       return sendJson(res, 200, { layers: client.getConfiguredLayers() });
     }
 
