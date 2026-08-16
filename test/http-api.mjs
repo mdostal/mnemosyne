@@ -6,7 +6,7 @@
 // Usage: node test/http-api.mjs
 
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +16,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const TSX = path.join(ROOT, "node_modules", ".bin", "tsx");
 const SERVER = path.join(ROOT, "lib", "mnemosyne", "server.ts");
+const REAL_SERVER = path.join(ROOT, "src", "server.mjs");
+const PU03_FIXTURE_BIN = path.join(__dirname, "fixtures", "fake-swarm-memory-pu03");
 const PORT = 31415;
 const BASE = `http://127.0.0.1:${PORT}`;
 
@@ -115,14 +117,27 @@ async function writeFakeRepoLocalPersona(repoRoot, scopeId, { displayName, scope
 async function readWrittenGlobalPersona(home, tier, scopeId) {
   const filePath = path.join(home, ".mnemosyne", "personas", tier, `${scopeId}.yaml`);
   const raw = await readFile(filePath, "utf8");
-  return { filePath, persona: parseYaml(raw) };
+  return { filePath, raw, persona: parseYaml(raw) };
 }
 
 /** Same as readWrittenGlobalPersona, but for the repo-local store's fixed location. */
 async function readWrittenRepoLocalPersona(repoRoot, scopeId) {
   const filePath = path.join(repoRoot, ".mnemosyne", "personas", `${scopeId}.yaml`);
   const raw = await readFile(filePath, "utf8");
-  return { filePath, persona: parseYaml(raw) };
+  return { filePath, raw, persona: parseYaml(raw) };
+}
+
+/**
+ * pu-03-draft-persona-routes: reads an ACTIVE draft directly off disk at
+ * pu-02's fixed location convention
+ * (`<home>/.mnemosyne/persona-drafts/<tier>/<scopeId>.yaml`) -- same
+ * "independent, direct filesystem read, not just the HTTP response"
+ * convention as readWrittenGlobalPersona above.
+ */
+async function readWrittenDraftPersona(home, tier, scopeId) {
+  const filePath = path.join(home, ".mnemosyne", "persona-drafts", tier, `${scopeId}.yaml`);
+  const raw = await readFile(filePath, "utf8");
+  return { filePath, raw, draft: parseYaml(raw) };
 }
 
 async function waitForHealth(timeoutMs) {
@@ -652,6 +667,324 @@ async function main() {
       `OPTIONS preflight from an unknown origin -> Access-Control-Allow-Origin is NOT a wildcard and does NOT reflect the disallowed origin (got ${preflightDisallowed.headers.get("access-control-allow-origin")})`,
     );
 
+    // =====================================================================
+    // pu-03-draft-persona-routes: GET/POST/DELETE /persona/draft/* -- the
+    // 5 new route branches (list/read/propose/approve/discard). Positioned
+    // here (before POST /recall below), same reasoning as
+    // testHiveMemoryLayerConfigurable/the /persona/* block above: POST
+    // /recall crashes this process on this machine (known, unrelated
+    // better-sqlite3/CodeGraphLayerAdapter issue), so anything after it
+    // never runs.
+    // =====================================================================
+
+    // --- GET /persona/draft (empty) ---------------------------------------
+    const draftListEmpty = await j("GET", "/persona/draft");
+    ok(draftListEmpty.status === 200, `GET /persona/draft (empty) -> 200 (got ${draftListEmpty.status})`);
+    ok(
+      Array.isArray(draftListEmpty.body.drafts) && draftListEmpty.body.drafts.length === 0,
+      `GET /persona/draft (empty) -> drafts: [] (got ${JSON.stringify(draftListEmpty.body.drafts)})`,
+    );
+
+    // GET /persona/draft/:tier/:scopeId on an unseeded identity -> 404
+    // draft_not_found -- NOT persona_not_found (the generic GET
+    // /persona/:tier/:scopeId handler's own 404 code), proving THIS story's
+    // own branch handled the request (route-ordering proof, design-
+    // discussion.md §9 judgment call #7).
+    const draftReadMissing = await j("GET", "/persona/draft/company-director/pu03-no-such-draft");
+    ok(
+      draftReadMissing.status === 404,
+      `GET /persona/draft/:tier/:scopeId (unseeded) -> 404 (got ${draftReadMissing.status})`,
+    );
+    ok(
+      draftReadMissing.body.error?.code === "draft_not_found",
+      `GET /persona/draft/:tier/:scopeId (unseeded) -> error.code === draft_not_found, proving pu-03's own branch intercepted this request, never the generic /persona/:tier/:scopeId handler's persona_not_found (got ${JSON.stringify(draftReadMissing.body.error)})`,
+    );
+
+    // --- POST /persona/draft/:tier/:scopeId (propose, global tier) -------
+    const draftProposeBody = {
+      tier: "company-director",
+      scopeId: "pu03-global-draft",
+      displayName: "PU03 Draft Director",
+      scope: "Owns PU03's draft test scope.",
+      sections: [{ heading: "What this tier owns", body: "PU03_DRAFT_MARKER" }],
+      proposedBy: "human",
+    };
+    const draftPropose = await j("POST", "/persona/draft/company-director/pu03-global-draft", draftProposeBody);
+    ok(
+      draftPropose.status === 201,
+      `POST /persona/draft/company-director/pu03-global-draft -> 201 (got ${draftPropose.status})`,
+    );
+    ok(draftPropose.body.proposed === true, "POST /persona/draft/... -> proposed:true");
+
+    // direct filesystem read confirms pu-02's writeDraftPersona was
+    // ACTUALLY called (the draft file exists at the correct home-rooted
+    // path) -- not just a 200/201 HTTP response.
+    const draftOnDisk = await readWrittenDraftPersona(fakeHome, "company-director", "pu03-global-draft");
+    ok(
+      draftOnDisk.draft.displayName === draftProposeBody.displayName && draftOnDisk.draft.proposedBy === "human",
+      `POST /persona/draft/... -> a REAL on-disk draft file exists at pu-02's fixed location, matching the posted candidate (got ${JSON.stringify(draftOnDisk.draft)})`,
+    );
+    ok(
+      draftOnDisk.filePath === draftPropose.body.path,
+      `POST /persona/draft/... -> response 'path' matches the real on-disk draft file path (got response=${draftPropose.body.path} disk=${draftOnDisk.filePath})`,
+    );
+
+    // a mere propose must NOT touch the real global persona store
+    await readWrittenGlobalPersona(fakeHome, "company-director", "pu03-global-draft").then(
+      () => ok(false, "POST /persona/draft/... (propose) -> must NOT write to the real global persona store"),
+      () => ok(true, "POST /persona/draft/... (propose) -> the real global persona store was NOT touched by a mere propose"),
+    );
+
+    // GET /persona/draft (populated) now includes it, in {tier, scopeId} shape
+    const draftListPopulated = await j("GET", "/persona/draft");
+    ok(
+      draftListPopulated.body.drafts?.some((d) => d.tier === "company-director" && d.scopeId === "pu03-global-draft"),
+      `GET /persona/draft (populated) -> includes the proposed draft (got ${JSON.stringify(draftListPopulated.body.drafts)})`,
+    );
+
+    // GET /persona/draft/:tier/:scopeId reads it back
+    const draftRead = await j("GET", "/persona/draft/company-director/pu03-global-draft");
+    ok(draftRead.status === 200, `GET /persona/draft/company-director/pu03-global-draft -> 200 (got ${draftRead.status})`);
+    ok(
+      draftRead.body.draft?.displayName === draftProposeBody.displayName,
+      "GET /persona/draft/:tier/:scopeId -> round-trips the proposed draft",
+    );
+
+    // proposing again for the same identity overwrites the active draft in
+    // place -- pu-02's "one active draft per identity" contract, never a
+    // second file.
+    const draftOverwriteBody = { ...draftProposeBody, displayName: "PU03 Draft Director (revised)" };
+    const draftOverwrite = await j("POST", "/persona/draft/company-director/pu03-global-draft", draftOverwriteBody);
+    ok(draftOverwrite.status === 201, `POST /persona/draft/... (overwrite) -> 201 (got ${draftOverwrite.status})`);
+    const draftReadAfterOverwrite = await j("GET", "/persona/draft/company-director/pu03-global-draft");
+    ok(
+      draftReadAfterOverwrite.body.draft?.displayName === "PU03 Draft Director (revised)",
+      "POST /persona/draft/... (overwrite) -> the active draft is overwritten in place, not duplicated",
+    );
+
+    // --- POST /persona/draft/:tier/:scopeId/approve -- SUCCESS (human-typed, no sourceSummary) ---
+    const draftApprove = await j("POST", "/persona/draft/company-director/pu03-global-draft/approve", undefined);
+    ok(draftApprove.status === 200, `POST /persona/draft/.../approve -> 200 (got ${draftApprove.status})`);
+    ok(draftApprove.body.approved === true, "POST /persona/draft/.../approve -> approved:true");
+    ok(
+      draftApprove.body.remembered === null,
+      `POST /persona/draft/.../approve (no sourceSummary) -> remembered: null, NO remember() call attempted -- there is no real source material to index (got ${JSON.stringify(draftApprove.body.remembered)})`,
+    );
+
+    // the resulting committed file is byte-for-byte what
+    // POST /persona/:tier/:scopeId would have produced for the same
+    // candidate -- proven against a SEPARATE scopeId written directly via
+    // the existing route, comparing raw YAML text with only the scopeId
+    // difference normalized away.
+    const approvedOnDisk = await readWrittenGlobalPersona(fakeHome, "company-director", "pu03-global-draft");
+    const directEquivalentBody = { ...draftOverwriteBody, scopeId: "pu03-direct-equivalent" };
+    delete directEquivalentBody.proposedBy;
+    await j("POST", "/persona/company-director/pu03-direct-equivalent", directEquivalentBody);
+    const directOnDisk = await readWrittenGlobalPersona(fakeHome, "company-director", "pu03-direct-equivalent");
+    const normalizeScopeId = (raw, scopeId) => raw.split(scopeId).join("SCOPE_ID_PLACEHOLDER");
+    ok(
+      normalizeScopeId(approvedOnDisk.raw, "pu03-global-draft") === normalizeScopeId(directOnDisk.raw, "pu03-direct-equivalent"),
+      `POST /persona/draft/.../approve -> the committed file is byte-for-byte identical to what POST /persona/:tier/:scopeId produces for the same candidate, scopeId difference normalized (approved=${JSON.stringify(approvedOnDisk.raw)} direct=${JSON.stringify(directOnDisk.raw)})`,
+    );
+
+    // the draft is archived (not left active) after approval
+    const draftReadAfterApprove = await j("GET", "/persona/draft/company-director/pu03-global-draft");
+    ok(
+      draftReadAfterApprove.status === 404 && draftReadAfterApprove.body.error?.code === "draft_not_found",
+      `GET /persona/draft/... after approve -> 404 draft_not_found, the draft is no longer active (got ${draftReadAfterApprove.status}, ${JSON.stringify(draftReadAfterApprove.body.error)})`,
+    );
+    // archived via disposeDraftPersona('approved') -- a MOVE, never
+    // fs.unlink: confirm the archive file genuinely exists on disk at
+    // pu-02's approved/ subtree.
+    ok(
+      typeof draftApprove.body.archivedDraftPath === "string" &&
+        draftApprove.body.archivedDraftPath.includes(path.join("persona-drafts", "approved", "company-director")),
+      `POST /persona/draft/.../approve -> archivedDraftPath points at pu-02's approved/ archive subtree, never deleted (got ${draftApprove.body.archivedDraftPath})`,
+    );
+    const archivedRaw = await readFile(draftApprove.body.archivedDraftPath, "utf8");
+    ok(
+      archivedRaw.includes("PU03_DRAFT_MARKER"),
+      "POST /persona/draft/.../approve -> the archived draft file genuinely exists on disk with the original draft content (archive-by-move, not delete)",
+    );
+
+    // --- POST /persona/draft/:tier/:scopeId/approve -- FAILURE (invalid draft, missing displayName) ---
+    const invalidDraftBody = {
+      tier: "company-director",
+      scopeId: "pu03-invalid-draft",
+      scope: "y",
+      sections: [],
+      // displayName deliberately omitted -- fails assertValidPersona
+    };
+    await j("POST", "/persona/draft/company-director/pu03-invalid-draft", invalidDraftBody);
+    const invalidApprove = await j("POST", "/persona/draft/company-director/pu03-invalid-draft/approve", undefined);
+    ok(
+      invalidApprove.status === 400,
+      `POST /persona/draft/.../approve (invalid draft) -> 400 via the existing badRequest convention (got ${invalidApprove.status})`,
+    );
+    ok(
+      invalidApprove.body.error?.code === "invalid_persona",
+      `POST /persona/draft/.../approve (invalid draft) -> error.code === invalid_persona (got ${JSON.stringify(invalidApprove.body.error)})`,
+    );
+    // nothing was written to the real store
+    await readWrittenGlobalPersona(fakeHome, "company-director", "pu03-invalid-draft").then(
+      () => ok(false, "POST /persona/draft/.../approve (invalid draft) -> must NOT write to the real global persona store"),
+      () => ok(true, "POST /persona/draft/.../approve (invalid draft) -> the real global persona store was NOT touched"),
+    );
+    // the draft REMAINS active (not archived) so a human can go fix it
+    const invalidDraftStillActive = await j("GET", "/persona/draft/company-director/pu03-invalid-draft");
+    ok(
+      invalidDraftStillActive.status === 200,
+      `POST /persona/draft/.../approve (invalid draft) -> the draft remains ACTIVE, not archived, so a human can go fix it (GET still finds it, got ${invalidDraftStillActive.status})`,
+    );
+
+    // --- DELETE /persona/draft/:tier/:scopeId (discard) -------------------
+    const discardBody = {
+      tier: "company-director",
+      scopeId: "pu03-discard-me",
+      displayName: "x",
+      scope: "y",
+      sections: [],
+    };
+    await j("POST", "/persona/draft/company-director/pu03-discard-me", discardBody);
+    const discardRes = await fetch(BASE + "/persona/draft/company-director/pu03-discard-me", { method: "DELETE" });
+    const discardResBody = await discardRes.json();
+    ok(discardRes.status === 200, `DELETE /persona/draft/... -> 200 (got ${discardRes.status})`);
+    ok(discardResBody.discarded === true, "DELETE /persona/draft/... -> discarded:true");
+    ok(
+      typeof discardResBody.archivedDraftPath === "string" &&
+        discardResBody.archivedDraftPath.includes(path.join("persona-drafts", "discarded", "company-director")),
+      `DELETE /persona/draft/... -> archivedDraftPath points at pu-02's discarded/ archive subtree -- archive-by-move, never a bare filesystem delete (got ${discardResBody.archivedDraftPath})`,
+    );
+    const discardedFileOnDisk = await readFile(discardResBody.archivedDraftPath, "utf8").catch(() => null);
+    ok(
+      discardedFileOnDisk !== null,
+      "DELETE /persona/draft/... -> the archived file genuinely exists on disk (never fs.unlink'd)",
+    );
+    const discardedNoLongerActive = await j("GET", "/persona/draft/company-director/pu03-discard-me");
+    ok(
+      discardedNoLongerActive.status === 404 && discardedNoLongerActive.body.error?.code === "draft_not_found",
+      "DELETE /persona/draft/... -> no longer appears in the active listing (GET now 404s draft_not_found)",
+    );
+    const discardMissingRes = await fetch(BASE + "/persona/draft/company-director/pu03-no-such-discard", { method: "DELETE" });
+    ok(
+      discardMissingRes.status === 404,
+      `DELETE /persona/draft/... (no active draft) -> 404, not a crash (got ${discardMissingRes.status})`,
+    );
+
+    // --- repo-local (code-architect) drafts --------------------------------
+    const repoDraftBody = {
+      tier: "code-architect",
+      scopeId: "pu03-repo-draft",
+      displayName: "PU03 Repo Draft Architect",
+      scope: "Owns PU03's repo-local draft test scope.",
+      sections: [{ heading: "What this tier owns", body: "PU03_REPO_DRAFT_MARKER" }],
+    };
+    const repoDraftProposeNoRepo = await j("POST", "/persona/draft/code-architect/pu03-repo-draft", repoDraftBody);
+    ok(
+      repoDraftProposeNoRepo.status === 400 && repoDraftProposeNoRepo.body.error?.code === "missing_repo",
+      `POST /persona/draft/code-architect/... with no repo -> 400 missing_repo (got ${repoDraftProposeNoRepo.status}, ${JSON.stringify(repoDraftProposeNoRepo.body.error)})`,
+    );
+    const repoDraftPropose = await j(
+      "POST",
+      `/persona/draft/code-architect/pu03-repo-draft?repo=${encodeURIComponent(root)}`,
+      repoDraftBody,
+    );
+    ok(
+      repoDraftPropose.status === 201,
+      `POST /persona/draft/code-architect/...?repo=... -> 201 (got ${repoDraftPropose.status})`,
+    );
+
+    const repoDraftListNoRepo = await j("GET", "/persona/draft");
+    ok(
+      !repoDraftListNoRepo.body.drafts?.some((d) => d.scopeId === "pu03-repo-draft"),
+      "GET /persona/draft (no ?repo=) -> does NOT include repo-local drafts",
+    );
+    const repoDraftListWithRepo = await j("GET", `/persona/draft?repo=${encodeURIComponent(root)}`);
+    ok(
+      repoDraftListWithRepo.body.drafts?.some((d) => d.tier === "code-architect" && d.scopeId === "pu03-repo-draft"),
+      `GET /persona/draft?repo=... -> ADDS the repo-local draft alongside the global tiers (listDraftPersonas' own contract) (got ${JSON.stringify(repoDraftListWithRepo.body.drafts)})`,
+    );
+
+    const repoDraftApprove = await j(
+      "POST",
+      `/persona/draft/code-architect/pu03-repo-draft/approve?repo=${encodeURIComponent(root)}`,
+      undefined,
+    );
+    ok(
+      repoDraftApprove.status === 200,
+      `POST /persona/draft/code-architect/.../approve?repo=... -> 200 (got ${repoDraftApprove.status})`,
+    );
+    const repoApprovedOnDisk = await readWrittenRepoLocalPersona(root, "pu03-repo-draft");
+    ok(
+      repoApprovedOnDisk.persona.displayName === repoDraftBody.displayName,
+      "POST /persona/draft/code-architect/.../approve -> writeRepoLocalPersona was really called, a real on-disk file matches the drafted candidate",
+    );
+
+    // --- route ordering: /persona/draft/* is intercepted by the NEW
+    // branches, never falls through to the generic /persona/:tier/:scopeId
+    // handlers (design-discussion.md §9 judgment call #7) -- proven
+    // behaviorally above already (draft_not_found vs persona_not_found), and
+    // again here for the approve sub-path specifically.
+    const orderingProbe = await j("POST", "/persona/draft/company-director/pu03-ordering-probe/approve", undefined);
+    ok(
+      orderingProbe.status === 404 && orderingProbe.body.error?.code === "draft_not_found",
+      `route-ordering: POST /persona/draft/:tier/:scopeId/approve is intercepted by pu-03's own branch (error.code=draft_not_found) on a missing draft, never the generic /persona/:tier/:scopeId handler's not_found/invalid_tier (got ${JSON.stringify(orderingProbe.body.error)})`,
+    );
+
+    // --- CORS: applyPersonaCors reused unchanged on every new draft route,
+    // never a second CORS implementation -----------------------------------
+    const draftCorsLoopback = await jOrigin("GET", "/persona/draft", UI_ORIGIN_LOOPBACK);
+    ok(
+      draftCorsLoopback.headers.get("access-control-allow-origin") === UI_ORIGIN_LOOPBACK,
+      `GET /persona/draft from ${UI_ORIGIN_LOOPBACK} -> Access-Control-Allow-Origin: ${UI_ORIGIN_LOOPBACK} (got ${draftCorsLoopback.headers.get("access-control-allow-origin")})`,
+    );
+    const draftCorsDisallowed = await jOrigin("GET", "/persona/draft", DISALLOWED_ORIGIN);
+    ok(
+      draftCorsDisallowed.headers.get("access-control-allow-origin") !== "*" &&
+        draftCorsDisallowed.headers.get("access-control-allow-origin") !== DISALLOWED_ORIGIN,
+      `GET /persona/draft from an unknown origin -> Access-Control-Allow-Origin is NOT a wildcard and does NOT reflect the disallowed origin (got ${draftCorsDisallowed.headers.get("access-control-allow-origin")})`,
+    );
+    const draftItemCors = await jOrigin("GET", "/persona/draft/company-director/pu03-ordering-probe", UI_ORIGIN_LOCALHOST);
+    ok(
+      draftItemCors.headers.get("access-control-allow-origin") === UI_ORIGIN_LOCALHOST,
+      `GET /persona/draft/:tier/:scopeId from ${UI_ORIGIN_LOCALHOST} -> Access-Control-Allow-Origin present and scoped (got ${draftItemCors.headers.get("access-control-allow-origin")})`,
+    );
+    const draftCorsNoOrigin = await jOrigin("GET", "/persona/draft", undefined);
+    ok(
+      draftCorsNoOrigin.headers.get("access-control-allow-origin") !== "*",
+      `GET /persona/draft with no Origin header -> Access-Control-Allow-Origin is never a wildcard (got ${draftCorsNoOrigin.headers.get("access-control-allow-origin")})`,
+    );
+
+    // OPTIONS preflight for /persona/draft/* -- confirms the EXISTING
+    // handler (unchanged) already covers it structurally, since its own
+    // prefix check (url.pathname.startsWith('/persona/')) includes
+    // '/persona/draft/*' with zero changes needed.
+    const draftPreflight = await fetch(BASE + "/persona/draft/company-director/pu03-preflight-probe", {
+      method: "OPTIONS",
+      headers: {
+        origin: UI_ORIGIN_LOOPBACK,
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "content-type",
+      },
+    });
+    ok(
+      draftPreflight.status === 204,
+      `OPTIONS /persona/draft/:tier/:scopeId -> 204, the EXISTING (unmodified) preflight handler covers it (got ${draftPreflight.status})`,
+    );
+    ok(
+      draftPreflight.headers.get("access-control-allow-origin") === UI_ORIGIN_LOOPBACK,
+      `OPTIONS /persona/draft/... preflight -> Access-Control-Allow-Origin: ${UI_ORIGIN_LOOPBACK} (got ${draftPreflight.headers.get("access-control-allow-origin")})`,
+    );
+
+    // --- POST /persona/draft/:tier/:scopeId/approve -- remember()-on-approve
+    // firing (agent-proposed drafts with a real sourceSummary), the pending-
+    // review-window proof, and the "no sourceSummary -> no remember() call"
+    // proof. Runs its own separate pair of subprocesses (a real src/server.mjs
+    // + fake-swarm-memory-pu03 double, plus a second lib/mnemosyne/server.ts
+    // instance pointed at it), so it's independent of this block's
+    // child/root cleanup -- same convention as testHiveMemoryLayerConfigurable.
+    await testDraftPersonaApproveRemember();
+
     // POST /recall -> 200 with RecallResult JSON
     const recall = await j("POST", "/recall", { query: "target", scope: "project" });
     ok(recall.status === 200, `POST /recall -> 200 (got ${recall.status})`);
@@ -768,6 +1101,233 @@ async function testHiveMemoryLayerConfigurable() {
   } finally {
     child.kill();
   }
+}
+
+// testDraftPersonaApproveRemember — pu-03-draft-persona-routes.
+//
+// Proves the approve route's remember()-on-approval firing is REAL, not
+// stubbed: spins up a real src/server.mjs subprocess (the swarm-memory-
+// backed service the approve route's fireDraftApprovalRemember() actually
+// targets), pointed at a dedicated fake-swarm-memory-pu03 double whose
+// `config` provisions the four real persona-* scope lanes
+// PERSONA_REMEMBER_SCOPE_BY_TIER (persona.ts) produces, and whose
+// `index`/`recall` are STATEFUL (see that fixture's own doc comment) --
+// so a recall() query genuinely returns nothing before any remember() call
+// has landed, and genuinely finds it afterward. A second, separate
+// lib/mnemosyne/server.ts instance is pointed at that same swarm-memory
+// service via the PORT env var (fireDraftApprovalRemember's own
+// REMEMBER_SERVICE_PORT convention -- the same env var
+// bin/mnemosyne-skill-helper.mjs/src/server.mjs already use).
+async function testDraftPersonaApproveRemember() {
+  const swarmPort = PORT + 2;
+  const swarmBase = `http://127.0.0.1:${swarmPort}`;
+  const apiPort = PORT + 3;
+  const apiBase = `http://127.0.0.1:${apiPort}`;
+
+  const notesDir = await mkdtemp(path.join(tmpdir(), "mnemosyne-pu03-notes-"));
+  const indexStore = path.join(await mkdtemp(path.join(tmpdir(), "mnemosyne-pu03-index-")), "store.json");
+  const apiRoot = await mkdtemp(path.join(tmpdir(), "mnemosyne-pu03-api-root-"));
+  const apiFakeHome = await mkdtemp(path.join(tmpdir(), "mnemosyne-pu03-api-home-"));
+
+  const swarmChild = spawn(process.execPath, [REAL_SERVER], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      PORT: String(swarmPort),
+      SWARM_MEMORY_BIN: PU03_FIXTURE_BIN,
+      FAKE_SWARM_PU03_INDEX_STORE: indexStore,
+      MNEMOSYNE_NOTES_DIR: notesDir,
+      MNEMO_TEST_NODE: process.execPath,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let swarmOutput = "";
+  swarmChild.stdout.on("data", (c) => (swarmOutput += c));
+  swarmChild.stderr.on("data", (c) => (swarmOutput += c));
+
+  const apiChild = spawn(TSX, [SERVER], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      MNEMOSYNE_PORT: String(apiPort),
+      MNEMOSYNE_ROOT_DIR: apiRoot,
+      HOME: apiFakeHome,
+      PORT: String(swarmPort),
+      SWARM_MEMORY_BIN: "/definitely/missing/swarm-memory",
+      SWARM_MEMORY_GRAPH_DB: path.join(apiRoot, "missing-graph.sqlite"),
+      GRAPHIFY_BIN: "/definitely/missing/graphify-binary-xyz",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let apiOutput = "";
+  apiChild.stdout.on("data", (c) => (apiOutput += c));
+  apiChild.stderr.on("data", (c) => (apiOutput += c));
+
+  try {
+    const swarmUp = await waitForServerReachable(`${swarmBase}/healthz`);
+    ok(swarmUp, "pu-03 remember() proof: real src/server.mjs (swarm-memory-backed) started and is reachable");
+    if (!swarmUp) {
+      console.error(swarmOutput);
+      throw new Error(`pu-03 swarm-memory service never became reachable:\n${swarmOutput}`);
+    }
+
+    const apiUp = await waitForHealth2(apiBase, 15000);
+    ok(apiUp, "pu-03 remember() proof: second lib/mnemosyne/server.ts instance started and is reachable");
+    if (!apiUp) {
+      console.error(apiOutput);
+      throw new Error(`pu-03 API service never became reachable:\n${apiOutput}`);
+    }
+
+    // --- agent-proposed draft WITH a real sourceSummary --------------------
+    const marker = "PU03_REMEMBER_SOURCE_SUMMARY_MARKER";
+    const sourceSummaryBody = {
+      tier: "company-director",
+      scopeId: "pu03-remember-global",
+      displayName: "PU03 Remember Director",
+      scope: "Owns PU03's remember-on-approve test scope.",
+      sections: [{ heading: "What this tier owns", body: "content" }],
+      proposedBy: "agent",
+      proposedAt: new Date().toISOString(),
+      sourceSummary: `README says: ${marker}.`,
+    };
+    const propose = await fetch(`${apiBase}/persona/draft/company-director/pu03-remember-global`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(sourceSummaryBody),
+    });
+    ok(propose.status === 201, `pu-03 remember() proof: propose (with sourceSummary) -> 201 (got ${propose.status})`);
+
+    // --- pending-review window: recall() BEFORE approve returns nothing ---
+    // Independently verifiable proof remember() genuinely has not fired yet
+    // (not merely that this route doesn't claim to have fired it) -- the
+    // fixture's `recall` is stateful, so this is a real "nothing indexed
+    // yet" result, not a static stub.
+    const recallBefore = await fetch(`${swarmBase}/recall`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: marker, scope: "persona-company-director" }),
+    });
+    const recallBeforeBody = await recallBefore.json();
+    ok(
+      recallBeforeBody.total_hits === 0,
+      `pu-03 remember() proof: recall() during the pending-review window (propose called, approve NOT yet called) -> 0 hits, proving remember() has genuinely not fired yet (got total_hits=${recallBeforeBody.total_hits})`,
+    );
+
+    // --- approve: fires the real remember() call --------------------------
+    const approve = await fetch(`${apiBase}/persona/draft/company-director/pu03-remember-global/approve`, {
+      method: "POST",
+    });
+    const approveBody = await approve.json();
+    ok(approve.status === 200, `pu-03 remember() proof: approve (with sourceSummary) -> 200 (got ${approve.status})`);
+    ok(approveBody.approved === true, "pu-03 remember() proof: approved:true");
+    ok(
+      approveBody.remembered?.ok === true,
+      `pu-03 remember() proof: a REAL remember() call fired AFTER the write succeeded, scoped via resolveRememberScope() -- not a stubbed call (got ${JSON.stringify(approveBody.remembered)})`,
+    );
+    ok(
+      approveBody.remembered?.scope === "persona-company-director",
+      `pu-03 remember() proof: remembered.scope comes from resolveRememberScope() (persona.ts), never a hand-copied mapping (got ${approveBody.remembered?.scope})`,
+    );
+    ok(
+      approveBody.remembered?.tag === "pu03-remember-global",
+      `pu-03 remember() proof: remembered.tag === the draft's own scopeId, sanitized (got ${approveBody.remembered?.tag})`,
+    );
+    ok(
+      typeof approveBody.remembered?.file === "string" && approveBody.remembered.file.length > 0,
+      `pu-03 remember() proof: remembered.file is a real on-disk path (got ${JSON.stringify(approveBody.remembered?.file)})`,
+    );
+
+    // its landing is INDEPENDENTLY verifiable: a real note file exists on
+    // disk, read directly (not just trusting the HTTP response).
+    const noteContent = await readFile(approveBody.remembered.file, "utf8");
+    ok(
+      noteContent.includes(marker),
+      "pu-03 remember() proof: the real note file on disk contains the draft's sourceSummary content",
+    );
+    ok(
+      noteContent.includes("pu03-remember-global") && noteContent.includes("company-director"),
+      "pu-03 remember() proof: the real note file identifies the persona draft's own tier/scopeId",
+    );
+
+    // recall() AFTER approve genuinely finds it now (the same stateful
+    // fixture, proving the positive case isn't just an artifact of a static
+    // stub either).
+    const recallAfter = await fetch(`${swarmBase}/recall`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: marker, scope: "persona-company-director" }),
+    });
+    const recallAfterBody = await recallAfter.json();
+    ok(
+      recallAfterBody.total_hits >= 1,
+      `pu-03 remember() proof: recall() AFTER approve genuinely finds the remembered content (got total_hits=${recallAfterBody.total_hits})`,
+    );
+
+    // --- human-typed draft, NO sourceSummary -- NO remember() call fires --
+    const notesBefore = await readdir(notesDir);
+    const humanTypedBody = {
+      tier: "company-director",
+      scopeId: "pu03-remember-human-typed",
+      displayName: "PU03 Human-Typed Director",
+      scope: "Owns PU03's no-sourceSummary test scope.",
+      sections: [{ heading: "What this tier owns", body: "content" }],
+      // no sourceSummary: a human typed this directly into the form
+    };
+    await fetch(`${apiBase}/persona/draft/company-director/pu03-remember-human-typed`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(humanTypedBody),
+    });
+    const humanApprove = await fetch(`${apiBase}/persona/draft/company-director/pu03-remember-human-typed/approve`, {
+      method: "POST",
+    });
+    const humanApproveBody = await humanApprove.json();
+    ok(humanApprove.status === 200, `pu-03 remember() proof: approve (no sourceSummary) -> 200 (got ${humanApprove.status})`);
+    ok(
+      humanApproveBody.remembered === null,
+      `pu-03 remember() proof: a human-typed draft with NO sourceSummary -> remembered: null, no remember() call attempted, no placeholder text invented (got ${JSON.stringify(humanApproveBody.remembered)})`,
+    );
+    const notesAfter = await readdir(notesDir);
+    ok(
+      notesAfter.length === notesBefore.length,
+      `pu-03 remember() proof: approving a draft with no sourceSummary writes NO new note file to disk (before=${notesBefore.length} after=${notesAfter.length})`,
+    );
+  } finally {
+    swarmChild.kill();
+    apiChild.kill();
+    await rm(notesDir, { recursive: true, force: true });
+    await rm(path.dirname(indexStore), { recursive: true, force: true });
+    await rm(apiRoot, { recursive: true, force: true });
+    await rm(apiFakeHome, { recursive: true, force: true });
+  }
+}
+
+async function waitForServerReachable(url, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(url);
+      if (res.status) return true;
+    } catch {
+      // not up yet
+    }
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  return false;
+}
+
+async function waitForHealth2(base, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(base + "/health");
+      if (res.status === 200 || res.status === 503) return true;
+    } catch {
+      // not up yet
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return false;
 }
 
 main().catch((error) => {
