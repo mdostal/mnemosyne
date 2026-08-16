@@ -1,9 +1,27 @@
 id: pw-11-interview-skill-persona-output
 epic: mnemosyne-persona-wizard
 title: Interview skill - structured output -> Persona record -> write primitive
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 8c4fd2a, built directly on the branch).
+  Independently verified: read persona-writer.mjs in full -- confirmed
+  writePersonaViaCli() genuinely spawns a real `tsx bin/mnemosyne-persona.mjs
+  create --file <path>` subprocess (same TSX_BIN/execFile shape as
+  test/persona-cross-transport.mjs), and confirmed it does NOT import
+  writeGlobalPersona/writeRepoLocalPersona directly -- the only disk touch
+  is via the real CLI subprocess. Reran the new
+  persona-interview-output.test.ts myself (8/8, including a code-architect
+  persona with parentRefs written via --repo and read back via
+  readRepoLocalPersona, and 3 structural checks proving no parallel write
+  path). Reran tsc --noEmit (clean) and the full vitest suite (592/592, 43
+  files, no regressions) myself. Write-surface choice (CLI, over MCP/
+  skill-harness) is well-reasoned: an interview skill session always has a
+  direct shell-out primitive, unlike MCP (needs an open server connection)
+  -- consistent with resolveRememberScope's (pw-09) reasoning for the same
+  caller. All acceptance criteria met.
 depends_on: [pw-10-interview-skill-mechanics]
 
 description: |
