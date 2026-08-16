@@ -1,17 +1,23 @@
 ---
 name: mnemosyne-persona-interview
-description: Multi-turn, adaptive interview that authors a Layer 1 Persona record (tier + scopeId + displayName + scope + sections + optional parentRefs) by conversing with an operator, then writes it and remember()s its source material. Grounded line-by-line in plugin-hive's kickoff-protocol.md "Phase 3b: Discovery Questions" pattern -- the only real, working precedent for this shape anywhere this repo depends on. Use when an operator wants to AUTHOR a new persona (or revise an existing one) for any tier -- top-orchestrator, company-director, project-orchestrator, or code-architect -- at either repo-spinup-lifecycle moment: before any repo exists (global tiers) or once a repo exists (code-architect). Contrast with mnemosyne-standalone, which is stateless/table-driven, one action per call, and never conducts a multi-turn conversation.
+description: Multi-turn, adaptive interview that authors a Layer 1 Persona record (tier + scopeId + displayName + scope + sections + optional parentRefs) by conversing with an operator, then, by default, PROPOSES it as a draft for a human to review and approve (--commit-directly reproduces the old immediate-write-and-remember() behavior exactly). Grounded line-by-line in plugin-hive's kickoff-protocol.md "Phase 3b: Discovery Questions" pattern -- the only real, working precedent for this shape anywhere this repo depends on. Use when an operator wants to AUTHOR a new persona (or revise an existing one) for any tier -- top-orchestrator, company-director, project-orchestrator, or code-architect -- at either repo-spinup-lifecycle moment: before any repo exists (global tiers) or once a repo exists (code-architect). Contrast with mnemosyne-standalone, which is stateless/table-driven, one action per call, and never conducts a multi-turn conversation.
 ---
 
 # Mnemosyne Persona Interview
 
 A multi-turn Claude Code skill that conducts an adaptive interview with an
 operator to author a Layer 1 `Persona` record
-(`lib/mnemosyne/layer1/persona.ts`), then writes it through the existing
-persona-write primitive (pw-06/pw-07's `persona create` / `persona_create`)
-and, per the operator's "initial crawl and feeding" requirement
-(design-discussion.md §3b), `remember()`s the source material the interview
-surfaced.
+(`lib/mnemosyne/layer1/persona.ts`), then, **by default (pu-08),
+PROPOSES it as a draft** through pu-04's `mnemosyne persona draft propose`
+write primitive for a human to review and approve -- the concrete mechanism
+behind the operator's ask 2: "we need an interaction to build that and then a
+human to approve it, rather than expecting a full drill down in one text
+body." An optional `--commit-directly` flag reproduces the OLD (pre-epic)
+behavior exactly: it writes straight through the original persona-write
+primitive (pw-06/pw-07's `persona create` / `persona_create`) and, per the
+operator's "initial crawl and feeding" requirement (design-discussion.md
+§3b), `remember()`s the source material the interview surfaced,
+unconditionally, immediately.
 
 **This is genuinely new territory for this repo.** No interview/multi-turn
 pattern exists here today -- `skills/mnemosyne-standalone/SKILL.md` is
@@ -44,6 +50,14 @@ in kickoff-protocol.md" further down for the full mapping.
 - `root` (optional, global tiers only) -- overrides the global persona
   store's root (`~/.mnemosyne/personas`), mirrors `persona-seed`/
   `persona-create`'s own `root` parameter, mainly for test isolation.
+- `--commit-directly` (optional flag, default off -- pu-08) -- reproduces the
+  OLD (pre-epic) immediate-commit behavior exactly: step 7 calls `mnemosyne
+  persona create` and step 8 fires `remember()` unconditionally, right away.
+  **Omit this flag unless you specifically need the old behavior** -- the
+  default (this flag absent) is draft-first: step 7 proposes a draft via
+  `mnemosyne persona draft propose` for a human to review, and step 8's
+  `remember()` does not fire yet (it fires later, at approval time, wired
+  outside this skill -- see step 7/8 below).
 
 ## Process
 
@@ -184,7 +198,51 @@ in kickoff-protocol.md" further down for the full mapping.
    divergent version of the same logic.
 
 7. **Write the candidate.** Serialize the assembled candidate to a YAML file
-   and pass it through the existing write primitive -- never a new one:
+   and pass it through a write primitive -- never a hand-rolled one. This
+   step BRANCHES on whether `--commit-directly` was given (pu-08):
+
+   **Default (`--commit-directly` NOT given) -- propose a draft:**
+   - CLI (**default, real invocation mechanics below** -- pu-08): `mnemosyne
+     persona draft propose --file <path> [--repo <repo>]`
+     (`bin/mnemosyne-persona.mjs`, pu-04). NEVER `persona create` on this
+     path -- the draft store (`~/.mnemosyne/persona-drafts`,
+     `persona-draft-store.ts`) is structurally separate from the real
+     persona store, and is not reachable by `sync`/`getPersonaContent` until
+     a human runs `draft approve`.
+   - [`persona-draft-writer.mjs`](persona-draft-writer.mjs) (pu-08) is the
+     reference implementation of this path, used directly by
+     `lib/mnemosyne/layer1/__tests__/persona-interview-draft-output.test.ts`'s
+     real, disk-round-tripping proof. It mirrors `persona-writer.mjs`'s exact
+     real-subprocess-spawn shape (same throwaway-tmpfile-then-`tsx`-subprocess
+     mechanics) as a SEPARATE sibling module -- never a parameterized version
+     of `persona-writer.mjs` itself, so `--commit-directly`'s own code path
+     (below) can never be accidentally affected by this path's own changes.
+   - `writeDraftPersonaViaCli(persona, {repo, home, proposedBy, proposedAt,
+     sourceSummary})` attaches three draft-only metadata keys the real
+     `create` candidate never carries (`persona-draft-store.ts`'s own doc
+     comment): `proposedBy` (defaults to `'agent'`), `proposedAt` (defaults
+     to `new Date().toISOString()`), and `sourceSummary` -- step 2's bounded
+     crawl-context summary (pu-07), attached UNCHANGED so a later human
+     reviewer can see *why* the agent proposed what it proposed
+     (design-discussion.md §3c). It then writes that YAML to a throwaway
+     temp file and spawns a REAL `tsx`-launched `mnemosyne persona draft
+     propose --file <tmp-file> [--repo <repo>]` subprocess. `draft propose`
+     has no `--root` flag (only `create`/`seed` do) -- use `home` for
+     test isolation of a global-tier draft instead. Returns
+     `{ok, stdout, stderr, writtenPath}` -- `writtenPath` is parsed from the
+     CLI's own `proposed draft ... -> <path>` stdout line.
+   - This module deliberately does NOT import `writeGlobalPersona`/
+     `writeRepoLocalPersona` directly (same non-negotiable rule
+     `persona-writer.mjs` itself already follows), and does NOT import
+     `persona-writer.mjs`'s `writePersonaViaCli` or `persona-remember.mjs`'s
+     `rememberInterviewSource` -- the default path cannot call `persona
+     create` or fire `remember()`, by construction, not by convention alone.
+   - **Do not proceed to step 8 on this path.** See step 8 below -- the
+     default path's `remember()` firing is deferred to approval time, wired
+     outside this skill (pu-03/pu-04, out of pu-08's own scope).
+
+   **`--commit-directly` given -- reproduce the exact pre-epic behavior,
+   unchanged:**
    - CLI (**default, real invocation mechanics below** -- pw-11): `mnemosyne
      persona create --file <path> [--repo <repo>] [--root <root>]`
      (`bin/mnemosyne-persona.mjs`, pw-05).
@@ -213,9 +271,10 @@ in kickoff-protocol.md" further down for the full mapping.
 
    **Real invocation mechanics** --
    [`persona-writer.mjs`](persona-writer.mjs) (pw-11) is the reference
-   implementation of this step, used directly by
+   implementation of this path, used directly by
    `lib/mnemosyne/layer1/__tests__/persona-interview-output.test.ts`'s
-   real, disk-round-tripping proof:
+   real, disk-round-tripping proof. This file is UNCHANGED by pu-08 --
+   `--commit-directly` invokes it exactly as the pre-epic skill always did:
    - `personaToYaml(persona)` serializes the candidate with the exact same
      `yaml` package call (`stringify(candidate)`) `persona-store-global.ts`/
      `persona-store-repo-local.ts` themselves use on the write side -- one
@@ -240,13 +299,28 @@ in kickoff-protocol.md" further down for the full mapping.
      `readRepoLocalPersona`, `persona-store-repo-local.ts`).
 
 8. **`remember()` the source material** (design-discussion.md §3b's "initial
-   crawl and feeding" requirement). **Now wired for real (pw-13)** --
-   [`persona-remember.mjs`](persona-remember.mjs)'s
+   crawl and feeding" requirement) -- **`--commit-directly` ONLY (pu-08)**.
+   As of pu-08, this step fires ONLY on the `--commit-directly` path,
+   immediately after step 7's `create` write succeeds -- exactly as the
+   pre-epic skill always did, unchanged. **On the default (draft-first)
+   path, skip this step entirely: do not call `rememberInterviewSource` at
+   all.** Indexing a persona's source material into searchable memory before
+   a human has approved the draft would prematurely commit unreviewed
+   content -- the operator's own resolution (design-discussion.md §9
+   judgment call #9): `remember()` fires on approval, never on draft
+   creation. That firing is wired into pu-03's HTTP approve route / pu-04's
+   CLI `draft approve` (`bin/mnemosyne-persona.mjs`'s `runDraftApprove`,
+   which fires a real `remember()` call itself, scoped via
+   `resolveRememberScope()`, only when the approved draft carried a
+   `sourceSummary`) -- out of this skill's own scope to wire again here.
+
+   **`--commit-directly`'s step 8, unchanged:** [`persona-remember.mjs`](persona-remember.mjs)'s
    `rememberInterviewSource(persona, opts?)` is the reference implementation
    of this step, used directly by
    `lib/mnemosyne/layer1/__tests__/persona-interview-crawl-and-feed.test.ts`'s
-   real, HTTP-round-tripping proof. Call it with the completed interview's
-   `persona` record right after step 7's write succeeds:
+   real, HTTP-round-tripping proof. This file is UNCHANGED by pu-08. Call it
+   with the completed interview's `persona` record right after step 7's
+   `create` write succeeds:
    - It resolves the scope via pw-09's `resolveRememberScope()`
      (`lib/mnemosyne/layer1/persona.ts`) through a REAL `tsx`-launched
      `mnemosyne persona resolve-remember-scope --tier <tier> --scope-id
@@ -278,7 +352,8 @@ in kickoff-protocol.md" further down for the full mapping.
      entries (the non-blocking hard-fail rule, pw-10/pw-12), so
      `buildRememberText` always produces real, non-empty text and
      crawl-and-feed never silently no-ops just because most questions were
-     skipped (this story's explicit risk mitigation).
+     skipped (this story's explicit risk mitigation) -- unchanged on the
+     `--commit-directly` path.
    - Returns `{ok, scope, tag, text, file, chunksUpserted, response, error}`
      -- `ok` is true only once the real `remember()` call itself reports
      `remembered:true`; `file` is the real on-disk note path, usable to
@@ -291,9 +366,17 @@ in kickoff-protocol.md" further down for the full mapping.
 
 9. **Report a summary**, mirroring kickoff-protocol.md's own "North-star
    summary" convention: show which questions were answered vs. skipped
-   (core, with their placeholder noted; optional, noted as omitted), the
-   resolved `{scope, tag}` from `resolveRememberScope()`, and the write
-   target (`global` store path or `<repo>/.mnemosyne/personas/<scopeId>.yaml`).
+   (core, with their placeholder noted; optional, noted as omitted), and the
+   write target.
+   - **Default path:** the proposed DRAFT's path (`writeDraftPersonaViaCli`'s
+     `writtenPath`), and a clear note that this is a draft awaiting human
+     review/approval (`mnemosyne persona draft show <tier> <scope-id>` to
+     inspect it, `draft approve` to commit it -- which is also when
+     `remember()` fires) -- never report it as already committed.
+   - **`--commit-directly` path:** the resolved `{scope, tag}` from
+     `resolveRememberScope()`, and the committed write target (`global`
+     store path or `<repo>/.mnemosyne/personas/<scopeId>.yaml`) -- unchanged
+     from the pre-epic skill's own summary.
 
 ## Structured output schema
 
@@ -390,10 +473,18 @@ criteria.
   exists as a separate skill rather than another `mnemosyne-standalone`
   action.
 - **Not a second write path.** It never writes a persona file directly --
-  every write goes through `mnemosyne persona create` / `persona_create` /
-  `personaCreateAction`, all three thin wraps of the same
-  `writeGlobalPersona`/`writeRepoLocalPersona` calls that already validate
-  (`assertValidPersona`), lock, and dispatch by tier.
+  every write goes through `mnemosyne persona draft propose` (default,
+  pu-08) or `mnemosyne persona create` / `persona_create` /
+  `personaCreateAction` (`--commit-directly`), all thin wraps of either
+  `persona-draft-store.ts`'s `writeDraftPersona` or the real stores'
+  `writeGlobalPersona`/`writeRepoLocalPersona` calls, which already validate
+  (`assertValidPersona`, real-store only -- the draft store is deliberately
+  looser, see `persona-draft-store.ts`'s own doc comment), lock, and dispatch
+  by tier.
+- **Not a silent auto-commit (pu-08).** By default, this skill never writes
+  directly into the real, sync-visible persona store -- it proposes a DRAFT
+  for a human to review and explicitly approve. Only `--commit-directly`
+  bypasses that review gate, reproducing the pre-epic behavior exactly.
 - **Not a second remember()-scope mapping.** It uses pw-09's
   `resolveRememberScope()` exactly as documented, never a parallel scheme.
 - **Not new lifecycle infrastructure.** It is parameterized by tier/store
@@ -428,16 +519,32 @@ deliberately imports nothing from `persona.ts` -- it produces plain data;
 the single real enforcement/mapping points, exercised directly against this
 engine's output in the test file below.
 
-[`persona-writer.mjs`](persona-writer.mjs) (pw-11) -- step 7's reference
-implementation: `personaToYaml()`, `writePersonaViaCli()`,
-`showPersonaViaCli()`. Deliberately imports nothing from
+[`persona-writer.mjs`](persona-writer.mjs) (pw-11) -- step 7's
+`--commit-directly` reference implementation, UNCHANGED by pu-08:
+`personaToYaml()`, `writePersonaViaCli()`, `showPersonaViaCli()`.
+Deliberately imports nothing from
 `persona-store-global.ts`/`persona-store-repo-local.ts` -- the only way it
 ever touches disk is by spawning the real `mnemosyne persona create` (and
 `persona show`) CLI subprocess (`bin/mnemosyne-persona.mjs`), never a
 second, in-process write path. `persona-writer.d.mts` is its hand-written
 type companion (same convention as `interview-engine.d.mts`).
 
-[`persona-remember.mjs`](persona-remember.mjs) (pw-13) -- step 8's reference
+[`persona-draft-writer.mjs`](persona-draft-writer.mjs) (pu-08) -- step 7's
+DEFAULT (draft-first) reference implementation: `personaToDraftCandidate()`,
+`personaDraftToYaml()`, `writeDraftPersonaViaCli()`. A SEPARATE sibling
+module to `persona-writer.mjs` (mirrors its exact real-subprocess-spawn
+shape, never a parameterized version of it), so `--commit-directly`'s own
+code path can never be accidentally affected by this module's own changes.
+Deliberately imports nothing from `persona-store-global.ts`/
+`persona-store-repo-local.ts`, and nothing from `persona-writer.mjs` or
+`persona-remember.mjs` -- the only way it ever touches disk is by spawning
+the real `mnemosyne persona draft propose` CLI subprocess
+(`bin/mnemosyne-persona.mjs`, pu-04), and it never calls `persona create` or
+`remember()` itself. `persona-draft-writer.d.mts` is its hand-written type
+companion (same convention as `interview-engine.d.mts`).
+
+[`persona-remember.mjs`](persona-remember.mjs) (pw-13) -- step 8's
+`--commit-directly` reference
 implementation: `rememberInterviewSource()`, `resolveRememberScopeViaCli()`,
 `fireRememberCall()`. Deliberately imports nothing from `persona.ts`
 directly (same TS/JS-boundary constraint `persona-writer.mjs` already works
@@ -484,7 +591,19 @@ hand-written type companion (same convention as `interview-engine.d.mts`).
   itself swapped for a test double), that its scope genuinely comes from
   `resolveRememberScope()` (not a hardcoded/parallel scheme), and that a
   maximally-skipped interview (pw-12's exact skip-all pattern, both the
-  global-tier and code-architect cases) still triggers a real call.
+  global-tier and code-architect cases) still triggers a real call. Exercised
+  UNCHANGED, on the `--commit-directly` path only, as of pu-08.
+- [`../../lib/mnemosyne/layer1/__tests__/persona-interview-draft-output.test.ts`](../../lib/mnemosyne/layer1/__tests__/persona-interview-draft-output.test.ts)
+  (pu-08) -- proves the default (draft-first) path: `writeDraftPersonaViaCli()`
+  proposes a REAL active draft (global and code-architect tiers), with
+  `proposedBy`/`proposedAt`/`sourceSummary` attached, confirmed via a direct
+  filesystem read (`persona-draft-store.ts`'s `readDraftPersona`) -- and that
+  the real persona store is NOT touched; a structural check that
+  `persona-draft-writer.mjs` never imports the real write primitives or
+  `persona-writer.mjs`/`persona-remember.mjs` directly; and a combined-flow
+  proof that `--commit-directly` still fires `writePersonaViaCli` +
+  `rememberInterviewSource` together, unconditionally, matching the two test
+  files above.
 - [`../../lib/mnemosyne/layer1/__tests__/persona-interview-crawl.test.ts`](../../lib/mnemosyne/layer1/__tests__/persona-interview-crawl.test.ts)
   (pu-07) -- proves step 2's `crawlBoundedContext()` reads the named source
   list exhaustively but never beyond it (extra, irrelevant repo files are
