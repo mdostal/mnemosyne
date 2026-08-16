@@ -6,7 +6,7 @@
 // Usage: node test/http-api.mjs
 
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +17,15 @@ const TSX = path.join(ROOT, "node_modules", ".bin", "tsx");
 const SERVER = path.join(ROOT, "lib", "mnemosyne", "server.ts");
 const PORT = 31415;
 const BASE = `http://127.0.0.1:${PORT}`;
+
+// pw-02-get-persona-routes-cors: the UI (src/server.mjs, port 8477) and
+// this HTTP API (lib/mnemosyne/server.ts, port 3141 by default) are
+// DIFFERENT origins -- a browser fetch from the UI to /persona/* is a real
+// cross-origin request, silently blocked without CORS. These are the two
+// origins the UI is actually served from (src/server.mjs's PORT default).
+const UI_ORIGIN_LOOPBACK = "http://127.0.0.1:8477";
+const UI_ORIGIN_LOCALHOST = "http://localhost:8477";
+const DISALLOWED_ORIGIN = "http://evil.example";
 
 let fails = 0;
 const ok = (condition, message) => {
@@ -42,6 +51,55 @@ async function jRaw(method, pathname, rawBody) {
   return { status: res.status, body: await res.json() };
 }
 
+async function jOrigin(method, pathname, origin) {
+  const res = await fetch(BASE + pathname, { method, headers: origin ? { origin } : undefined });
+  return { status: res.status, headers: res.headers, body: await res.json() };
+}
+
+/**
+ * Hand-writes a global persona YAML file directly at
+ * `<home>/.mnemosyne/personas/<tier>/<scopeId>.yaml` (persona-store-global.ts's
+ * fixed location convention) -- mirrors test/persona-cli.mjs's
+ * writeFakeGlobalPersona exactly: this plain-`node`-run test file can't
+ * import persona-store-global.ts's writeGlobalPersona in-process (no build
+ * step for .ts, see tsconfig.json's noEmit), so the YAML shape is written by
+ * hand. JSON.stringify'd scalars are valid YAML flow scalars.
+ */
+async function writeFakeGlobalPersona(home, tier, scopeId, { displayName, scope, sections }) {
+  const dir = path.join(home, ".mnemosyne", "personas", tier);
+  await mkdir(dir, { recursive: true });
+  const yamlText =
+    [
+      `tier: ${JSON.stringify(tier)}`,
+      `scopeId: ${JSON.stringify(scopeId)}`,
+      `displayName: ${JSON.stringify(displayName)}`,
+      `scope: ${JSON.stringify(scope)}`,
+      `sections:`,
+      ...sections.flatMap((s) => [`  - heading: ${JSON.stringify(s.heading)}`, `    body: ${JSON.stringify(s.body)}`]),
+    ].join("\n") + "\n";
+  await writeFile(path.join(dir, `${scopeId}.yaml`), yamlText, "utf8");
+}
+
+/**
+ * Same convention as writeFakeGlobalPersona, but for the repo-local store's
+ * fixed location: `<repoRoot>/.mnemosyne/personas/<scopeId>.yaml`
+ * (persona-store-repo-local.ts) -- tier is always 'code-architect'.
+ */
+async function writeFakeRepoLocalPersona(repoRoot, scopeId, { displayName, scope, sections }) {
+  const dir = path.join(repoRoot, ".mnemosyne", "personas");
+  await mkdir(dir, { recursive: true });
+  const yamlText =
+    [
+      `tier: "code-architect"`,
+      `scopeId: ${JSON.stringify(scopeId)}`,
+      `displayName: ${JSON.stringify(displayName)}`,
+      `scope: ${JSON.stringify(scope)}`,
+      `sections:`,
+      ...sections.flatMap((s) => [`  - heading: ${JSON.stringify(s.heading)}`, `    body: ${JSON.stringify(s.body)}`]),
+    ].join("\n") + "\n";
+  await writeFile(path.join(dir, `${scopeId}.yaml`), yamlText, "utf8");
+}
+
 async function waitForHealth(timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -60,12 +118,21 @@ async function main() {
   const root = await mkdtemp(path.join(tmpdir(), "mnemosyne-http-api-"));
   await writeFile(path.join(root, "notes.md"), "alpha\ntarget line\nomega target\n", "utf8");
 
+  // pw-02: a real, throwaway $HOME for this whole child process, so
+  // GET /persona (global tiers) never touches the operator's actual
+  // ~/.mnemosyne/personas -- mirrors test/persona-cli.mjs's and
+  // test/mcp-server-persona.mjs's fake-$HOME convention. DEFAULT_GLOBAL_
+  // PERSONA_ROOT (persona-store-global.ts) resolves via os.homedir() at
+  // import time, so this must be set before the child process starts.
+  const fakeHome = await mkdtemp(path.join(tmpdir(), "mnemosyne-http-api-home-"));
+
   const child = spawn(TSX, [SERVER], {
     cwd: ROOT,
     env: {
       ...process.env,
       MNEMOSYNE_PORT: String(PORT),
       MNEMOSYNE_ROOT_DIR: root,
+      HOME: fakeHome,
       SWARM_MEMORY_BIN: "/definitely/missing/swarm-memory",
       SWARM_MEMORY_GRAPH_DB: path.join(root, "missing-graph.sqlite"),
       // cr-01-graphify-default-layer: this suite's whole point below is a
@@ -139,6 +206,141 @@ async function main() {
     // anything after that crash never runs.
     await testHiveMemoryLayerConfigurable();
 
+    // pw-02-get-persona-routes-cors: GET /persona and GET /persona/:tier/:scopeId,
+    // plus the CORS header the UI (a genuinely different origin, port 8477)
+    // needs to actually reach these routes from a browser. Positioned here
+    // (before POST /recall below), same reasoning as testHiveMemoryLayerConfigurable
+    // above -- POST /recall crashes this process on this machine, so anything
+    // after it never runs.
+
+    // --- GET /persona (global tiers, no ?repo) -- EMPTY store first -----
+    const globalListEmpty = await j("GET", "/persona");
+    ok(globalListEmpty.status === 200, `GET /persona (empty global store) -> 200 (got ${globalListEmpty.status})`);
+    ok(
+      Array.isArray(globalListEmpty.body.personas) && globalListEmpty.body.personas.length === 0,
+      `GET /persona (empty global store) -> personas: [] (got ${JSON.stringify(globalListEmpty.body.personas)})`,
+    );
+
+    // GET /persona/:tier/:scopeId on an unseeded scope -> 404, not a crash
+    const globalReadMissing = await j("GET", "/persona/company-director/no-such-scope");
+    ok(
+      globalReadMissing.status === 404,
+      `GET /persona/company-director/no-such-scope (unseeded) -> 404 (got ${globalReadMissing.status})`,
+    );
+    ok(!!globalReadMissing.body.error?.message, "GET /persona/:tier/:scopeId (unseeded) -> has error detail");
+
+    // --- now seed a real global persona and re-read: POPULATED store ----
+    const globalPersonaFixture = {
+      displayName: "Acme Co. Director",
+      scope: "Owns Acme's product/business context.",
+      sections: [{ heading: "What this tier owns", body: "PW02_GLOBAL_MARKER — hand-written fixture content." }],
+    };
+    await writeFakeGlobalPersona(fakeHome, "company-director", "acme-director", globalPersonaFixture);
+
+    const globalListPopulated = await j("GET", "/persona");
+    ok(globalListPopulated.status === 200, `GET /persona (populated) -> 200 (got ${globalListPopulated.status})`);
+    ok(
+      Array.isArray(globalListPopulated.body.personas) &&
+        globalListPopulated.body.personas.some((p) => p.tier === "company-director" && p.scopeId === "acme-director"),
+      `GET /persona (populated) -> includes the seeded {tier, scopeId} (got ${JSON.stringify(globalListPopulated.body.personas)})`,
+    );
+
+    const globalRead = await j("GET", "/persona/company-director/acme-director");
+    ok(globalRead.status === 200, `GET /persona/company-director/acme-director -> 200 (got ${globalRead.status})`);
+    ok(
+      globalRead.body.persona?.tier === "company-director" &&
+        globalRead.body.persona?.scopeId === "acme-director" &&
+        globalRead.body.persona?.displayName === globalPersonaFixture.displayName &&
+        globalRead.body.persona?.scope === globalPersonaFixture.scope &&
+        JSON.stringify(globalRead.body.persona?.sections) === JSON.stringify(globalPersonaFixture.sections),
+      `GET /persona/:tier/:scopeId -> round-trips the hand-written persona byte-for-byte (got ${JSON.stringify(globalRead.body.persona)})`,
+    );
+
+    // --- GET /persona?repo=<path> (repo-local, code-architect) -- EMPTY --
+    const repoListEmpty = await j("GET", `/persona?repo=${encodeURIComponent(root)}`);
+    ok(repoListEmpty.status === 200, `GET /persona?repo=<empty repo> -> 200 (got ${repoListEmpty.status})`);
+    ok(
+      Array.isArray(repoListEmpty.body.personas) && repoListEmpty.body.personas.length === 0,
+      `GET /persona?repo=<empty repo> -> personas: [] (got ${JSON.stringify(repoListEmpty.body.personas)})`,
+    );
+
+    const repoReadMissing = await j("GET", `/persona/code-architect/no-such-scope?repo=${encodeURIComponent(root)}`);
+    ok(
+      repoReadMissing.status === 404,
+      `GET /persona/code-architect/no-such-scope?repo=... (unseeded) -> 404 (got ${repoReadMissing.status})`,
+    );
+
+    // repo-local read with no ?repo at all -> 400, not a crash or a silent global-store lookup
+    const repoReadNoRepoParam = await j("GET", "/persona/code-architect/no-such-scope");
+    ok(
+      repoReadNoRepoParam.status === 400,
+      `GET /persona/code-architect/:scopeId with no ?repo -> 400 (got ${repoReadNoRepoParam.status})`,
+    );
+
+    // --- seed a real repo-local persona and re-read: POPULATED ----------
+    const repoPersonaFixture = {
+      displayName: "notes.md Area Architect",
+      scope: "Owns the notes.md area of this repo.",
+      sections: [{ heading: "What this tier owns", body: "PW02_REPO_LOCAL_MARKER — hand-written fixture content." }],
+    };
+    await writeFakeRepoLocalPersona(root, "notes-area", repoPersonaFixture);
+
+    const repoListPopulated = await j("GET", `/persona?repo=${encodeURIComponent(root)}`);
+    ok(repoListPopulated.status === 200, `GET /persona?repo=<populated repo> -> 200 (got ${repoListPopulated.status})`);
+    ok(
+      Array.isArray(repoListPopulated.body.personas) &&
+        repoListPopulated.body.personas.some((p) => p.tier === "code-architect" && p.scopeId === "notes-area"),
+      `GET /persona?repo=<populated repo> -> includes the seeded code-architect persona (got ${JSON.stringify(repoListPopulated.body.personas)})`,
+    );
+    ok(
+      repoListPopulated.body.personas.every((p) => p.tier === "code-architect") &&
+        !repoListPopulated.body.personas.some((p) => p.scopeId === "acme-director"),
+      "GET /persona?repo=... -> repo-local list does NOT include global-tier personas (switches, not merges)",
+    );
+
+    const repoRead = await j("GET", `/persona/code-architect/notes-area?repo=${encodeURIComponent(root)}`);
+    ok(repoRead.status === 200, `GET /persona/code-architect/notes-area?repo=... -> 200 (got ${repoRead.status})`);
+    ok(
+      repoRead.body.persona?.tier === "code-architect" &&
+        repoRead.body.persona?.scopeId === "notes-area" &&
+        repoRead.body.persona?.displayName === repoPersonaFixture.displayName &&
+        repoRead.body.persona?.scope === repoPersonaFixture.scope &&
+        JSON.stringify(repoRead.body.persona?.sections) === JSON.stringify(repoPersonaFixture.sections),
+      `GET /persona/code-architect/:scopeId?repo=... -> round-trips the hand-written persona byte-for-byte (got ${JSON.stringify(repoRead.body.persona)})`,
+    );
+
+    // --- CORS: Access-Control-Allow-Origin on /persona/*, scoped -- not "*" ---
+    const corsLoopback = await jOrigin("GET", "/persona", UI_ORIGIN_LOOPBACK);
+    ok(
+      corsLoopback.headers.get("access-control-allow-origin") === UI_ORIGIN_LOOPBACK,
+      `GET /persona from ${UI_ORIGIN_LOOPBACK} -> Access-Control-Allow-Origin: ${UI_ORIGIN_LOOPBACK} (got ${corsLoopback.headers.get("access-control-allow-origin")})`,
+    );
+
+    const corsLocalhost = await jOrigin("GET", "/persona", UI_ORIGIN_LOCALHOST);
+    ok(
+      corsLocalhost.headers.get("access-control-allow-origin") === UI_ORIGIN_LOCALHOST,
+      `GET /persona from ${UI_ORIGIN_LOCALHOST} -> Access-Control-Allow-Origin: ${UI_ORIGIN_LOCALHOST} (got ${corsLocalhost.headers.get("access-control-allow-origin")})`,
+    );
+
+    const corsReadRoute = await jOrigin("GET", "/persona/company-director/acme-director", UI_ORIGIN_LOOPBACK);
+    ok(
+      corsReadRoute.headers.get("access-control-allow-origin") === UI_ORIGIN_LOOPBACK,
+      `GET /persona/:tier/:scopeId from ${UI_ORIGIN_LOOPBACK} -> Access-Control-Allow-Origin present and scoped (got ${corsReadRoute.headers.get("access-control-allow-origin")})`,
+    );
+
+    const corsDisallowed = await jOrigin("GET", "/persona", DISALLOWED_ORIGIN);
+    ok(
+      corsDisallowed.headers.get("access-control-allow-origin") !== "*" &&
+        corsDisallowed.headers.get("access-control-allow-origin") !== DISALLOWED_ORIGIN,
+      `GET /persona from an unknown origin -> Access-Control-Allow-Origin is NOT a wildcard and does NOT reflect the disallowed origin (got ${corsDisallowed.headers.get("access-control-allow-origin")})`,
+    );
+
+    const corsNoOrigin = await jOrigin("GET", "/persona", undefined);
+    ok(
+      corsNoOrigin.headers.get("access-control-allow-origin") !== "*",
+      `GET /persona with no Origin header -> Access-Control-Allow-Origin is never a wildcard (got ${corsNoOrigin.headers.get("access-control-allow-origin")})`,
+    );
+
     // POST /recall -> 200 with RecallResult JSON
     const recall = await j("POST", "/recall", { query: "target", scope: "project" });
     ok(recall.status === 200, `POST /recall -> 200 (got ${recall.status})`);
@@ -186,6 +388,7 @@ async function main() {
   } finally {
     child.kill();
     await rm(root, { recursive: true, force: true });
+    await rm(fakeHome, { recursive: true, force: true });
   }
 
   console.log(fails ? `\n${fails} check(s) failed` : "\nall http-api checks passed");

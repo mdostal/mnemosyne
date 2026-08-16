@@ -1,9 +1,26 @@
 id: pw-02-get-persona-routes-cors
 epic: mnemosyne-persona-wizard
 title: "GET /persona/* routes on lib/mnemosyne/server.ts + CORS"
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
+
+note_on_completion: >
+  Implemented 2026-08-15. Real TDD: extended test/http-api.mjs's existing
+  subprocess-spawn convention first (33 new assertions, all red against a
+  server.ts with no /persona routes -- confirmed 404 "no route" failures
+  before implementation), then added GET /persona and GET
+  /persona/:tier/:scopeId, wrapping pw-01's listGlobalPersonas/
+  listRepoLocalPersonas and the existing readGlobalPersona/
+  readRepoLocalPersona directly (no re-implemented parsing/validation).
+  CORS: Access-Control-Allow-Origin scoped to {http://127.0.0.1:8477,
+  http://localhost:8477} (reflected only on an exact match, never a
+  wildcard), applied only to /persona/* responses. Verified: tsc --noEmit
+  clean, vitest lib/mnemosyne/layer1 150/150 passing, node
+  test/http-api.mjs all 33 new checks passing (3 pre-existing, unrelated
+  POST /remember failures confirmed present on the pre-change baseline too
+  -- not introduced by this story). GET /layers confirmed untouched (diff
+  is purely additive to server.ts, no lines removed).
 depends_on: [pw-01-listing-primitives]
 
 description: |
