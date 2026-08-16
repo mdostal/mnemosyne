@@ -1,9 +1,24 @@
 id: pu-02-draft-persona-store
 epic: mnemosyne-persona-ux
 title: Draft persona store (home-rooted, archive-by-move disposal)
-status: planned
+status: complete
 complexity: medium
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 444937a). Independently verified: read
+  lib/mnemosyne/layer1/persona-draft-store.ts in full -- confirmed zero
+  imports from persona-store-global.ts/persona-store-repo-local.ts (grep
+  confirmed, only doc-comment mentions), confirmed home-rooted paths for
+  both global and repo-local tiers, confirmed one-active-draft-per-identity
+  overwrite semantics, confirmed disposeDraftPersona moves (renameSync)
+  rather than unlinks, confirmed assertValidPersona is never called at this
+  layer (deliberately deferred to approval time per design-discussion.md
+  §3b), confirmed the repo-local sanitization rule matches
+  resolveRememberScope()'s exact regex minus the tag-specific truncation.
+  Reran the 21 new tests (21/21), tsc --noEmit (clean), and vitest
+  lib/mnemosyne/layer1 (217/217, no regressions) myself. All acceptance
+  criteria met.
 depends_on: []
 
 description: |
