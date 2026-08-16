@@ -163,12 +163,19 @@ try {
     "submit handler surfaces failure via setStatus() on both the !res.ok path and the catch path");
 
   // Reuses pw-03's loadPersonas() -- the whole file has exactly one
-  // function that builds <tr> rows into personasTbodyEl, not two.
+  // function that appends rows into personasTbodyEl, not two.
   const rowBuilders = (appJs.match(/personasTbodyEl\.appendChild/g) || []).length;
   ok(rowBuilders === 1,
     `exactly one place appends rows to personasTbodyEl (found ${rowBuilders}) -- no second persona-rendering path`);
-  ok(!/function\s+loadPersonas2|function\s+renderPersonas\b|function\s+loadPersonaForm\b/.test(appJs),
-    "no rebuilt second persona-list loader/renderer function exists");
+  // pu-10-personas-panel-redesign-shell deliberately separates loadPersonas()'s
+  // FETCH logic (unchanged) from a new renderPersonas() DOM-render function --
+  // the exact "reuse the fetch, change only how the result is
+  // rendered/organized" split that ticket's own spec requires. A
+  // renderPersonas() existing is therefore no longer evidence of a
+  // duplicated persona-list loader; loadPersonas2/loadPersonaForm still
+  // would be.
+  ok(!/function\s+loadPersonas2|function\s+loadPersonaForm\b/.test(appJs),
+    "no rebuilt second persona-list loader function exists");
 
   // Direct source-file read too (belt-and-suspenders vs. the served copy
   // above, same double-check convention as test/persona-layer-stack.mjs).

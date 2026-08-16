@@ -203,6 +203,63 @@
         as pointer-only text (tier + scope ID) — the parent's actual content is
         never fetched or inlined here.
       </p>
+
+      <!-- pu-10-personas-panel-redesign-shell: glossary block, addressing
+           onboarding-clarity.md's finding that none of the 3 original
+           design options defined tier/scopeId/Parent(s)/sourceSummary
+           anywhere. Collapsed by default (native <details>, zero space cost
+           for a returning operator) -- selection.md / synthesized
+           option-2.md §2. -->
+      <details id="personas-glossary">
+        <summary>What do these terms mean?</summary>
+        <dl class="fields">
+          <dt>tier</dt>
+          <dd>The four fixed levels a persona can sit at, in cascade order: <code>top-orchestrator</code>, <code>company-director</code>, <code>project-orchestrator</code>, <code>code-architect</code>.</dd>
+          <dt>scopeId</dt>
+          <dd>A human-assigned identity for this persona (a company/project/repo name) — never auto-detected.</dd>
+          <dt>Parent(s)</dt>
+          <dd>A pointer to where this persona's own content stops and a parent's begins ("query up, never copy down") — the parent's real content is never fetched or shown here, only named.</dd>
+          <dt>sourceSummary</dt>
+          <dd>What an agent read before proposing a draft revision of a persona. Shown once draft review lands in this panel — this ticket's shell doesn't fetch draft data yet.</dd>
+        </dl>
+      </details>
+
+      <!-- pu-10: group-by / status-filter toolbar. group-by reuses the
+           existing .mode-toggle role="radiogroup" idiom (#search-form's
+           mode switch, ui/app.js); status reuses the existing native
+           <select>-as-filter idiom (#reindex-lane). Neither invents a new
+           chip/tab widget (design-language-consistency.md, selection.md
+           "where all 3 options already agree"). Toggling either control
+           re-buckets the already-fetched personas client-side -- no
+           re-fetch, matching every panel's manual-refresh-only convention. -->
+      <div id="personas-toolbar" class="persona-toolbar">
+        <span class="mode-toggle" role="radiogroup" aria-label="group personas by">
+          <label><input type="radio" name="personas-group-by" value="tier" checked /> Tier</label>
+          <label><input type="radio" name="personas-group-by" value="repo" /> Repo</label>
+          <label><input type="radio" name="personas-group-by" value="status" /> Status</label>
+        </span>
+
+        <label for="personas-status-filter">status:</label>
+        <select id="personas-status-filter">
+          <option value="all" selected>All</option>
+          <option value="live">Live</option>
+          <option value="needs-review">Needs review</option>
+          <option value="history">History</option>
+        </select>
+      </div>
+
+      <!-- aria-live region: announces approve/discard/parent-jump outcomes
+           (accessibility.md: "no mention of an aria-live announcement...").
+           This ticket only uses it for the parent-ref filter self-heal
+           (§5/personas-toolbar above); pu-12 wires it for approve/discard. -->
+      <p id="personas-live-region" class="sr-only" aria-live="polite"></p>
+
+      <!-- Outer shape (section -> h2 -> panel-status -> table) unchanged,
+           per selection.md/synthesized option-2.md §1: "#personas keeps its
+           existing <section class="panel panel-wide"> -> <h2> ->
+           panel-status -> <table> shape unchanged at the outer level."
+           Grouping happens INSIDE the one table via group-header <tr>s in
+           #personas-tbody, not a separate table per group. -->
       <table id="personas-table">
         <thead>
           <tr>
@@ -210,10 +267,12 @@
             <th>Scope ID</th>
             <th>Display name</th>
             <th>Parent(s)</th>
+            <th>Status</th>
           </tr>
         </thead>
         <tbody id="personas-tbody"></tbody>
       </table>
+      <p class="panel-status" id="personas-empty" hidden></p>
 
       <!-- pw-17-personas-panel-write-form: create/edit form, following
            add-lane-form's exact convention (form-row divs, single submit
@@ -223,7 +282,22 @@
            already uses -- see ui/app.js). On success, re-loads via
            loadPersonas() (pw-03) -- no second rendering path. A single
            "knows" section (heading + body) is the v1 minimum viable write
-           path, not a full multi-section editor. -->
+           path, not a full multi-section editor.
+
+           pu-10-personas-panel-redesign-shell note: this ticket is a pure
+           view-layer rebuild of the LIST above (loadPersonas()/GET /persona
+           only, no draft fetch -- horizontal-plan.md H7 component 1). Per
+           synthesized option-2.md §1/§4, "+ New draft" is meant to open the
+           SAME row-level accordion editor described there (source-summary,
+           read-before-edit gate, Approve/Discard) -- but that editor only
+           makes sense wired to pu-03's draft routes (GET/POST
+           /persona/draft/:tier/:scopeId), which this ticket deliberately
+           does not fetch/post (design_decisions: "no data-model or backend
+           change happens in this ticket"). Retargeting this form into that
+           accordion editor is pu-12-draft-review-approve-ui's explicit job
+           (horizontal-plan.md H7 component 3) -- left fully intact and
+           working here in the meantime, not removed ahead of its
+           replacement being ready. -->
       <form id="persona-form">
         <h3>Create / edit persona</h3>
         <div class="form-row">
