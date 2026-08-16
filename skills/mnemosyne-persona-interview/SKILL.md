@@ -151,7 +151,8 @@ in kickoff-protocol.md" further down for the full mapping.
 
 7. **Write the candidate.** Serialize the assembled candidate to a YAML file
    and pass it through the existing write primitive -- never a new one:
-   - CLI: `mnemosyne persona create --file <path> [--repo <repo>] [--root <root>]`
+   - CLI (**default, real invocation mechanics below** -- pw-11): `mnemosyne
+     persona create --file <path> [--repo <repo>] [--root <root>]`
      (`bin/mnemosyne-persona.mjs`, pw-05).
    - MCP: the `persona_create` tool (`bin/mnemosyne-mcp.mjs`, pw-07).
    - Skill-helper (if driving `mnemosyne-standalone` directly): the
@@ -161,6 +162,48 @@ in kickoff-protocol.md" further down for the full mapping.
    `writeRepoLocalPersona` call, which itself calls `assertValidPersona`
    before ever touching disk -- this is the real enforcement point (persona.ts's
    own doc comment), not this skill's own judgment.
+
+   **Why the CLI, concretely (pw-11's research step):** this skill runs
+   INSIDE a live Claude Code (or similar) agent session, which always has a
+   direct shell-out primitive available -- unlike the MCP transport (needs a
+   running MCP server connection the session may or may not have open) or
+   the skill-harness transport (really `mnemosyne-standalone`'s own action
+   dispatch, a different skill's surface). The CLI is the one write surface
+   guaranteed reachable with zero additional transport setup, the same
+   reasoning `resolveRememberScope`'s doc comment (`persona.ts`) already
+   applies when picking `remember()`'s real target for this same caller.
+   Nothing stops a caller from instead driving `personaCreateAction` or the
+   MCP `persona_create` tool with the identical YAML this step produces --
+   they accept the same document shape -- but the CLI is this skill's
+   default.
+
+   **Real invocation mechanics** --
+   [`persona-writer.mjs`](persona-writer.mjs) (pw-11) is the reference
+   implementation of this step, used directly by
+   `lib/mnemosyne/layer1/__tests__/persona-interview-output.test.ts`'s
+   real, disk-round-tripping proof:
+   - `personaToYaml(persona)` serializes the candidate with the exact same
+     `yaml` package call (`stringify(candidate)`) `persona-store-global.ts`/
+     `persona-store-repo-local.ts` themselves use on the write side -- one
+     document shape for both directions. `sections` (array of `{heading,
+     body}`) and `parentRefs` (array of `{tier, scopeId}`), when present,
+     serialize as native YAML sequences of mappings; no manual line-building
+     needed for either field.
+   - `writePersonaViaCli(persona, {repo, root, home})` writes that YAML to a
+     throwaway temp file, then spawns a REAL `tsx`-launched
+     `mnemosyne persona create --file <tmp-file> [--repo <repo>] [--root
+     <root>]` subprocess (mirrors `test/persona-cross-transport.mjs`'s own
+     CLI-subprocess helper). Pass `repo` for a `code-architect` candidate;
+     omit it for the 3 global tiers (optionally pass `root` to override the
+     global store's root, e.g. for test isolation). Returns
+     `{ok, stdout, stderr, writtenPath}` -- `writtenPath` is parsed from the
+     CLI's own `created ... -> <path>` stdout line, never independently
+     recomputed.
+   - `showPersonaViaCli(tier, scopeId, {home})` reads a global-tier persona
+     back via the real `mnemosyne persona show <tier> <scope-id>` subprocess
+     (pf-13). `code-architect` has no CLI `show` surface -- read that tier's
+     persona back with a direct file read instead (e.g.
+     `readRepoLocalPersona`, `persona-store-repo-local.ts`).
 
 8. **`remember()` the source material** (design-discussion.md §3b's "initial
    crawl and feeding" requirement), using pw-09's `resolveRememberScope()`
@@ -301,7 +344,7 @@ criteria.
   already built -- it adds no new store, no new schema field, no new
   lifecycle trigger.
 
-## Helper script
+## Helper scripts
 
 [`interview-engine.mjs`](interview-engine.mjs) -- pure, dependency-free ESM
 functions implementing the adaptive-skip resolution, placeholder-vs-omit
@@ -312,6 +355,15 @@ deliberately imports nothing from `persona.ts` -- it produces plain data;
 `assertValidPersona` and `resolveRememberScope` (both `persona.ts`) remain
 the single real enforcement/mapping points, exercised directly against this
 engine's output in the test file below.
+
+[`persona-writer.mjs`](persona-writer.mjs) (pw-11) -- step 7's reference
+implementation: `personaToYaml()`, `writePersonaViaCli()`,
+`showPersonaViaCli()`. Deliberately imports nothing from
+`persona-store-global.ts`/`persona-store-repo-local.ts` -- the only way it
+ever touches disk is by spawning the real `mnemosyne persona create` (and
+`persona show`) CLI subprocess (`bin/mnemosyne-persona.mjs`), never a
+second, in-process write path. `persona-writer.d.mts` is its hand-written
+type companion (same convention as `interview-engine.d.mts`).
 
 ## See also
 
@@ -335,3 +387,9 @@ engine's output in the test file below.
   non-blocking-hard-fail proof (against the real `assertValidPersona`),
   adaptive-skip-via-context proof, both lifecycle moments, and a structural
   check that this file states the required rules.
+- [`../../lib/mnemosyne/layer1/__tests__/persona-interview-output.test.ts`](../../lib/mnemosyne/layer1/__tests__/persona-interview-output.test.ts)
+  (pw-11) -- proves a completed interview's `persona` actually round-trips
+  through disk via a REAL `mnemosyne persona create`/`persona show` CLI
+  subprocess (full-answers, partially-skipped, code-architect + `parentRefs`
+  cases), and a structural check that `persona-writer.mjs` introduces no
+  new/parallel write path.
