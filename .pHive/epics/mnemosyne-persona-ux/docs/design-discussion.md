@@ -340,40 +340,35 @@ one) will likely be needed to actually surface the corrected numbering
 structurally, not just in prose. Not blocking this epic; flagged so it isn't
 silently forgotten.
 
-**OQ2 (authentication/access posture for the new approve action).**
-`lib/mnemosyne/server.ts`'s own doc comment states "No authentication —
-localhost-only for this slice; auth is future work" — a posture Epic 1/2
-already accepted and this epic inherits unchanged for read/propose/edit
-routes. Approval is a meaningfully more consequential action (it is the
-literal human-in-the-loop gate ask 2 exists to create) than a plain read, and
-this session is not confident making a unilateral call that "no additional
-guard beyond what POST /persona already has" is correct for this specific
-route without operator sign-off, given how central "a human approves" is to
-the whole feature's stated purpose. Flagged for explicit operator
-confirmation before pu-03 ships; the default assumption carried into planning
-is "same posture as every other route in this file, no new auth," but this
-is named as an assumption, not asserted as a decision.
+**OQ2 and OQ3 below were operator-resolved after this planning pass** — see
+§9 judgment calls 8 and 9 for the decisions and their downstream story
+updates. Preserved here (struck through in spirit, not content) as the
+record of what was actually asked and why, per this doc's own
+never-silently-rewrite-history convention (mirrors `ml-09`'s doc-reconciliation
+posture in the sibling epic).
 
-**OQ3 (where does `remember()`'s "initial crawl and feeding" step fire once
-the default flow is draft-first?).** Discovered while decomposing pu-08: the
+**OQ2 (RESOLVED — see §9.8): authentication/access posture for the new
+approve action.** Was: `lib/mnemosyne/server.ts`'s doc comment states "No
+authentication — localhost-only for this slice; auth is future work" — a
+posture Epic 1/2 already accepted. Approval is a meaningfully more
+consequential action than a plain read (it is the literal human-in-the-loop
+gate ask 2 exists to create), so this session flagged it for explicit
+operator confirmation rather than assuming "no new auth" was correct.
+**Operator confirmed: same posture as every other route in this file, no new
+auth** — revisit when real multi-user/remote access becomes a real
+requirement, not preemptively.
+
+**OQ3 (RESOLVED — see §9.9): where does `remember()`'s "initial crawl and
+feeding" step fire once the default flow is draft-first?** Was: the
 already-shipped interview skill fires `remember()` unconditionally,
-immediately after every commit (step 8). Once the default write target
-becomes a draft (pu-08), firing `remember()` at that same moment would
-index unreviewed, not-yet-human-approved source material into searchable
-memory — plausibly worse than the problem ask 2 exists to fix. The natural
-new firing point is post-approval, but that could reasonably live in the
-generic approve route/CLI verb (H3/H4 — except a human-typed draft has no
-`sourceSummary`/source material to remember at all, so a generic hook would
-need to special-case draft provenance) or as a separate, explicit step the
-interview-skill's own documentation still owns. This session is not
-confident which shape is correct without operator input, so pu-08 defers
-`remember()` firing to the `--commit-directly` escape-hatch path only
-(matching pre-epic behavior exactly for that path) and explicitly does NOT
-wire a default-path equivalent — flagged here, and in pu-08's own risk table,
-rather than guessed at silently. Whoever executes pu-13 (the full-loop e2e
-regression) should decide at that point whether closing this gap is in pu-13's
-own scope or needs a 15th ticket; this planning pass deliberately does not
-pre-decide that either way.
+immediately after every commit. Once the default write target becomes a
+draft (pu-08), firing `remember()` at that same moment would index
+unreviewed, not-yet-human-approved source material into searchable memory.
+**Operator confirmed: fire on approval, not on draft creation** — matches
+the "human approves before anything is committed" principle exactly;
+unapproved content never gets indexed. See §9.9 for the concrete story
+re-scoping this drove (pu-03/pu-04 gain the firing logic on the approve
+path; pu-13 gains a regression proof).
 
 ## 9. Resolved judgment calls (orchestrator judgment call, not re-escalated — reversible implementation details, decided with reasoning rather than blocking)
 
@@ -425,3 +420,36 @@ pre-decide that either way.
    guard already happens to reject a 3-segment `/persona/draft/:tier/:scopeId`
    path harmlessly today, but relying on that as the ONLY protection against
    collision would be fragile; explicit ordering is the real guarantee.
+8. **(Operator-resolved, formerly OQ2) No new auth on the approve action —
+   same posture as every other route in this file.** Confirmed directly by
+   the operator rather than assumed: `POST /persona/draft/:tier/:scopeId/approve`
+   gets no additional guard beyond what `POST /persona` already has (none).
+   Revisit only if/when real multi-user or remote access becomes an actual
+   requirement — not a preemptive build. No story acceptance criteria change
+   as a result (the "no new auth" default assumption already carried into
+   pu-03's spec was correct); this entry exists so the decision is recorded
+   as confirmed, not merely assumed.
+9. **(Operator-resolved, formerly OQ3) `remember()` fires on approval, never
+   on draft creation.** Confirmed directly by the operator: unapproved
+   content must never be indexed into searchable memory. Concrete downstream
+   re-scoping this drove (applied directly to the affected story files, not
+   left as prose-only):
+   - **pu-03** (draft HTTP routes) gains a new acceptance criterion: the
+     `POST /persona/draft/:tier/:scopeId/approve` route, after a successful
+     `writeGlobalPersona`/`writeRepoLocalPersona` call, fires
+     `rememberInterviewSource()`-equivalent logic — reusing
+     `resolveRememberScope()` (persona.ts) for the scope/tag and a
+     `buildRememberText()`-shaped summary — for drafts that carry a
+     `sourceSummary` (agent-proposed). A human-typed draft (no
+     `sourceSummary`) skips the `remember()` call entirely rather than
+     inventing placeholder source material — there is nothing real to index.
+   - **pu-04** (CLI verbs) gains the equivalent acceptance criterion for
+     `mnemosyne persona draft approve` — the CLI and HTTP approve paths must
+     fire `remember()` identically, not diverge.
+   - **pu-13** (full-loop e2e regression) gains a new acceptance criterion:
+     propose (with a real `sourceSummary`) → approve → assert a real
+     `remember()` call landed (note file exists on disk, correct scope via
+     `resolveRememberScope()`) — AND a second case proving NO `remember()`
+     call fires between propose and approve (a query against the draft's
+     content during the pending-review window returns nothing, proving
+     unapproved content was never indexed).

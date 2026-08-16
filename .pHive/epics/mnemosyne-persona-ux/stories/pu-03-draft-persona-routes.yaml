@@ -22,6 +22,9 @@ acceptance_criteria:
   - "Given an active draft that does NOT pass assertValidPersona (e.g. missing displayName), when POST /persona/draft/:tier/:scopeId/approve is called, then it returns a 400 via the existing badRequest convention, nothing is written to the real store, and the draft remains active (not archived) so a human can go fix it"
   - "Given an active draft, when DELETE /persona/draft/:tier/:scopeId is called, then it is archived via disposeDraftPersona('discarded') (never a bare filesystem delete) and no longer appears in GET /persona/draft's active listing"
   - "Given a request to any /persona/draft/* route from one of UI_ORIGINS, when the response is inspected, then it carries the exact same Access-Control-Allow-Origin header applyPersonaCors already produces for /persona/* -- no second CORS implementation, and a request from an origin NOT in UI_ORIGINS gets no CORS header at all"
+  - "Given an active draft that carries a real sourceSummary (agent-proposed, via pu-07's bounded crawl), when POST /persona/draft/:tier/:scopeId/approve succeeds, then a real remember() call fires AFTER the write succeeds -- scoped via resolveRememberScope() (persona.ts), text built from the draft's sourceSummary -- and its landing is independently verifiable (a real note file exists on disk), matching the wizard epic's own rememberInterviewSource() rigor, not a stubbed call"
+  - "Given an active draft with NO sourceSummary (a human typed it directly into the form, never touched the bounded crawl), when POST /persona/draft/:tier/:scopeId/approve succeeds, then NO remember() call fires -- there is no real source material to index, and this route must not invent placeholder text just to have something to remember()"
+  - "Given an active, unapproved draft, when a recall() query is run against its content during the pending-review window (propose called, approve NOT yet called), then it returns nothing -- proving remember() has genuinely not fired yet, not merely that this route doesn't claim to have fired it"
 
 steps:
   - id: research
@@ -107,9 +110,12 @@ risks:
   - severity: high
     description: "A future, unrelated change to the existing generic /persona/:tier/:scopeId handlers' segment-count guard (e.g. relaxing it to accept 3 segments for some other reason) could silently make /persona/draft/* requests fall into the WRONG handler instead of 404ing harmlessly, since today's protection is incidental, not structural."
     mitigation: "This ticket's own acceptance criteria require explicit branch ordering (draft routes checked first), not reliance on the generic handlers' guard -- the review step traces this by hand as an explicit gate, and the test suite exercises the draft routes directly rather than only asserting 'the generic handler doesn't also match.'"
+  - severity: low
+    description: "The approve route is the one genuinely more consequential action this ticket adds (it commits real, governing persona content)."
+    mitigation: "Operator-confirmed (design-discussion.md §9 judgment call #8, formerly OQ2): same no-auth, localhost-only posture as every other route in this file -- explicitly confirmed, not assumed. Revisit only if/when real multi-user/remote access becomes an actual requirement."
   - severity: medium
-    description: "The approve route is the one genuinely more consequential action this ticket adds (it commits real, governing persona content) -- yet server.ts's own stated posture is 'No authentication -- localhost-only for this slice.'"
-    mitigation: "Explicitly flagged as OQ2 in design-discussion.md §8, not silently decided -- this ticket inherits the existing no-auth posture as its default assumption but does not treat that as settled; operator sign-off is called out as needed before this ticket ships in a real execution pass."
+    description: "remember() firing on the approve path (new acceptance criteria above) could accidentally fire twice (once via a naive port of the interview skill's old unconditional-fire logic, once via this route's own new call) if the interview skill's draft-first rewrite (pu-08) isn't coordinated with this route's own firing."
+    mitigation: "pu-08 explicitly removes the interview skill's own unconditional remember() call for the draft-first default path (design-discussion.md §9 judgment call #9) -- this route becomes the ONE place remember() fires for an agent-proposed draft's approval, not a second, redundant caller. pu-13's full-loop regression asserts exactly one remember() call per approval, not zero and not two."
 
 references:
   - path: .pHive/epics/mnemosyne-persona-ux/docs/design-discussion.md

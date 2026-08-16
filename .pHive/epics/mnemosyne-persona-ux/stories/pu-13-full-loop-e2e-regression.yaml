@@ -17,18 +17,20 @@ description: |
   ends up committed via the unchanged write primitive -- not each piece
   proven only in isolation.
 
-  This ticket's execution-time scope should also resolve design-discussion.md
-  OQ3 (where remember()'s post-approval firing lives, if it's wired at all in
-  this epic) -- explicitly flagged in pu-08 as a residual gap this ticket is
-  the natural place to either close or explicitly defer further, not
-  silently ignore.
+  OQ3 (where remember()'s post-approval firing lives) is now operator-resolved
+  (design-discussion.md §9 judgment call #9, decided after this planning pass
+  completed): remember() fires on approval, never on draft creation, wired
+  directly into pu-03/pu-04's approve paths. This ticket's job is no longer to
+  decide that -- it's the real, end-to-end PROOF that the already-decided
+  behavior holds across the complete loop, not just at the unit/transport
+  level pu-03/pu-04/pu-06 already cover in isolation.
 
 acceptance_criteria:
   - "Given a real subprocess-spawned lib/mnemosyne/server.ts and a real CLI-run interview (skills/mnemosyne-persona-interview, default draft-first path, pu-08), when the interview completes, then GET /persona/draft (pu-03) shows the newly-proposed draft, including its sourceSummary (pu-07)"
+  - "Given that draft is now active but NOT yet approved, when a recall() query is run against content from the draft's sourceSummary/text, then it returns nothing -- proving remember() has not fired during the pending-review window, across the FULL real loop (CLI-propose through this exact moment), not just in pu-03's own isolated unit test"
   - "Given that draft, when a simulated UI interaction edits one field and re-submits (exercising pu-12's edit path against real HTTP, not a mocked fetch), then GET /persona/draft/:tier/:scopeId reflects the edit"
-  - "Given the edited draft, when a simulated UI interaction approves it (exercising pu-12's approve path against pu-03's real approve route), then a direct filesystem read confirms the real persona store now has the committed persona, and GET /persona (the real store's list route) includes it"
+  - "Given the edited draft, when a simulated UI interaction approves it (exercising pu-12's approve path against pu-03's real approve route), then a direct filesystem read confirms the real persona store now has the committed persona, GET /persona (the real store's list route) includes it, AND a real remember() call landed (a real note file exists on disk, correctly scoped via resolveRememberScope()) -- the full propose-to-remembered loop proven in one continuous real run"
   - "Given the same approval, when GET /persona/draft is checked afterward, then the approved draft no longer appears in the active list (archived, per pu-02's disposal design)"
-  - "Given this full loop, when design-discussion.md OQ3 (remember()'s post-approval firing) is considered, then this ticket's own execution either wires and proves it, or explicitly documents in its own note-on-completion why it was deferred further -- not silently skipped without a written decision"
 
 steps:
   - id: research
@@ -54,22 +56,20 @@ steps:
   - id: implement
     description: >
       Write test/persona-full-loop-e2e.mjs implementing the above against
-      real subprocess-spawned processes throughout. Investigate and resolve
-      design-discussion.md OQ3 as part of this ticket's own scope: either
-      wire remember()'s post-approval firing (if a clean, non-scope-creeping
-      place to do so is found -- e.g. a conditional branch in pu-03's approve
-      route keyed on the presence of sourceSummary/proposedBy metadata) and
-      add a corresponding assertion, or explicitly document in this ticket's
-      completion notes why that remains out of scope and should become a
-      15th, follow-on ticket instead.
+      real subprocess-spawned processes throughout, including the
+      pending-review-window recall() assertion (proves remember() genuinely
+      has not fired yet) and the post-approval remember()-landed assertion
+      (pu-03/pu-04 already wire the firing logic itself -- this ticket proves
+      it holds across the complete real loop, not in isolation).
     agent: developer
     depends_on: [test-spec]
   - id: review
     description: >
       Confirm every step of the loop uses a REAL process/HTTP call, no
       simulation shortcuts that would let this test pass even if the real UI
-      code (pu-12) were broken. Confirm OQ3 was genuinely resolved one way
-      or the other, not silently dropped.
+      code (pu-12) were broken. Confirm the remember()-timing proof
+      (not-yet-fired during review, fired-and-landed after approval) is
+      genuinely exercised end-to-end, not asserted against a stub.
     agent: reviewer
     depends_on: [implement]
   - id: integrate
@@ -96,8 +96,13 @@ files_to_modify:
     change: "New file. The complete agent-propose -> UI-review-edit -> human-approve -> real-commit loop, against real subprocess-spawned processes throughout."
 
 design_decisions:
-  - decision: "This ticket's execution is explicitly the place OQ3 (remember()'s post-approval firing) gets resolved one way or the other, not left open indefinitely."
-    rationale: "design-discussion.md OQ3 and pu-08's own risk table both name this ticket as the natural point to decide -- deferring the decision through planning was itself a deliberate choice (not enough visibility to decide unilaterally at planning time), but deferring it through EXECUTION too would let a real gap ship silently."
+  - decision: "This ticket proves the operator-resolved remember()-timing decision (fires on approval, never on draft creation) end-to-end, rather than deciding it -- the decision itself is now settled at the planning level (design-discussion.md §9 judgment call #9), wired into pu-03/pu-04."
+    rationale: >
+      Originally OQ3, deferred through planning for lack of visibility into
+      the right call; resolved directly by the operator before execution
+      began. This ticket's remaining job is the same 'prove it holds
+      end-to-end, not just in isolated unit tests' bar every other assertion
+      here already holds to.
 
 cross_cutting: []
 
@@ -109,10 +114,12 @@ risks:
 references:
   - path: .pHive/epics/mnemosyne-persona-ux/docs/design-discussion.md
     relevant_excerpt: |
-      OQ3: "Whoever executes pu-13 (the full-loop e2e regression) should
-      decide at that point whether closing this gap is in pu-13's own scope
-      or needs a 15th ticket; this planning pass deliberately does not
-      pre-decide that either way."
+      §9 judgment call #9 (formerly OQ3, operator-resolved): "remember()
+      fires on approval, never on draft creation ... pu-13 (full-loop e2e
+      regression) gains a new acceptance criterion: propose (with a real
+      sourceSummary) -> approve -> assert a real remember() call landed ...
+      AND a second case proving NO remember() call fires between propose
+      and approve."
   - path: .pHive/epics/mnemosyne-persona-wizard/stories/pw-17-personas-panel-write-form.yaml
     relevant_excerpt: |
       "This closes the epic (pw-01 through pw-17) with the write form

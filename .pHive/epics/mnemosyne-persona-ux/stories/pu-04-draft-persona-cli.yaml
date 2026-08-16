@@ -22,6 +22,7 @@ acceptance_criteria:
   - "Given an active draft, when `mnemosyne persona draft approve <tier> <scope-id> [--repo <repo>]` is run, then it produces the same outcome pu-03's POST .../approve route produces (real commit via the unchanged write primitive, draft archived) -- verified by a direct filesystem read of both the committed file and the archived draft location, not just exit code 0"
   - "Given an active draft, when `mnemosyne persona draft discard <tier> <scope-id> [--repo <repo>]` is run, then the draft is archived to the discarded/ subtree (never deleted) and `persona draft show` for the same identity afterward reports no active draft"
   - "Given a candidate that fails structural sanity (bad tier) at propose time, or fails assertValidPersona at approve time, when the relevant subcommand is run, then it exits non-zero with a clear stderr message -- never a silent no-op or exit 0"
+  - "Given an active draft with a real sourceSummary, when `mnemosyne persona draft approve` succeeds, then it fires the identical remember() call pu-03's HTTP approve route fires for the same input (same resolveRememberScope() scope/tag, same source text) -- proven by pu-06's cross-transport parity tests, not just asserted here. Given a draft with no sourceSummary, no remember() call fires (operator-resolved, design-discussion.md §9 judgment call #9)."
 
 steps:
   - id: research
