@@ -77,7 +77,7 @@ Epic 1's two-store split (global personas existing independently of any repo; re
 
 **OQ1 (server routing) — RESOLVED: add the new `/persona/*` routes to `lib/mnemosyne/server.ts`** (the already-TS-native, already-`tsx`-launched server), not `src/server.mjs`. The standalone UI will need to reach two backend processes/ports — accepted tradeoff, operator's explicit choice over relaunching `src/server.mjs` via `tsx` or duplicating store-read logic as `.mjs`.
 
-**OQ2 (remember()-scope mapping)** — still open, scoped to Slice 3 (the interview) only; does not block Slices 1/2/4.
+**OQ2 (remember()-scope mapping) — RESOLVED (pw-09): see §8 addendum below.** Tier alone selects one of four fixed `engine.mjs` lane names; `scopeId` comes back as a sanitized `tag`, never folded into the scope string itself.
 
 **OQ3 (3a's transport surface)** — accepted default: ships to all three transports (CLI/MCP/skill-harness) for parity with `sync`/`seed`/`show`.
 
@@ -94,3 +94,30 @@ Epic 1's two-store split (global personas existing independently of any repo; re
 ## 7. Scale assessment
 
 **Confirmed: Large — comparable to or larger than Epic 1's original (pre-split) scope.** Rough per-slice sizing, by analogy to Epic 1's own Slice 1 (5 stories for repo-local store + locking + fixtures alone): **Slice 1 (view-only UI) in the 3-5 story range, Slice 2 (write primitive + transport tests) in the 4-6 story range, Slice 3 (interview skill) likely the largest and least-precedented — no clean Epic-1 analog to size against — Slice 4 (UI write form) 2-4 stories.** Rough bands for planning purposes, not commitments. Proceeding to full H/V delivery planning now that the operator has confirmed the routing decision, the write-form scope, and the slice order.
+
+## 8. OQ2 Resolution (pw-09)
+
+**Decision: tier alone selects one of four fixed `engine.mjs` lane names; `scopeId` is never folded into the scope string, only returned as a sanitized `tag`.**
+
+Implemented as `resolveRememberScope()` in `lib/mnemosyne/layer1/persona.ts` (full rationale is also a code comment directly above that function — this addendum is the durable, reviewable version of the same reasoning, per this story's own acceptance criteria that the rationale not live in a commit message alone).
+
+```
+PERSONA_REMEMBER_SCOPE_BY_TIER = {
+  'top-orchestrator':     'persona-top-orchestrator',
+  'company-director':     'persona-company-director',
+  'project-orchestrator': 'persona-project-orchestrator',
+  'code-architect':       'persona-code-architect',
+}
+```
+
+**Which `remember()` did this target, and why (not a coin flip):** horizontal-plan.md's H7 named two real implementations with incompatible vocabularies — `src/engine.mjs`'s `remember(text, scope, opts)` (free-form lane name, validated against a config-driven map) and `lib/mnemosyne/client.ts`'s `MnemosyneClient.remember(content, scope, layer?)` (closed `Scope = 'project'|'enterprise'|'meta'` union). The two are reachable through different servers/ports. Tracing pw-10's actual interview skill's real call paths settles which one matters here: a running Claude Code skill's two transports for firing a `remember()` call are `bin/mnemosyne-mcp.mjs`'s MCP `"remember"` tool and `bin/mnemosyne-skill-helper.mjs`'s `rememberAction` — both default to `DEFAULT_PORT` 8477, which is `src/server.mjs`'s `POST /remember`, which calls `engine.mjs`'s `remember()`. `lib/mnemosyne/server.ts` (port 3141, `MnemosyneClient.remember()`) is a separate process with no standard reach from a skill. So H7 option (b) — map into `engine.mjs`'s vocabulary — is the one actually load-bearing for this epic's stated use case ("initial crawl and feeding" fired by the interview skill); mapping into `client.ts`'s union instead would be correct for a *library* caller but dead code for pw-10's actual caller.
+
+**Why tier-only, not `{tier, scopeId}` both folded into the scope string (a literal reading of H7 option (b), "treating `{tier, scopeId}` as (part of) the lane name directly"):** `engine.mjs`'s vocabulary is "free-form" only in the sense of "not a closed TS union" — every real scope name still has to pre-exist as a `[scopes]` entry in swarm-memory's `config.toml` before `remember()` accepts it (`unknown scope` 400, `SCOPE_NAME_RE` = `^[A-Za-z][A-Za-z0-9_-]{0,63}$`, `src/engine.mjs`). Checking a real, in-use `config.toml` (`~/.config/swarm-memory/config.toml` on this machine) confirms that table is a small, hand-curated set in practice — `top`, `clients`, `personal`, `att`, `cadex`, ... — each with a `[ladder]` fallback chain, never one entry per fine-grained runtime value. A scope computed per-`scopeId` (e.g. `persona-code-architect-mnemosyne`) would need its own `addLane()` config mutation for every persona ever authored — an unbounded, uncurated lane explosion nothing else in this codebase's config convention does, and a real operational burden the interview skill can't discharge on its own (it isn't in the business of editing `config.toml`). Four fixed tier lanes is a one-time, four-line setup cost instead — the same shape as every other lane already in `config.toml`.
+
+**`scopeId` isn't dropped — it's carried as `tag`.** `resolveRememberScope()` returns `{scope, tag}`; `tag` is `scopeId` sanitized with the *exact* rule `engine.mjs remember()` already applies internally to `opts.tag` (`.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 40)`), so a caller passes it straight through with zero extra transformation and gets the same result `remember()` would have computed unprompted. This keeps `scopeId` visible in the note's filename/provenance. Recall-time precision beyond that (actually finding *this persona's* memories, not just anything in its tier's lane) depends on the interview skill (pw-10) also folding `scopeId` into the remembered `text` itself — this resolver only owns the `scope`-argument mapping, per this story's explicit boundary (`files_to_modify` names `persona.ts`, not either `remember()` implementation).
+
+**Determinism:** pure function, no filesystem/config/network/clock read — `{tier, scopeId}` in, `{scope, tag}` out, same every time. Tested in `lib/mnemosyne/layer1/__tests__/persona.test.ts`'s `resolveRememberScope` suite (repeated-call determinism, all four tiers' expected fixed scope, `scopeId` never changing the resolved scope, tag sanitization/truncation, and rejection of an unknown tier or empty `scopeId`).
+
+**Does not require rewriting either `remember()` implementation:** confirmed — `resolveRememberScope()` has zero import from `src/engine.mjs` or `lib/mnemosyne/client.ts`; it produces plain data (`{scope, tag}`) that a future pw-10 caller passes into `engine.mjs`'s `remember()` unmodified.
+
+**Known tradeoff, accepted:** the four `persona-*` lanes do not exist in any given operator's `config.toml` yet — the very first real `remember()` call at each tier will 400 with `unknown scope` until an operator runs `addLane()` (or edits `config.toml` directly) once per tier, four times total, ever. This is a deliberately loud, explicit failure (matching this codebase's existing "never write with guessed data" convention, `src/engine.mjs`'s own doc comments on `remember()`) rather than a silent fallback to the wrong lane — exactly the risk this story's acceptance criteria was raised to avoid. Provisioning those four lanes is out of this story's scope (it's a one-time operator/config action, not a code change) but is called out here so it isn't a surprise when pw-10's interview skill fires its first real write.
