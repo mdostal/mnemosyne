@@ -1,10 +1,28 @@
 id: pu-11-layer-stack-integration-redesign
 epic: mnemosyne-persona-ux
 title: Layer-stack visibility section re-integrated into the new shell
-status: planned
+status: complete
 complexity: low
 methodology: tdd
 depends_on: [pu-10-personas-panel-redesign-shell]
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 645a144). Independently verified: read the full
+  diff -- confirmed #persona-layer-stack is genuinely nested inside
+  #personas (not merely placed after it), all DOM-target element ids
+  (persona-layer-stack-status/-table/-tbody/-empty, persona-level0-pointer,
+  persona-level0-path) are byte-for-byte preserved through the move, and
+  ui/app.js's loadPersonaLayerStack() change is doc-comment-only (fetch
+  logic, mnemosyneClientApiBase(), single call site in refreshAll() all
+  unchanged). Confirmed no hard-coded "Level/Layer 1-4" or "0-4" copy
+  appears anywhere in the re-homed section. Confirmed Level 0 stays
+  view-only with zero edit affordance. Reran the new
+  persona-layer-stack-shell-integration.mjs (26/26) plus the 4 other UI
+  test files myself in both the builder's worktree and the merged
+  integration worktree -- all passing both times, tsc --noEmit clean both
+  times. Confirmed via merge-base check the builder's worktree base was
+  STALE (missing pu-06) -- resolved by merging via commit hash into the
+  up-to-date integration worktree. All acceptance criteria met.
 
 description: |
   Implements horizontal-plan.md H7's layer-stack component: carries pw-04's
