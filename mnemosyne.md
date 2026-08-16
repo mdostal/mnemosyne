@@ -11,7 +11,7 @@ agent is operating at.
 
 Edit this file directly to change what every agent, on every harness, in
 this repo is told about working with memory. Once the Level 1 install
-mechanism ships (`ml-03`/`ml-04`), this content is spliced into each
+mechanism ships (`ml-03`), this content is spliced into each
 harness's own native auto-load file (`CLAUDE.md` / `AGENTS.md` /
 `GEMINI.md`) by the same sync pipeline that already splices Level 0 and
 tier content — see `lib/mnemosyne/layer1/harness.ts` and
