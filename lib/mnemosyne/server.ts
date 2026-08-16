@@ -16,16 +16,40 @@
  *   GET  /health            -> layer availability status
  *   GET  /layers            -> the resolved layer stack (pl-03-layer-ab-testing):
  *                               names in cascade order + write-capability per layer
+ *   GET  /persona           -> list personas (pw-02-get-persona-routes-cors):
+ *                               global tiers by default, or ?repo=<path>'s
+ *                               code-architect personas -- wraps pw-01's
+ *                               listGlobalPersonas/listRepoLocalPersonas
+ *                               directly, no re-implementation
+ *   GET  /persona/:tier/:scopeId  -> read one persona (?repo=<path> required
+ *                               for tier=code-architect) -- wraps
+ *                               readGlobalPersona/readRepoLocalPersona
  *   POST /recall  {query, scope, intent?}            -> RecallResult
  *   POST /remember {content: {text, metadata?}, scope, layer?} -> RememberResult
  *
  * No authentication — localhost-only for this slice; auth is future work.
+ *
+ * CORS: /persona/* responses carry an Access-Control-Allow-Origin header
+ * (pw-02-get-persona-routes-cors) -- the standalone UI is served from
+ * src/server.mjs on a DIFFERENT port (8477 by default) than this service
+ * (3141 by default), so a browser fetch from the UI to /persona/* is a real
+ * cross-origin request that gets silently blocked without it. Scoped to the
+ * UI's known origins (127.0.0.1:8477, localhost:8477), never a wildcard "*"
+ * -- see UI_ORIGINS/applyPersonaCors below.
  */
 
 import http from 'node:http';
 import { stat } from 'node:fs/promises';
 import { MnemosyneClient } from './client.js';
 import type { Layer, Scope } from './interfaces.js';
+import { PERSONA_STORE_BY_TIER } from './layer1/persona.js';
+import { listGlobalPersonas, readGlobalPersona } from './layer1/persona-store-global.js';
+import {
+  listRepoLocalPersonas,
+  readRepoLocalPersona,
+  REPO_LOCAL_PERSONA_TIER,
+} from './layer1/persona-store-repo-local.js';
+import { TIERS, type Tier } from './layer1/tiers.js';
 
 const PORT = Number(process.env.MNEMOSYNE_PORT || 3141);
 const ROOT_DIRECTORY = process.env.MNEMOSYNE_ROOT_DIR || process.cwd();
@@ -58,6 +82,32 @@ const LAYERS: ReadonlySet<Layer> = new Set([
   // other optional layer in this set (see comment above).
   'keyword',
 ]);
+
+// pw-02-get-persona-routes-cors: the standalone UI's real, known origins
+// (src/server.mjs's static /ui handler, default PORT 8477 -- confirmed by
+// reading that file, not guessed). Deliberately an allow-list, not "*": a
+// wildcard would work for a locally-run tool but is looser than necessary
+// (vertical-plan.md's stated recommendation) -- reflected back verbatim only
+// when the request's Origin header is an exact match to one of these.
+const UI_ORIGINS: ReadonlySet<string> = new Set(['http://127.0.0.1:8477', 'http://localhost:8477']);
+
+/**
+ * Sets Access-Control-Allow-Origin (scoped, never "*") on /persona/*
+ * responses when the request's Origin header matches one of UI_ORIGINS.
+ * `res.setHeader` here merges with the headers object `sendJson`'s later
+ * `res.writeHead` call passes (Node merges setHeader()-set headers with
+ * writeHead()'s, precedence to writeHead() only on a literal key clash --
+ * there is none here), so calling this before `sendJson`/`badRequest` is
+ * sufficient. No-op (sends no CORS header at all) for any other origin --
+ * this is the "scoped, not wildcarded" contract pw-02 requires.
+ */
+function applyPersonaCors(req: http.IncomingMessage, res: http.ServerResponse): void {
+  const origin = req.headers.origin;
+  if (typeof origin === 'string' && UI_ORIGINS.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+  }
+}
 
 const client = new MnemosyneClient({ rootDirectory: ROOT_DIRECTORY });
 
@@ -144,6 +194,65 @@ const server = http.createServer(async (req, res) => {
       // (registry + config), never a hardcoded/stale echo — see
       // client.ts's getConfiguredLayers() and layers/config.ts.
       return sendJson(res, 200, { layers: client.getConfiguredLayers() });
+    }
+
+    if (route === 'GET /persona') {
+      // pw-02-get-persona-routes-cors: no ?repo -> global tiers
+      // (top-orchestrator/company-director/project-orchestrator), wrapping
+      // pw-01's listGlobalPersonas directly. ?repo=<path> SWITCHES to that
+      // repo's code-architect personas (listRepoLocalPersonas) -- not
+      // merged with the global list (vertical-plan.md's Resolved
+      // Ambiguities #2: "?repo= switches to repo-local").
+      applyPersonaCors(req, res);
+      const repo = url.searchParams.get('repo');
+      if (repo) {
+        const personas = listRepoLocalPersonas(repo).map((p) => ({
+          tier: REPO_LOCAL_PERSONA_TIER,
+          scopeId: p.scopeId,
+        }));
+        return sendJson(res, 200, { personas });
+      }
+      return sendJson(res, 200, { personas: listGlobalPersonas() });
+    }
+
+    if (req.method === 'GET' && url.pathname.startsWith('/persona/')) {
+      // GET /persona/:tier/:scopeId -- read one persona back, wrapping
+      // readGlobalPersona/readRepoLocalPersona directly (no re-implemented
+      // parsing/validation -- pw-01's write-path non-duplication concern
+      // applies equally to these read wrappers).
+      applyPersonaCors(req, res);
+      const segments = url.pathname.slice('/persona/'.length).split('/').filter(Boolean);
+      if (segments.length !== 2) {
+        return sendJson(res, 404, { error: { code: 'not_found', message: `no route for ${route}` } });
+      }
+      const [tierParam, scopeId] = segments as [string, string];
+      if (!(TIERS as readonly string[]).includes(tierParam)) {
+        return badRequest(res, 'invalid_tier', `"tier" must be one of: ${TIERS.join(', ')}`);
+      }
+      const tier = tierParam as Tier;
+
+      try {
+        if (PERSONA_STORE_BY_TIER[tier] === 'global') {
+          return sendJson(res, 200, { persona: readGlobalPersona(tier, scopeId) });
+        }
+        // repo-local (code-architect): requires ?repo=<path> -- there is no
+        // ambient "current repo" for this HTTP service to guess at.
+        const repo = url.searchParams.get('repo');
+        if (!repo) {
+          return badRequest(res, 'missing_repo', '"repo" query parameter is required to read a code-architect persona');
+        }
+        return sendJson(res, 200, { persona: readRepoLocalPersona(repo, scopeId) });
+      } catch (error) {
+        // readGlobalPersona/readRepoLocalPersona throw for "no persona at
+        // this path" (and for on-disk schema-validation failure) -- both are
+        // "this persona is not available", i.e. 404, not a 500.
+        return sendJson(res, 404, {
+          error: {
+            code: 'persona_not_found',
+            message: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
     }
 
     if (route === 'POST /recall') {
