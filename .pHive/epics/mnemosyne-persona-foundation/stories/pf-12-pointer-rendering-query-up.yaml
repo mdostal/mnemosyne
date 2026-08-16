@@ -1,0 +1,116 @@
+id: pf-12-pointer-rendering-query-up
+epic: mnemosyne-persona-foundation
+title: Pointer rendering in getPersonaContent (query-up, not copy-down)
+status: complete
+complexity: medium
+methodology: tdd
+depends_on: [pf-11-parentrefs-schema-support]
+
+note_on_completion: >
+  Implemented 2026-08-15. TDD: 4 new tests written first against
+  lib/mnemosyne/layer1/__tests__/persona.test.ts and confirmed failing
+  (no "Parent context" rendering existed yet), then getPersonaContent's
+  repo-local dispatch path (persona.ts) was extended with
+  buildParentContextSections, which builds pointer-only {tier, scopeId} +
+  fetch-instruction sections purely from the persona's own parentRefs field
+  -- no code path reads the parent's actual store. tiers.ts's TierContent
+  gained a parentContextSections extension point rendered by
+  renderTierContentMarkdown under its own "Parent context (query up)"
+  heading, mirroring mandateSections's existing pattern. The non-inlining
+  guarantee is proven by a real string-search test: two real parent personas
+  (project-orchestrator + company-director) written to a real temp global
+  store, each carrying a distinctive marker string in their sections body:
+  rendered output is asserted to contain the parent tier/scopeId pointers
+  and NOT contain either marker string, both headings, or either parent's
+  body text -- checked both at the getPersonaContent+renderTierContentMarkdown
+  level and end-to-end through a real syncHarnessFile CLAUDE.md write. A
+  fourth test confirms no "Parent context" section renders at all when
+  parentRefs is absent. All 135 lib/mnemosyne/layer1 tests pass; tsc --noEmit
+  clean. docs/layer-architecture-v2-plan.md updated per cross_cutting note
+  with a pointer to this implementation.
+
+  Independently verified (orchestrator, extra scrutiny given this story's
+  stated risk): reran vitest (135/135) and tsc myself, personally read the
+  non-inlining test's actual code (not just the report) -- confirmed it is
+  a real string-search assertion, not a mock or structural check, covering
+  two distinct parent tiers with distinctive unique markers, both at the
+  render level and end-to-end through a real syncHarnessFile write.
+
+description: |
+  Implements horizontal-plan.md H5 (the core mechanism): getPersonaContent's
+  repo-local rendering path renders a new "Parent context (query up)"
+  section naming each parent's tier/scopeId, WITHOUT inlining the parent's
+  `sections` content. This is the concrete guardrail against the copy-down
+  trap design-discussion.md explicitly flags as contradicting the
+  already-settled docs/layer-architecture-v2-plan.md principle: "cross-project
+  impact is answered by querying up the hierarchy, never held locally at a
+  lower tier."
+
+acceptance_criteria:
+  - "Given a repo-local persona with parentRefs: [{tier: 'project-orchestrator', scopeId: 'default'}], when synced, then the resulting CLAUDE.md contains a clearly labeled 'Parent context (query up)' section naming that tier/scopeId"
+  - "Given the same synced output, when inspected, then it does NOT contain the parent persona's `sections` bodies verbatim anywhere — this is checked by an explicit automated test, not a manual read"
+  - "Given a repo-local persona with no parentRefs, when synced, then no 'Parent context' section is rendered at all — this is opt-in, not a forced addition to every code-architect persona"
+
+steps:
+  - id: research
+    description: Re-read docs/layer-architecture-v2-plan.md's exact "query up, never hold locally" wording (confirmed at layer-architecture-v2-plan.md:35 per research-brief.md) to ground the pointer section's language in the project's own established terminology.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write the failing test that is the actual point of this story: assert
+      a synced repo-local persona's output contains the parent's tier/scopeId
+      as a named pointer, and assert (via string search across the full
+      rendered output) that the parent's real sections text is NOT present.
+      This second assertion is the concrete anti-copy-down check.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Extend getPersonaContent's repo-local rendering path to render the pointer section from parentRefs, without ever calling into the parent's content sections.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review specifically for any code path that could accidentally fetch and inline parent content during sync (even for a "preview" or "convenience" reason) — the whole point of this story is that sync-time rendering never touches parent section bodies.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: docs/layer-architecture-v2-plan.md
+      purpose: "The already-settled 'query up, never hold locally' principle (confirmed at line 35) this story enforces in code for the first time."
+    - path: lib/mnemosyne/layer1/tiers.ts
+      purpose: "MANDATE_SECTIONS (tiers.ts:93) — the pointer-rendering pattern mirrors this existing convention of instructing an agent to take an explicit action rather than force-feeding content."
+
+files_to_modify:
+  - file: lib/mnemosyne/layer1/persona.ts
+    change: "getPersonaContent's repo-local rendering path renders a 'Parent context (query up)' section from parentRefs; explicitly does not read/inline parent sections content."
+  - file: lib/mnemosyne/layer1/__tests__/persona.test.ts
+    change: "Pointer-rendering test + the explicit non-inlining string-search assertion."
+
+design_decisions:
+  - decision: "The rendered pointer instructs the agent to fetch parent content on demand (via pf-13's CLI), mirroring MANDATE_SECTIONS's existing pattern of an explicit instruction rather than automatic full-context injection."
+    rationale: "horizontal-plan.md H5.3: 'mirroring the existing MANDATE_SECTIONS pattern... of instructing the agent to take an explicit action rather than force-feeding everything into context on every sync.'"
+  - decision: "This is architecturally distinct from Mnemosyne's recall()/vector-search system — query-up here is a direct, on-demand YAML read, not a recall() call through the layer stack."
+    rationale: "horizontal-plan.md H5, design-discussion.md/research-brief.md §2: Layer 1 persona content and the layer-stack config (vector/keyword/etc.) are genuinely different data models; conflating them here would blur that boundary this epic is deliberately keeping clean."
+
+cross_cutting:
+  - concern: documentation
+    action: "This story makes design-discussion.md §3a's 'query up, never copy down' principle real in code for the first time — update docs/layer-architecture-v2-plan.md with a pointer to this concrete implementation once it lands, per design-discussion.md §5's dependency note."
+
+risks:
+  - severity: high
+    description: "This is the one place in the epic where a wrong implementation choice (copy-down instead of pointer) would silently contradict an already-settled architectural principle — and it would likely look correct on casual inspection since the content would technically be 'more complete.'"
+    mitigation: "The non-inlining test is a hard string-search assertion, not a subjective review judgment — it fails loudly if parent content ever appears in the rendered output."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-foundation/docs/design-discussion.md
+    relevant_excerpt: |
+      "Cascade down into a specific repo" could be misread as copying
+      global company-director/project-orchestrator content into every
+      repo's CLAUDE.md — that contradicts the existing, already-settled
+      principle that cross-tier impact is answered by querying UP the
+      hierarchy, never held locally at a lower tier.

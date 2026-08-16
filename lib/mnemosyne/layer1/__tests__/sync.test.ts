@@ -2,10 +2,14 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { syncAllHarnesses, syncHarnessFile } from '../sync.js';
 import { HARNESS_TARGETS } from '../harness.js';
 import { BLOCK_END, BLOCK_START } from '../block.js';
+import { writeRepoLocalPersona } from '../persona-store-repo-local.js';
+
+/** A stand-in scopeId for tests that don't care which scope, just that one is threaded through. */
+const SCOPE_ID = 'test-scope';
 
 const tempRoots: string[] = [];
 afterEach(async () => {
@@ -29,7 +33,7 @@ describe('syncHarnessFile', () => {
     const root = await makeTempRoot();
     const targetPath = path.join(root, 'CLAUDE.md');
     expect(() =>
-      syncHarnessFile(targetPath, 'code-architect', 'claude-code', {
+      syncHarnessFile(targetPath, 'code-architect', 'claude-code', SCOPE_ID, {
         level0Path: path.join(root, 'does-not-exist.md'),
       }),
     ).toThrow(/level 0/i);
@@ -42,7 +46,7 @@ describe('syncHarnessFile', () => {
     const targetPath = path.join(root, 'CLAUDE.md');
 
     expect(existsSync(targetPath)).toBe(false);
-    const result = syncHarnessFile(targetPath, 'code-architect', 'claude-code', { level0Path });
+    const result = syncHarnessFile(targetPath, 'code-architect', 'claude-code', SCOPE_ID, { level0Path });
     expect(result.created).toBe(true);
     expect(existsSync(targetPath)).toBe(true);
   });
@@ -53,7 +57,7 @@ describe('syncHarnessFile', () => {
     const level0Path = await makeLevel0(root, `# Level 0 — Operator Global Rules\n\n${level0Body}\n`);
     const targetPath = path.join(root, 'CLAUDE.md');
 
-    syncHarnessFile(targetPath, 'project-orchestrator', 'claude-code', { level0Path });
+    syncHarnessFile(targetPath, 'project-orchestrator', 'claude-code', SCOPE_ID, { level0Path });
     const written = await readFile(targetPath, 'utf8');
 
     expect(written).toContain(level0Body);
@@ -73,12 +77,12 @@ describe('syncHarnessFile', () => {
     const level0Path = await makeLevel0(root, 'Original level 0 rule text.');
     const targetPath = path.join(root, 'CLAUDE.md');
 
-    syncHarnessFile(targetPath, 'code-architect', 'claude-code', { level0Path });
+    syncHarnessFile(targetPath, 'code-architect', 'claude-code', SCOPE_ID, { level0Path });
     let written = await readFile(targetPath, 'utf8');
     expect(written).toContain('Original level 0 rule text.');
 
     await writeFile(level0Path, 'Updated level 0 rule text.', 'utf8');
-    syncHarnessFile(targetPath, 'code-architect', 'claude-code', { level0Path });
+    syncHarnessFile(targetPath, 'code-architect', 'claude-code', SCOPE_ID, { level0Path });
     written = await readFile(targetPath, 'utf8');
 
     expect(written).toContain('Updated level 0 rule text.');
@@ -96,7 +100,7 @@ describe('syncHarnessFile', () => {
       'utf8',
     );
 
-    const first = syncHarnessFile(targetPath, 'code-architect', 'claude-code', { level0Path });
+    const first = syncHarnessFile(targetPath, 'code-architect', 'claude-code', SCOPE_ID, { level0Path });
     expect(first.created).toBe(false);
     const afterFirst = await readFile(targetPath, 'utf8');
     expect(afterFirst).toContain('Human-authored setup notes that must never be touched.');
@@ -107,7 +111,7 @@ describe('syncHarnessFile', () => {
     await writeFile(targetPath, withHumanAddition, 'utf8');
 
     await writeFile(level0Path, 'Level 0 rules v2.', 'utf8');
-    const second = syncHarnessFile(targetPath, 'code-architect', 'claude-code', { level0Path });
+    const second = syncHarnessFile(targetPath, 'code-architect', 'claude-code', SCOPE_ID, { level0Path });
     expect(second.created).toBe(false);
 
     const afterSecond = await readFile(targetPath, 'utf8');
@@ -131,7 +135,7 @@ describe('syncAllHarnesses', () => {
     await rm(repoRoot, { recursive: true, force: true });
     await (await import('node:fs/promises')).mkdir(repoRoot, { recursive: true });
 
-    const results = syncAllHarnesses(repoRoot, 'company-director', { level0Path });
+    const results = syncAllHarnesses(repoRoot, 'company-director', SCOPE_ID, { level0Path });
     expect(results).toHaveLength(3);
 
     const fileNames = HARNESS_TARGETS.map((t) => t.fileName);
@@ -159,7 +163,7 @@ describe('syncAllHarnesses', () => {
     const repoRoot = path.join(root, 'repo-mandate');
     await (await import('node:fs/promises')).mkdir(repoRoot, { recursive: true });
 
-    syncAllHarnesses(repoRoot, 'code-architect', { level0Path });
+    syncAllHarnesses(repoRoot, 'code-architect', SCOPE_ID, { level0Path });
 
     const fileNames = HARNESS_TARGETS.map((t) => t.fileName);
     const contents = await Promise.all(
@@ -183,10 +187,76 @@ describe('syncAllHarnesses', () => {
     const repoRoot = path.join(root, 'repo2');
     await (await import('node:fs/promises')).mkdir(repoRoot, { recursive: true });
 
-    const results = syncAllHarnesses(repoRoot, 'top-orchestrator', { level0Path });
+    const results = syncAllHarnesses(repoRoot, 'top-orchestrator', SCOPE_ID, { level0Path });
     expect(results.every((r) => r.created)).toBe(true);
     for (const target of HARNESS_TARGETS) {
       expect(existsSync(path.join(repoRoot, target.fileName))).toBe(true);
     }
+  });
+});
+
+describe('sync.ts persona-aware content resolution (pf-02)', () => {
+  it("renders a repo-local code-architect persona's own content instead of the hardcoded TIER_CONTENT when one exists for the scopeId", async () => {
+    const root = await makeTempRoot();
+    const level0Path = await makeLevel0(root, 'Shared level 0 rule.');
+    const repoRoot = path.join(root, 'repo-with-persona');
+    await (await import('node:fs/promises')).mkdir(repoRoot, { recursive: true });
+
+    writeRepoLocalPersona(repoRoot, {
+      tier: 'code-architect',
+      scopeId: 'acme-repo',
+      displayName: 'Acme Repo Architect',
+      scope: 'A persona-authored scope statement unique to this repo.',
+      sections: [{ heading: 'Repo-specific convention', body: 'Use two-space indentation everywhere.' }],
+    });
+
+    const targetPath = path.join(repoRoot, 'CLAUDE.md');
+    syncHarnessFile(targetPath, 'code-architect', 'claude-code', 'acme-repo', { level0Path });
+    const written = await readFile(targetPath, 'utf8');
+
+    expect(written).toContain('Acme Repo Architect');
+    expect(written).toContain('Use two-space indentation everywhere.');
+    // Mandate is still re-injected even though the persona doesn't carry one.
+    expect(written).toContain('Memory-lifecycle mandate');
+    // The hardcoded fallback content must NOT have been used.
+    expect(written).not.toContain('Code/Area Architect');
+  });
+
+  it('falls back to the hardcoded TIER_CONTENT and warns when no repo-local code-architect persona exists yet for the scopeId', async () => {
+    const root = await makeTempRoot();
+    const level0Path = await makeLevel0(root, 'Shared level 0 rule.');
+    const repoRoot = path.join(root, 'repo-without-persona');
+    await (await import('node:fs/promises')).mkdir(repoRoot, { recursive: true });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const targetPath = path.join(repoRoot, 'CLAUDE.md');
+    syncHarnessFile(targetPath, 'code-architect', 'claude-code', 'no-persona-yet', { level0Path });
+    const written = await readFile(targetPath, 'utf8');
+
+    expect(written).toContain('Code/Area Architect');
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it('non-code-architect tiers never consult the repo-local persona store, even when one happens to exist for the same scopeId', async () => {
+    const root = await makeTempRoot();
+    const level0Path = await makeLevel0(root, 'Shared level 0 rule.');
+    const repoRoot = path.join(root, 'repo-shared-scope');
+    await (await import('node:fs/promises')).mkdir(repoRoot, { recursive: true });
+
+    writeRepoLocalPersona(repoRoot, {
+      tier: 'code-architect',
+      scopeId: 'shared-scope',
+      displayName: 'Should Not Appear',
+      scope: 'Should not leak into a global-tier sync.',
+      sections: [{ heading: 'x', body: 'y' }],
+    });
+
+    const targetPath = path.join(repoRoot, 'CLAUDE.md');
+    syncHarnessFile(targetPath, 'project-orchestrator', 'claude-code', 'shared-scope', { level0Path });
+    const written = await readFile(targetPath, 'utf8');
+
+    expect(written).toContain('Project Orchestrator');
+    expect(written).not.toContain('Should Not Appear');
   });
 });
