@@ -192,18 +192,37 @@
         </div>
       </div>
     </section>
+    <section id="personas" class="panel panel-wide">
+      <h2>Personas</h2>
+      <p class="panel-status" id="personas-status">loading…</p>
+      <p class="panel-hint">
+        Every existing persona (global tiers: <code>top-orchestrator</code>,
+        <code>company-director</code>, <code>project-orchestrator</code>) — fetched
+        from the persona service on port 3141 (a different server than this UI's
+        own, see <code>lib/mnemosyne/server.ts</code>). A persona's parent(s) render
+        as pointer-only text (tier + scope ID) — the parent's actual content is
+        never fetched or inlined here.
+      </p>
+      <table id="personas-table">
+        <thead>
+          <tr>
+            <th>Tier</th>
+            <th>Scope ID</th>
+            <th>Display name</th>
+            <th>Parent(s)</th>
+          </tr>
+        </thead>
+        <tbody id="personas-tbody"></tbody>
+      </table>
+    </section>
+
     <!-- ================================================================
          pw-04-layer-stack-visibility: layer-stack visibility section.
-         ADDITIVE / SELF-CONTAINED — built in parallel with pw-03's
-         Personas panel markup (a separate worktree, not merged into this
-         copy of the file yet). This is deliberately its OWN <section>,
-         never folded into a persona list: it shows the currently
-         configured memory LAYER STACK (a different data model from
-         personas — research-brief.md §6) via the ALREADY-SHIPPED
-         GET /layers route, plus a static, view-only Level 0 pointer.
-         When pw-03's Personas panel lands, this section is meant to live
-         within/adjacent to it — kept structurally distinct on purpose, so
-         the merge should be additive, not a rewrite of either side.
+         Deliberately its OWN <section>, never folded into the persona list
+         above: it shows the currently configured memory LAYER STACK (a
+         different data model from personas — research-brief.md §6) via the
+         ALREADY-SHIPPED GET /layers route, plus a static, view-only Level 0
+         pointer.
          ================================================================ -->
     <section id="persona-layer-stack" class="panel panel-wide">
       <h2>Memory Layer Stack</h2>
