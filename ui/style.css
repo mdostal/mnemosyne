@@ -563,3 +563,49 @@ footer {
   font-size: 0.8rem;
   text-align: center;
 }
+
+/* ====================================================================
+   pw-04-layer-stack-visibility: layer-stack visibility section.
+   ADDITIVE / SELF-CONTAINED -- scoped entirely to #persona-layer-stack
+   and its children, no changes to existing rules above.
+   ==================================================================== */
+#persona-layer-stack-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  margin-bottom: 1.25rem;
+}
+
+#persona-layer-stack-table th,
+#persona-layer-stack-table td {
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+
+#persona-layer-stack-table th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+#persona-layer-stack-table td:nth-child(2) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+#persona-level0-pointer {
+  border-top: 1px solid var(--border);
+  padding-top: 0.85rem;
+  margin-top: 0.25rem;
+}
+
+#persona-level0-pointer h3 {
+  margin: 0 0 0.4rem;
+  font-size: 0.9rem;
+}
+
+#persona-level0-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}

@@ -1149,10 +1149,99 @@ refreshCacheBtn.addEventListener("click", async () => {
   }
 });
 
+// ============================================================================
+// pw-04-layer-stack-visibility: layer-stack visibility section.
+// ADDITIVE / SELF-CONTAINED -- own DOM refs, own small loader function, no
+// reliance on pw-03's (parallel, not-yet-merged-here) Personas panel markup
+// or JS. Fetches the ALREADY-SHIPPED GET /layers route on
+// lib/mnemosyne/server.ts -- no new backend route. That service runs on a
+// different origin/port (3141, MNEMOSYNE_PORT) than this UI's own server
+// (src/server.mjs, port 8477), so this is a genuine cross-origin fetch --
+// same pattern pw-02-get-persona-routes-cors's CORS fix already covers for
+// /persona/*, extended by this story to /layers (see server.ts).
+//
+// The Level 0 pointer rendered alongside it is a STATIC path display only
+// (no fetch, no form) -- intentionally view-only, matching Epic 1's own
+// recommendation (design-discussion.md §3d/§6 OQ4). There is no edit
+// affordance for it anywhere in this file.
+// ============================================================================
+const MNEMOSYNE_CLIENT_API_LOOPBACK = "http://127.0.0.1:3141";
+const MNEMOSYNE_CLIENT_API_LOCALHOST = "http://localhost:3141";
+
+// Mirrors the hostname the page itself was loaded with (server.ts's
+// UI_ORIGINS allow-lists both 127.0.0.1:8477 and localhost:8477) so the
+// cross-origin request's Origin header matches one of the two origins
+// server.ts's applyPersonaCors() actually allow-lists.
+function mnemosyneClientApiBase() {
+  return location.hostname === "localhost" ? MNEMOSYNE_CLIENT_API_LOCALHOST : MNEMOSYNE_CLIENT_API_LOOPBACK;
+}
+
+const personaLayerStackStatusEl = document.getElementById("persona-layer-stack-status");
+const personaLayerStackTableEl = document.getElementById("persona-layer-stack-table");
+const personaLayerStackTbodyEl = document.getElementById("persona-layer-stack-tbody");
+const personaLayerStackEmptyEl = document.getElementById("persona-layer-stack-empty");
+
+function personaLayerStackCell(text) {
+  const td = document.createElement("td");
+  td.textContent = text;
+  return td;
+}
+
+async function loadPersonaLayerStack() {
+  // Guards against running against an older served index.html that predates
+  // this section (e.g. a stale cached page) -- never throws either way.
+  if (!personaLayerStackStatusEl || !personaLayerStackTableEl || !personaLayerStackTbodyEl) return;
+
+  setStatus(personaLayerStackStatusEl, "loading", "loading…");
+  personaLayerStackTbodyEl.textContent = "";
+  personaLayerStackTableEl.hidden = true;
+  if (personaLayerStackEmptyEl) personaLayerStackEmptyEl.hidden = true;
+
+  try {
+    const res = await fetch(mnemosyneClientApiBase() + "/layers");
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      setStatus(
+        personaLayerStackStatusEl,
+        "fail",
+        `FAIL — GET /layers returned ${res.status}${body.error ? `: ${body.error.message || body.error}` : ""}`,
+      );
+      return;
+    }
+    const body = await res.json();
+    const layers = Array.isArray(body.layers) ? body.layers : [];
+    if (!layers.length) {
+      setStatus(personaLayerStackStatusEl, "pass", "no layers configured");
+      if (personaLayerStackEmptyEl) personaLayerStackEmptyEl.hidden = false;
+      return;
+    }
+    layers.forEach((l, i) => {
+      const tr = document.createElement("tr");
+      tr.appendChild(personaLayerStackCell(String(i + 1)));
+      tr.appendChild(personaLayerStackCell(l && l.layer != null ? String(l.layer) : "?"));
+      tr.appendChild(personaLayerStackCell(l && l.writable ? "yes" : "no"));
+      personaLayerStackTbodyEl.appendChild(tr);
+    });
+    personaLayerStackTableEl.hidden = false;
+    setStatus(personaLayerStackStatusEl, "pass", `${layers.length} layer(s), cascade order`);
+  } catch (err) {
+    setStatus(personaLayerStackStatusEl, "fail", "FAIL — could not reach GET /layers");
+  }
+}
+// ==================== end pw-04-layer-stack-visibility ====================
+
 async function refreshAll() {
   refreshBtn.disabled = true;
   try {
-    await Promise.all([loadLiveliness(), loadSettings(), loadLanes(), loadSearchScopes(), loadGraph(), loadReindexLanes()]);
+    await Promise.all([
+      loadLiveliness(),
+      loadSettings(),
+      loadLanes(),
+      loadSearchScopes(),
+      loadGraph(),
+      loadReindexLanes(),
+      loadPersonaLayerStack(),
+    ]);
     lastRefreshedEl.textContent = `last refreshed ${new Date().toLocaleTimeString()}`;
   } finally {
     refreshBtn.disabled = false;
