@@ -49,6 +49,7 @@
     "test:graph-route": "node test/graph-route.mjs",
     "test:reindex-route": "node test/reindex-route.mjs",
     "test:skill-harness": "node test/skill-harness.mjs",
+    "test:skill-harness-persona-draft": "node test/skill-harness-persona-draft.mjs",
     "test:mcp-server": "node test/mcp-server.mjs",
     "test:graphify-bridge": "node test/graphify-bridge.mjs",
     "test:mcp-server-graphify": "node test/mcp-server-graphify.mjs",
@@ -69,5 +70,10 @@
     "tsx": "^4.23.11",
     "yaml": "^2.9.0",
     "zod": "^3.25.76"
+  },
+  "allowScripts": {
+    "better-sqlite3@13.0.3": true,
+    "esbuild@0.28.2": true,
+    "fsevents@2.3.3": true
   }
 }

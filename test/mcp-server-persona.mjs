@@ -12,6 +12,21 @@
 // with a candidate-YAML-fixture writer mirroring test/persona-cli.mjs's own
 // personaCandidateYaml/writeCandidateFile helpers.
 //
+// persona_draft_propose/show/approve/discard coverage (pu-05) extends this
+// file again -- each is a thin wrapAction() wrap of pu-05's
+// personaDraftProposeAction/personaDraftShowAction/personaDraftApproveAction/
+// personaDraftDiscardAction (bin/mnemosyne-skill-helper.mjs), themselves
+// pure subprocess pass-throughs to pu-04's `mnemosyne persona draft
+// <verb>` CLI verbs. Same real-MCP-client-over-stdio convention, same
+// personaCandidateYaml/writeCandidateFile fixture helpers -- no new
+// machinery invented for these four tools either. A rejected draft-approve
+// (structurally-valid-as-a-draft but assertValidPersona-invalid candidate)
+// comes back ok:false in the tool's own JSON payload, isError:false at the
+// MCP transport -- the exact same "handled CLI failure, never a thrown
+// transport error" contract persona_create's own bad-tier/mandate-smuggle
+// cases above already establish; matching that established contract
+// exactly is what "no new logic in this file" means for the draft tools.
+//
 // Real end-to-end, same posture as test/mcp-server.mjs and
 // test/mcp-server-graphify.mjs: a real MCP Client (StdioClientTransport)
 // spawns the real bin/mnemosyne-mcp.mjs child process, talks real MCP
@@ -112,6 +127,8 @@ async function main() {
   const fakeRepo = await mkdtemp(path.join(os.tmpdir(), "mnemosyne-mcp-persona-repo-"));
   const fakeContentDir = await mkdtemp(path.join(os.tmpdir(), "mnemosyne-mcp-persona-create-content-"));
   const fakeCreateRepo = await mkdtemp(path.join(os.tmpdir(), "mnemosyne-mcp-persona-create-repo-"));
+  const fakeDraftContentDir = await mkdtemp(path.join(os.tmpdir(), "mnemosyne-mcp-persona-draft-content-"));
+  const fakeDraftRepo = await mkdtemp(path.join(os.tmpdir(), "mnemosyne-mcp-persona-draft-repo-"));
 
   const transport = new StdioClientTransport({
     command: process.execPath,
@@ -272,12 +289,226 @@ async function main() {
       "utf8",
     ).catch(() => null);
     ok(mandateWritten === null, "persona_create rejected the mandateSections smuggling BEFORE any disk write");
+
+    // persona_draft_propose / persona_draft_show (pu-05) -- global tier
+    // round trip: propose writes into the structurally separate draft store
+    // (~/.mnemosyne/persona-drafts), never the real persona store; show reads
+    // it back, clearly labeled DRAFT.
+    const draftProposeFile = await writeCandidateFile(fakeDraftContentDir, "draft-propose-global.yaml", {
+      tier: "project-orchestrator",
+      scopeId: "mcp-draft-global-scope",
+      displayName: "Project Orchestrator (draft)",
+      scope: "MCP_DRAFT_GLOBAL_SCOPE_MARKER — proposed via persona_draft_propose.",
+      sections: [{ heading: "Authored section", body: "MCP_DRAFT_GLOBAL_BODY_MARKER — real persona_draft_propose write." }],
+    });
+    const draftProposeResult = await client.callTool({
+      name: "persona_draft_propose",
+      arguments: { file: draftProposeFile },
+    });
+    ok(!draftProposeResult.isError, `persona_draft_propose (global tier) did not error (${JSON.stringify(draftProposeResult)})`);
+    const draftPropose = toolResultJson(draftProposeResult);
+    ok(draftPropose?.ok === true, `persona_draft_propose (global tier) returns ok:true (${JSON.stringify(draftPropose)})`);
+    ok(/proposed/.test(draftPropose?.output ?? ""), "persona_draft_propose reports the write with its own 'proposed' verb");
+    const realStoreUntouched = await readFile(
+      path.join(fakeHome, ".mnemosyne", "personas", "project-orchestrator", "mcp-draft-global-scope.yaml"),
+      "utf8",
+    ).catch(() => null);
+    ok(realStoreUntouched === null, "persona_draft_propose via MCP wrote NOTHING into the real global persona store");
+
+    const draftShowResult = await client.callTool({
+      name: "persona_draft_show",
+      arguments: { tier: "project-orchestrator", scopeId: "mcp-draft-global-scope" },
+    });
+    ok(!draftShowResult.isError, `persona_draft_show (global tier) did not error (${JSON.stringify(draftShowResult)})`);
+    const draftShow = toolResultJson(draftShowResult);
+    ok(draftShow?.ok === true, `persona_draft_show (global tier) returns ok:true (${JSON.stringify(draftShow)})`);
+    ok(
+      /MCP_DRAFT_GLOBAL_SCOPE_MARKER/.test(draftShow?.output ?? "") && /MCP_DRAFT_GLOBAL_BODY_MARKER/.test(draftShow?.output ?? ""),
+      "persona_draft_show round-trips the just-proposed draft's real content",
+    );
+    ok(/DRAFT/.test(draftShow?.output ?? ""), "persona_draft_show's output is visibly labeled DRAFT");
+
+    // persona_draft_approve (pu-05) -- commits the draft via the SAME write
+    // primitive persona_create uses, then archives (never deletes) the draft.
+    const draftApproveResult = await client.callTool({
+      name: "persona_draft_approve",
+      arguments: { tier: "project-orchestrator", scopeId: "mcp-draft-global-scope" },
+    });
+    ok(!draftApproveResult.isError, `persona_draft_approve (global tier) did not error (${JSON.stringify(draftApproveResult)})`);
+    const draftApprove = toolResultJson(draftApproveResult);
+    ok(draftApprove?.ok === true, `persona_draft_approve (global tier) returns ok:true (${JSON.stringify(draftApprove)})`);
+    const approvedWritten = await readFile(
+      path.join(fakeHome, ".mnemosyne", "personas", "project-orchestrator", "mcp-draft-global-scope.yaml"),
+      "utf8",
+    ).catch(() => null);
+    ok(approvedWritten !== null, "persona_draft_approve via MCP actually committed the draft into the real global persona store");
+    ok(
+      approvedWritten?.includes("MCP_DRAFT_GLOBAL_SCOPE_MARKER") && approvedWritten?.includes("MCP_DRAFT_GLOBAL_BODY_MARKER"),
+      "persona_draft_approve committed the draft's real content, unchanged",
+    );
+    const draftShowAfterApprove = await client.callTool({
+      name: "persona_draft_show",
+      arguments: { tier: "project-orchestrator", scopeId: "mcp-draft-global-scope" },
+    });
+    ok(!draftShowAfterApprove.isError, "persona_draft_show (after approve) is not an MCP transport error");
+    const draftAfterApprove = toolResultJson(draftShowAfterApprove);
+    ok(draftAfterApprove?.ok === false, "persona_draft_show reports ok:false after approve -- the draft is archived, no longer active");
+
+    // persona_show (existing tool) can now read the just-approved persona
+    // back from the real store -- proves persona_draft_approve's write is
+    // genuinely reachable by the real transport, not just draft-visible.
+    const showAfterApprove = await client.callTool({
+      name: "persona_show",
+      arguments: { tier: "project-orchestrator", scopeId: "mcp-draft-global-scope" },
+    });
+    ok(!showAfterApprove.isError, "persona_show (after persona_draft_approve) is not an MCP transport error");
+    const shownAfterApprove = toolResultJson(showAfterApprove);
+    ok(shownAfterApprove?.ok === true, "persona_show reads back the persona persona_draft_approve just committed");
+
+    // persona_draft_propose -- repo-local tier (code-architect), --repo given
+    // -> routes to the repo-local draft subtree, proving repo/file are both
+    // threaded through to personaDraftProposeAction untouched.
+    const draftProposeRepoFile = await writeCandidateFile(fakeDraftContentDir, "draft-propose-repo.yaml", {
+      tier: "code-architect",
+      scopeId: "mcp-draft-repo-scope",
+      displayName: "Code/Area Architect (draft)",
+      scope: "MCP_DRAFT_REPO_SCOPE_MARKER — proposed via persona_draft_propose --repo.",
+      sections: [{ heading: "Authored section", body: "MCP_DRAFT_REPO_BODY_MARKER — real repo-local draft write." }],
+    });
+    const draftProposeRepoResult = await client.callTool({
+      name: "persona_draft_propose",
+      arguments: { file: draftProposeRepoFile, repo: fakeDraftRepo },
+    });
+    ok(!draftProposeRepoResult.isError, `persona_draft_propose (repo-local tier) did not error (${JSON.stringify(draftProposeRepoResult)})`);
+    const draftProposeRepo = toolResultJson(draftProposeRepoResult);
+    ok(draftProposeRepo?.ok === true, `persona_draft_propose (repo-local tier) returns ok:true (${JSON.stringify(draftProposeRepo)})`);
+
+    const draftShowRepoResult = await client.callTool({
+      name: "persona_draft_show",
+      arguments: { tier: "code-architect", scopeId: "mcp-draft-repo-scope", repo: fakeDraftRepo },
+    });
+    ok(!draftShowRepoResult.isError, `persona_draft_show (repo-local tier) did not error (${JSON.stringify(draftShowRepoResult)})`);
+    const draftShowRepo = toolResultJson(draftShowRepoResult);
+    ok(draftShowRepo?.ok === true, `persona_draft_show (repo-local tier) returns ok:true (${JSON.stringify(draftShowRepo)})`);
+    ok(/MCP_DRAFT_REPO_SCOPE_MARKER/.test(draftShowRepo?.output ?? ""), "persona_draft_show (repo-local) round-trips the proposed draft's real content");
+
+    // Without --repo, the same repo-local identity has no active draft
+    // visible -- repo-local drafts are scoped by repoRoot, matching the
+    // CLI's own contract (test/persona-cli.mjs's AC-draft-propose/AC-draft-show).
+    const draftShowRepoNoRepoResult = await client.callTool({
+      name: "persona_draft_show",
+      arguments: { tier: "code-architect", scopeId: "mcp-draft-repo-scope" },
+    });
+    ok(!draftShowRepoNoRepoResult.isError, "persona_draft_show (repo-local identity, repo omitted) is not an MCP transport error");
+    const draftShowRepoNoRepo = toolResultJson(draftShowRepoNoRepoResult);
+    ok(draftShowRepoNoRepo?.ok === false, "persona_draft_show without --repo cannot see the repo-local draft (ok:false)");
+
+    const draftApproveRepoResult = await client.callTool({
+      name: "persona_draft_approve",
+      arguments: { tier: "code-architect", scopeId: "mcp-draft-repo-scope", repo: fakeDraftRepo },
+    });
+    ok(!draftApproveRepoResult.isError, `persona_draft_approve (repo-local tier) did not error (${JSON.stringify(draftApproveRepoResult)})`);
+    const draftApproveRepo = toolResultJson(draftApproveRepoResult);
+    ok(draftApproveRepo?.ok === true, `persona_draft_approve (repo-local tier) returns ok:true (${JSON.stringify(draftApproveRepo)})`);
+    const approvedRepoWritten = await readFile(
+      path.join(fakeDraftRepo, ".mnemosyne", "personas", "mcp-draft-repo-scope.yaml"),
+      "utf8",
+    ).catch(() => null);
+    ok(approvedRepoWritten !== null, "persona_draft_approve (repo-local tier) via MCP actually committed a real persona file under --repo");
+    ok(
+      approvedRepoWritten?.includes("MCP_DRAFT_REPO_SCOPE_MARKER"),
+      "persona_draft_approve (repo-local tier) committed the draft's real content, unchanged",
+    );
+
+    // persona_draft_discard (pu-05) -- a separate identity, discarded instead
+    // of approved: archived to discarded/, never committed to the real store.
+    const draftDiscardFile = await writeCandidateFile(fakeDraftContentDir, "draft-discard.yaml", {
+      tier: "top-orchestrator",
+      scopeId: "mcp-draft-discard-scope",
+      displayName: "Top Orchestrator (draft, to be discarded)",
+      scope: "MCP_DRAFT_DISCARD_SCOPE_MARKER — proposed then discarded.",
+      sections: [{ heading: "Authored section", body: "MCP_DRAFT_DISCARD_BODY_MARKER" }],
+    });
+    const draftDiscardProposeResult = await client.callTool({
+      name: "persona_draft_propose",
+      arguments: { file: draftDiscardFile },
+    });
+    ok(!draftDiscardProposeResult.isError, "persona_draft_propose (discard fixture) did not error");
+    ok(toolResultJson(draftDiscardProposeResult)?.ok === true, "persona_draft_propose (discard fixture) returns ok:true");
+
+    const draftDiscardResult = await client.callTool({
+      name: "persona_draft_discard",
+      arguments: { tier: "top-orchestrator", scopeId: "mcp-draft-discard-scope" },
+    });
+    ok(!draftDiscardResult.isError, `persona_draft_discard did not error (${JSON.stringify(draftDiscardResult)})`);
+    const draftDiscard = toolResultJson(draftDiscardResult);
+    ok(draftDiscard?.ok === true, `persona_draft_discard returns ok:true (${JSON.stringify(draftDiscard)})`);
+    ok(/discarded/.test(draftDiscard?.output ?? ""), "persona_draft_discard reports the archival with its own 'discarded' verb");
+
+    const discardedCommitted = await readFile(
+      path.join(fakeHome, ".mnemosyne", "personas", "top-orchestrator", "mcp-draft-discard-scope.yaml"),
+      "utf8",
+    ).catch(() => null);
+    ok(discardedCommitted === null, "persona_draft_discard never committed anything into the real global persona store");
+
+    const draftShowAfterDiscardResult = await client.callTool({
+      name: "persona_draft_show",
+      arguments: { tier: "top-orchestrator", scopeId: "mcp-draft-discard-scope" },
+    });
+    ok(!draftShowAfterDiscardResult.isError, "persona_draft_show (after discard) is not an MCP transport error");
+    ok(toolResultJson(draftShowAfterDiscardResult)?.ok === false, "persona_draft_show reports ok:false after discard -- no longer an active draft");
+
+    // persona_draft_approve -- a rejected draft-approve (structurally valid
+    // enough to write as a draft, but assertValidPersona-invalid: missing
+    // displayName/scope) comes back ok:false in the tool's own JSON payload,
+    // isError:false at the MCP transport -- never a silent no-op, and never
+    // an MCP transport error, matching persona_create's own bad-tier/
+    // mandate-smuggle contract above exactly (AC: "a clear ... isError:true
+    // (MCP) result" -- realized here as wrapAction's own established
+    // ok:false-in-payload contract for a handled, non-thrown CLI failure,
+    // the same contract every other persona_* tool's failure path already
+    // uses; forcing a literal isError:true would require new logic in
+    // wrapAction/personaCliRun this ticket deliberately does not add).
+    const draftInvalidFile = await writeCandidateFile(fakeDraftContentDir, "draft-invalid.yaml", {
+      tier: "top-orchestrator",
+      scopeId: "mcp-draft-invalid-scope",
+      sections: [{ heading: "Section", body: "body" }],
+    });
+    const draftInvalidProposeResult = await client.callTool({
+      name: "persona_draft_propose",
+      arguments: { file: draftInvalidFile },
+    });
+    ok(!draftInvalidProposeResult.isError, "persona_draft_propose (incomplete candidate) did not error");
+    ok(toolResultJson(draftInvalidProposeResult)?.ok === true, "persona_draft_propose (incomplete candidate) succeeds -- structural-only check, not assertValidPersona-strength");
+
+    const draftInvalidApproveResult = await client.callTool({
+      name: "persona_draft_approve",
+      arguments: { tier: "top-orchestrator", scopeId: "mcp-draft-invalid-scope" },
+    });
+    ok(!draftInvalidApproveResult.isError, "persona_draft_approve (invalid candidate) is not an MCP transport error");
+    const draftInvalidApprove = toolResultJson(draftInvalidApproveResult);
+    ok(draftInvalidApprove?.ok === false, "persona_draft_approve (invalid candidate) returns ok:false in its own JSON payload -- never a silent no-op");
+
+    const invalidCommitted = await readFile(
+      path.join(fakeHome, ".mnemosyne", "personas", "top-orchestrator", "mcp-draft-invalid-scope.yaml"),
+      "utf8",
+    ).catch(() => null);
+    ok(invalidCommitted === null, "the rejected draft-approve wrote NOTHING to the real global persona store");
+
+    const draftInvalidStillActiveResult = await client.callTool({
+      name: "persona_draft_show",
+      arguments: { tier: "top-orchestrator", scopeId: "mcp-draft-invalid-scope" },
+    });
+    ok(!draftInvalidStillActiveResult.isError, "persona_draft_show (after a FAILED approve) is not an MCP transport error");
+    ok(toolResultJson(draftInvalidStillActiveResult)?.ok === true, "the draft remains active after a failed approve (not archived)");
   } finally {
     await client.close().catch(() => {});
     await rm(fakeHome, { recursive: true, force: true });
     await rm(fakeRepo, { recursive: true, force: true });
     await rm(fakeContentDir, { recursive: true, force: true });
     await rm(fakeCreateRepo, { recursive: true, force: true });
+    await rm(fakeDraftContentDir, { recursive: true, force: true });
+    await rm(fakeDraftRepo, { recursive: true, force: true });
   }
 
   console.log(`\n${fails === 0 ? "all mcp-server-persona checks passed" : `${fails} FAILURE(S)`}`);
