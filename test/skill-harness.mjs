@@ -24,7 +24,7 @@
 //
 // Usage: node test/skill-harness.mjs
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,6 +43,7 @@ import {
   personaSyncAction,
   personaSeedAction,
   personaShowAction,
+  personaCreateAction,
 } from "../bin/mnemosyne-skill-helper.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -348,6 +349,93 @@ function stripVolatile(obj) {
     // rethrow as something else" contract.
     const missingResult = await personaShowAction(RUNNING_PORT, "company-director", "no-such-scope-ever");
     ok(missingResult.ok === false, "personaShowAction() on a genuinely unseeded scope returns ok:false, not a thrown error");
+
+    // personaCreateAction (pw-06) — pure subprocess pass-through to
+    // `persona create --file <path> [--repo <path>] [--root <path>]`
+    // (pw-05's CLI verb). Global-tier candidate, no --repo -> writes into
+    // the fake $HOME's global persona store (the same store
+    // personaSeedAction/personaShowAction above just proved is real).
+    const createContentDir = await mkdtemp(path.join(tmpdir(), "mnemosyne-skill-harness-create-content-"));
+    const globalCandidateFile = path.join(createContentDir, "global-candidate.yaml");
+    await writeFile(
+      globalCandidateFile,
+      [
+        `tier: "company-director"`,
+        `scopeId: "skill-harness-create-global"`,
+        `displayName: "Company Director"`,
+        `scope: "SKILL_HARNESS_CREATE_GLOBAL_MARKER — authored via personaCreateAction."`,
+        `sections:`,
+        `  - heading: "Authored section"`,
+        `    body: "SKILL_HARNESS_CREATE_GLOBAL_BODY_MARKER"`,
+        ``,
+      ].join("\n"),
+      "utf8",
+    );
+
+    const createGlobalResult = await personaCreateAction(RUNNING_PORT, { file: globalCandidateFile });
+    ok(
+      createGlobalResult.ok === true,
+      `personaCreateAction() (global tier, no --repo) succeeds (got ${JSON.stringify(createGlobalResult).slice(0, 200)})`,
+    );
+    ok(
+      /created/.test(createGlobalResult.output),
+      "personaCreateAction() (global tier) output reports the write, matching the CLI's own 'created' contract",
+    );
+
+    // Round-trips through personaShowAction — proves personaCreateAction's
+    // subprocess boundary and personaShowAction's share the same
+    // $HOME-resolved global store, not two disconnected sandboxes.
+    const shownAfterCreate = await personaShowAction(RUNNING_PORT, "company-director", "skill-harness-create-global");
+    ok(shownAfterCreate.ok === true, "personaShowAction() reads back what personaCreateAction() just wrote");
+    ok(
+      /scope: SKILL_HARNESS_CREATE_GLOBAL_MARKER/.test(shownAfterCreate.output),
+      "personaCreateAction()'s write round-trips through personaShowAction() with the exact scope text",
+    );
+
+    // Repo-local tier, --repo given -> writes into the temp repo's
+    // .mnemosyne/personas store (fakeRepo, above — untouched on disk so far
+    // since personaSyncAction's dry-run never wrote anything).
+    const repoCandidateFile = path.join(createContentDir, "repo-candidate.yaml");
+    await writeFile(
+      repoCandidateFile,
+      [
+        `tier: "code-architect"`,
+        `scopeId: "skill-harness-create-repo"`,
+        `displayName: "Code/Area Architect"`,
+        `scope: "SKILL_HARNESS_CREATE_REPO_MARKER — authored via personaCreateAction."`,
+        `sections:`,
+        `  - heading: "Authored section"`,
+        `    body: "SKILL_HARNESS_CREATE_REPO_BODY_MARKER"`,
+        ``,
+      ].join("\n"),
+      "utf8",
+    );
+
+    const createRepoResult = await personaCreateAction(RUNNING_PORT, { file: repoCandidateFile, repo: fakeRepo });
+    ok(
+      createRepoResult.ok === true,
+      `personaCreateAction() (repo-local tier, --repo given) succeeds (got ${JSON.stringify(createRepoResult).slice(0, 200)})`,
+    );
+
+    const writtenRepoPath = path.join(fakeRepo, ".mnemosyne", "personas", "skill-harness-create-repo.yaml");
+    const writtenRepoContent = await readFile(writtenRepoPath, "utf8");
+    ok(
+      writtenRepoContent.includes("SKILL_HARNESS_CREATE_REPO_MARKER"),
+      "personaCreateAction() (repo-local) actually wrote the candidate's scope text to the repo-local store on disk",
+    );
+
+    // A --file that does not exist still comes back ok:false with clear
+    // stderr, not a thrown transport error — matching every other action's
+    // "let the underlying failure surface, don't swallow or rethrow" contract.
+    const createMissingFileResult = await personaCreateAction(RUNNING_PORT, {
+      file: path.join(createContentDir, "does-not-exist.yaml"),
+    });
+    ok(
+      createMissingFileResult.ok === false,
+      "personaCreateAction() with a --file that does not exist returns ok:false, not a thrown error",
+    );
+
+    await rm(createContentDir, { recursive: true, force: true });
   } finally {
     if (savedHome === undefined) delete process.env.HOME;
     else process.env.HOME = savedHome;
