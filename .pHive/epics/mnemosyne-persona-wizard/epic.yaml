@@ -1,0 +1,75 @@
+name: mnemosyne-persona-wizard
+title: Persona write primitive, LLM-interview authoring skill, and a Personas UI panel
+target_codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+methodology: tdd
+version_bump: minor
+
+stories:
+  - id: pw-01-listing-primitives
+    title: Persona listing primitives (listGlobalPersonas/listRepoLocalPersonas)
+    complexity: low
+    depends_on: []
+  - id: pw-02-get-persona-routes-cors
+    title: "GET /persona/* routes on lib/mnemosyne/server.ts + CORS"
+    complexity: medium
+    depends_on: [pw-01-listing-primitives]
+  - id: pw-03-personas-panel-view
+    title: Personas panel markup + loadPersonas() (view-only)
+    complexity: medium
+    depends_on: [pw-02-get-persona-routes-cors]
+  - id: pw-04-layer-stack-visibility
+    title: Layer-stack visibility section (reuses GET /layers) + Level 0 pointer
+    complexity: low
+    depends_on: [pw-02-get-persona-routes-cors]
+  - id: pw-05-cli-persona-create
+    title: "CLI: mnemosyne persona create"
+    complexity: medium
+    depends_on: []
+  - id: pw-06-skill-harness-persona-create
+    title: skill-harness personaCreateAction
+    complexity: medium
+    depends_on: [pw-05-cli-persona-create]
+  - id: pw-07-mcp-persona-create
+    title: "MCP: persona_create tool"
+    complexity: low
+    depends_on: [pw-06-skill-harness-persona-create]
+  - id: pw-08-cross-transport-roundtrip
+    title: Cross-transport write/read round-trip + concurrency test
+    complexity: medium
+    depends_on: [pw-07-mcp-persona-create]
+  - id: pw-09-remember-scope-mapping
+    title: "remember()-scope mapping decision + resolver (OQ2)"
+    complexity: medium
+    depends_on: [pw-08-cross-transport-roundtrip]
+  - id: pw-10-interview-skill-mechanics
+    title: Interview skill - adaptive question sequencing
+    complexity: high
+    depends_on: [pw-08-cross-transport-roundtrip]
+  - id: pw-11-interview-skill-persona-output
+    title: Interview skill - structured output -> Persona record -> write primitive
+    complexity: medium
+    depends_on: [pw-10-interview-skill-mechanics]
+  - id: pw-12-interview-skill-skip-all-regression
+    title: Interview skill - maximally-skipped regression test
+    complexity: low
+    depends_on: [pw-11-interview-skill-persona-output]
+  - id: pw-13-crawl-and-feed-wiring
+    title: Crawl-and-feed - remember() wiring using resolved mapping
+    complexity: medium
+    depends_on: [pw-09-remember-scope-mapping, pw-12-interview-skill-skip-all-regression]
+  - id: pw-14-crawl-and-feed-e2e-test
+    title: Crawl-and-feed - end-to-end test
+    complexity: medium
+    depends_on: [pw-13-crawl-and-feed-wiring]
+  - id: pw-15-post-persona-routes
+    title: "POST /persona/* routes + validation-error surfacing"
+    complexity: medium
+    depends_on: [pw-08-cross-transport-roundtrip, pw-02-get-persona-routes-cors]
+  - id: pw-16-fourth-transport-roundtrip
+    title: 4th-transport (HTTP) round-trip test
+    complexity: low
+    depends_on: [pw-15-post-persona-routes]
+  - id: pw-17-personas-panel-write-form
+    title: Create/edit form in the Personas panel
+    complexity: medium
+    depends_on: [pw-15-post-persona-routes, pw-03-personas-panel-view]

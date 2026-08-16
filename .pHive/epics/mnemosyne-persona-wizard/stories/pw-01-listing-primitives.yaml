@@ -1,0 +1,82 @@
+id: pw-01-listing-primitives
+epic: mnemosyne-persona-wizard
+title: Persona listing primitives (listGlobalPersonas/listRepoLocalPersonas)
+status: pending
+complexity: low
+methodology: tdd
+depends_on: []
+
+description: |
+  Implements horizontal-plan.md H1: new enumeration functions, one per store.
+  Confirmed gap (research-brief.md §1): no way to discover what personas
+  exist on disk today — a caller must already know the (tier, scopeId) pair.
+  This is the root dependency of Slice 1 (view-only UI) — nothing above it
+  can show "existing personas" without this.
+
+acceptance_criteria:
+  - "Given an empty (never-written-to) global persona store root, when listGlobalPersonas() is called, then it returns an empty array, not a throw"
+  - "Given a populated global store (personas across multiple tiers), when listGlobalPersonas() is called, then it returns every persona present with correct {tier, scopeId} pairs"
+  - "Given an empty (never-written-to) repo-local store, when listRepoLocalPersonas(repoRoot) is called, then it returns an empty array, not a throw"
+  - "Given a populated repo-local store, when listRepoLocalPersonas(repoRoot) is called, then it returns every scopeId present"
+  - "Neither function performs search, filter, or pagination — readdir + parse only, per the design discussion's explicit scope guard"
+
+steps:
+  - id: research
+    description: Read persona-store-global.ts's globalPersonaPath/readGlobalPersona and persona-store-repo-local.ts's repoLocalPersonaPath/readRepoLocalPersona in full to mirror their exact location conventions and missing-directory-is-not-an-error posture.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for both listing functions -- empty store returns [], populated store returns correct entries, missing directory is not a throw.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add listGlobalPersonas(root?) to persona-store-global.ts and listRepoLocalPersonas(repoRoot) to persona-store-repo-local.ts.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review that no schema change was made to Persona itself, and that a missing store root produces an empty list, not an error (matches readGlobalPersona's existing throw-only-on-missing-FILE, not missing-directory, posture).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/layer1/persona-store-global.ts
+      purpose: "globalPersonaPath's <root>/<tier>/<scopeId>.yaml convention (lines 61-67) -- listGlobalPersonas readdirs over <root>/<tier>/*.yaml for each of the 3 global tiers."
+    - path: lib/mnemosyne/layer1/persona-store-repo-local.ts
+      purpose: "repoLocalPersonaPath's convention (lines 49-51) -- listRepoLocalPersonas readdirs over <repoRoot>/.mnemosyne/personas/*.yaml."
+    - path: lib/mnemosyne/layer1/persona.ts
+      purpose: "PERSONA_STORE_BY_TIER (lines 44-49) -- the 3 global tiers to enumerate."
+
+files_to_modify:
+  - file: lib/mnemosyne/layer1/persona-store-global.ts
+    change: "Add listGlobalPersonas(root = DEFAULT_GLOBAL_PERSONA_ROOT): {tier, scopeId}[]."
+  - file: lib/mnemosyne/layer1/persona-store-repo-local.ts
+    change: "Add listRepoLocalPersonas(repoRoot): {scopeId}[]."
+  - file: lib/mnemosyne/layer1/__tests__/persona-store-global.test.ts
+    change: "Add listGlobalPersonas tests."
+  - file: lib/mnemosyne/layer1/__tests__/persona-store-repo-local.test.ts
+    change: "Add listRepoLocalPersonas tests."
+
+design_decisions:
+  - decision: "readdir + parse only -- no search, filter, or pagination in this primitive."
+    rationale: "design-discussion.md Risks table: 'a list personas UI panel implies enumeration... keep the new listing primitive to the minimum unless the operator asks for more.'"
+  - decision: "Missing store directory is a legitimately empty list, not a failure -- distinct from readGlobalPersona's throw-on-missing-FILE contract."
+    rationale: "horizontal-plan.md H1.1: mirrors readGlobalPersona's existing throw-only-on-missing-file posture, but a missing store ROOT is a fresh/never-seeded environment, which should present as 'nothing here yet,' not an error."
+
+cross_cutting: []
+
+risks:
+  - severity: low
+    description: "Confusing 'missing file' (real error, per readGlobalPersona) with 'missing directory' (empty store, not an error) could produce inconsistent behavior between the two listing functions."
+    mitigation: "Explicit test coverage for both listing functions' empty-store behavior, not just one."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-wizard/docs/horizontal-plan.md
+    relevant_excerpt: |
+      H1: listGlobalPersonas(root = DEFAULT_GLOBAL_PERSONA_ROOT): {tier,
+      scopeId}[]. readdir over <root>/<tier>/*.yaml for each of the 3 global
+      tiers. Directory-missing is not an error (empty store).

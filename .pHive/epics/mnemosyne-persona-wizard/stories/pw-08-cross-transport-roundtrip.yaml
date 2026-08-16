@@ -1,0 +1,80 @@
+id: pw-08-cross-transport-roundtrip
+epic: mnemosyne-persona-wizard
+title: Cross-transport write/read round-trip + concurrency test
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [pw-07-mcp-persona-create]
+
+description: |
+  Implements horizontal-plan.md H5's cross-transport component and closes
+  Slice 2. This is a qualitatively different assertion from pw-05/pw-06/
+  pw-07 individually: those each prove "this transport's write works in
+  isolation." This story proves the design discussion's explicit risk-table
+  guardrail that all three transports call the SAME underlying functions
+  rather than three write paths that look alike but have quietly diverged --
+  and proves withLock holds under a genuinely CROSS-transport race (Epic 1's
+  pf-03 only proved same-transport concurrency).
+
+acceptance_criteria:
+  - "Given a persona written via CLI (pw-05), when read back via MCP's persona_show or the skill-harness's persona-show, then the content matches exactly"
+  - "Given a persona written via the skill-harness (pw-06), when read back via CLI's show or MCP's persona_show, then the content matches exactly"
+  - "Given a persona written via MCP (pw-07), when read back via CLI's show or the skill-harness's persona-show, then the content matches exactly"
+  - "Given two DIFFERENT transports (e.g. CLI and MCP) racing a write to the same target file, when both run concurrently, then withLock (Epic 1's pf-03) proves no lost update / no corruption -- a real, not synthetic, cross-transport concurrency proof"
+
+steps:
+  - id: research
+    description: Read Epic 1's pf-03 lock.test.ts (the existing same-transport concurrency proof) to understand the exact test shape being extended cross-transport, and confirm withLock's file-scoped (not transport-scoped) locking mechanism genuinely applies here without new code.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests for every meaningful (write-transport,
+      read-transport) pair round-tripping correctly, plus a real
+      cross-transport concurrency test (two different transports, e.g. a
+      CLI subprocess and an MCP tool call, racing a write to the same
+      target).
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: This story is expected to require zero production-code changes if pw-05/pw-06/pw-07 are correct (all three already funnel through the same writeGlobalPersona/writeRepoLocalPersona + withLock) -- if the tests surface a real divergence, fix it minimally and note it clearly.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review that the concurrency test is genuinely cross-transport (not two instances of the same transport), matching the story's whole reason for existing.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch. This closes Slice 2 -- confirm the full pw-05..pw-08 story set is green together before moving to Slice 3.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/layer1/__tests__/lock.test.ts
+      purpose: "Epic 1's pf-03 same-transport concurrency proof -- this story's cross-transport test extends that same rigor across a genuinely different axis (transport, not just process)."
+    - path: lib/mnemosyne/layer1/lock.ts
+      purpose: "withLock -- file-scoped/advisory, confirmed to already handle cross-transport races by construction (no transport-specific code exists anywhere in it)."
+
+files_to_modify:
+  - file: test/persona-cross-transport.mjs
+    change: "New file. Write-via-A/read-via-B round-trip tests for every meaningful pair, plus the cross-transport concurrency test."
+
+design_decisions:
+  - decision: "This story is a verification story, expected to need zero production-code changes if pw-05/pw-06/pw-07 are correct."
+    rationale: "vertical-plan.md Sub-slice 2d: 'a qualitatively different assertion from 2a/2b/2c individually... this is what actually verifies the risk-table guardrail... rather than three independently-plausible-looking write paths that have quietly diverged.'"
+
+cross_cutting: []
+
+risks:
+  - severity: medium
+    description: "If any of the three transports has silently diverged (e.g. a slightly different validation order, a missed lock call), this is the only story positioned to catch it -- individual per-transport tests wouldn't."
+    mitigation: "Explicit cross-transport read-back assertions for every (write, read) pair, not just a happy-path single combination."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-wizard/docs/horizontal-plan.md
+    relevant_excerpt: |
+      H5.4: Cross-transport round-trip -- the genuinely new assertion none
+      of the above three individually prove: write via transport A, read
+      back via transport B's show/sync (or H2's new GET route), for all
+      meaningful (A, B) pairs.

@@ -1,0 +1,78 @@
+id: pw-07-mcp-persona-create
+epic: mnemosyne-persona-wizard
+title: "MCP: persona_create tool"
+status: pending
+complexity: low
+methodology: tdd
+depends_on: [pw-06-skill-harness-persona-create]
+
+description: |
+  Implements horizontal-plan.md H4's MCP component. Depends on pw-06 --
+  this story imports and wraps pw-06's skill-harness action directly,
+  exactly matching how persona_sync/persona_seed/persona_show already
+  import personaSyncAction/personaSeedAction/personaShowAction. Thinnest
+  story in the write-primitive chain -- a real, low-complexity wrap once
+  pw-06 exists.
+
+acceptance_criteria:
+  - "Given the MCP server is running, when the persona_create tool is called with valid arguments, then it produces the identical on-disk file pw-05/pw-06 alone would produce"
+  - "The tool's inputSchema (zod) matches the same shape/naming convention persona_sync/persona_seed/persona_show already use"
+  - "Given invalid arguments (bad tier, mandateSections smuggling), when persona_create is called, then it returns ok:false in its own JSON payload (not a thrown MCP transport error), matching wrapAction's existing contract"
+
+steps:
+  - id: research
+    description: Read bin/mnemosyne-mcp.mjs's existing persona_sync/persona_seed/persona_show registrations (lines 241-283) and wrapAction() (lines 87-96) in full.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests extending test/mcp-server-persona.mjs's real
+      StdioClientTransport convention (fake $HOME, real spawned server
+      subprocess) with persona_create coverage.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Register the persona_create tool in bin/mnemosyne-mcp.mjs, wrapping pw-06's personaCreateAction via wrapAction(), matching the existing 3 tools' exact registration shape.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the tool imports pw-06's action directly (no new logic), and update test/mcp-server.mjs's tools/list count assertion (currently 11) to 12.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: bin/mnemosyne-mcp.mjs
+      purpose: "Existing persona_sync/persona_seed/persona_show registrations (lines 241-283) -- persona_create mirrors this shape exactly."
+    - path: test/mcp-server.mjs
+      purpose: "tools/list count assertion (currently expects 11 tools) -- must be updated to 12."
+    - path: test/mcp-server-persona.mjs
+      purpose: "Existing real-MCP-client test convention this story's tests extend."
+
+files_to_modify:
+  - file: bin/mnemosyne-mcp.mjs
+    change: "New persona_create tool registration, wraps pw-06's personaCreateAction."
+  - file: test/mcp-server-persona.mjs
+    change: "New persona_create tool test coverage."
+  - file: test/mcp-server.mjs
+    change: "Update the tools/list expected count from 11 to 12."
+
+design_decisions:
+  - decision: "MCP tool name: persona_create (underscore, matching persona_sync/persona_seed/persona_show's naming convention)."
+    rationale: "vertical-plan.md's Resolved Ambiguities #1 -- consistent naming across all 3 transports."
+
+cross_cutting: []
+
+risks: []
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-wizard/docs/horizontal-plan.md
+    relevant_excerpt: |
+      H4.3: MCP does not implement new logic either -- it imports and wraps
+      the skill-helper's action function directly... via wrapAction() and
+      server.registerTool(). A new persona_create/persona_write tool
+      follows the same registration shape.

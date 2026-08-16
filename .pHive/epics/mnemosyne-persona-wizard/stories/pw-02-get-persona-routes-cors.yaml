@@ -1,0 +1,93 @@
+id: pw-02-get-persona-routes-cors
+epic: mnemosyne-persona-wizard
+title: "GET /persona/* routes on lib/mnemosyne/server.ts + CORS"
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [pw-01-listing-primitives]
+
+description: |
+  Implements horizontal-plan.md H2 (GET subset) and vertical-plan.md's
+  Decision 1: new GET routes on lib/mnemosyne/server.ts (the operator-
+  resolved host for /persona/* routes, since it's already TS-native and
+  tsx-launched -- src/server.mjs cannot import .ts files). Also closes the
+  real, load-bearing cross-origin gap this H/V pass surfaced: the standalone
+  UI is served from src/server.mjs (port 8477), the new routes live on
+  lib/mnemosyne/server.ts (port 3141) -- a genuine cross-origin browser
+  request that gets silently blocked without CORS headers. This story ships
+  the CORS fix alongside the routes, not as later polish -- Sub-slice 1a
+  cannot be considered complete without it (a route a browser can never
+  reach isn't a working route).
+
+acceptance_criteria:
+  - "Given a populated global persona store, when GET /persona is called (no ?repo), then it returns every global-tier persona (wrapping pw-01's listGlobalPersonas)"
+  - "Given ?repo=<path> on GET /persona, then it returns that repo's code-architect personas (wrapping listRepoLocalPersonas) instead of/in addition to global ones"
+  - "Given a real persona at a known (tier, scopeId), when GET /persona/:tier/:scopeId is called, then it round-trips the persona byte-for-byte (modulo YAML formatting) -- verified against a direct readGlobalPersona/readRepoLocalPersona call, not just a 200 status"
+  - "Given a request from the UI's known origin (http://127.0.0.1:8477 or http://localhost:8477), when any /persona/* route responds, then the response includes an Access-Control-Allow-Origin header the browser will accept"
+  - "GET /layers (already shipped) is reused as-is for layer-stack data -- confirmed NOT duplicated by this story"
+
+steps:
+  - id: research
+    description: Read lib/mnemosyne/server.ts's existing route table (route = "${req.method} ${url.pathname}" dispatch), sendJson/badRequest helpers, and its existing CORS posture (confirm it currently sends none). Read src/server.mjs's static /ui handler to confirm the UI's real origin/port.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests extending test/http-api.mjs's existing subprocess-spawn-and-real-HTTP convention: GET /persona (list), GET /persona/:tier/:scopeId (read one), and an explicit assertion that the CORS header is present and correctly scoped -- against both a populated and an empty store.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add the two GET routes to lib/mnemosyne/server.ts's route table, wrapping pw-01's listing functions and the existing readGlobalPersona/readRepoLocalPersona directly (no re-implementation). Add Access-Control-Allow-Origin (scoped to the UI's known origins, not "*") to /persona/* responses.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review specifically for write-path non-duplication (design-discussion.md's explicit risk) -- confirm these routes call the exact same functions Epic 1 already tested, no inlined validation/parsing logic. Confirm CORS is scoped (not wildcard "*"), matching the vertical plan's stated recommendation.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/server.ts
+      purpose: "Route table (lines 131-211), sendJson/badRequest convention (lines 69-80). This story's routes are this file's first import of persona.ts/persona-store-*.ts."
+    - path: lib/mnemosyne/layer1/persona-store-global.ts
+      purpose: "readGlobalPersona -- wrapped directly, not re-implemented."
+    - path: lib/mnemosyne/layer1/persona-store-repo-local.ts
+      purpose: "readRepoLocalPersona -- wrapped directly, not re-implemented."
+    - path: src/server.mjs
+      purpose: "The UI's real origin (port 8477, static /ui handler) -- confirms exactly which origin(s) the CORS header must accept."
+
+files_to_modify:
+  - file: lib/mnemosyne/server.ts
+    change: "Add GET /persona and GET /persona/:tier/:scopeId routes; add Access-Control-Allow-Origin header to /persona/* responses."
+  - file: test/http-api.mjs
+    change: "Extend with new route tests + a CORS-header presence assertion, following the file's existing subprocess-spawn convention."
+
+design_decisions:
+  - decision: "Route path shape: GET /persona (list, ?repo= switches to repo-local), GET /persona/:tier/:scopeId (read one, repo-local needs ?repo=)."
+    rationale: "vertical-plan.md's Resolved Ambiguities #2 -- orchestrator judgment call, reversible, not specified by the design discussion."
+  - decision: "CORS headers on lib/mnemosyne/server.ts, scoped to the UI's known origins -- not a same-origin proxy on src/server.mjs."
+    rationale: "vertical-plan.md Decision 1: a proxy would mean src/server.mjs (plain-node, cannot import .ts) shelling out or re-implementing the fetch -- re-opening the exact 'duplicated logic' risk OQ1 already rejected once for the routing decision itself."
+  - decision: "GET /layers is reused as-is, not duplicated, for layer-stack visibility."
+    rationale: "horizontal-plan.md H2.2: already exists (server.ts:142-147, wraps client.getConfiguredLayers()), already exactly the data Slice 1 needs."
+
+cross_cutting: []
+
+risks:
+  - severity: high
+    description: "Without CORS, the browser silently blocks every /persona/* fetch from the UI -- this is the real gap this H/V pass surfaced, not previously called out anywhere."
+    mitigation: "CORS header shipped in this same story, tested explicitly (header-presence assertion), not deferred to the UI story (pw-03)."
+  - severity: low
+    description: "A wildcard Access-Control-Allow-Origin (\"*\") would work but is looser than necessary for a locally-run tool."
+    mitigation: "Scope the header to the UI's actual known origins (127.0.0.1:8477, localhost:8477), not a wildcard."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-wizard/docs/horizontal-plan.md
+    relevant_excerpt: |
+      Browser cross-origin reachability (real gap, not addressed by OQ1)...
+      without a CORS header (or a same-origin proxy route added to
+      src/server.mjs instead) the browser blocks the request before Slice
+      1's UI panel can complete a single fetch.

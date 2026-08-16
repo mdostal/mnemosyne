@@ -1,0 +1,79 @@
+id: pw-15-post-persona-routes
+epic: mnemosyne-persona-wizard
+title: "POST /persona/* routes + validation-error surfacing"
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [pw-08-cross-transport-roundtrip, pw-02-get-persona-routes-cors]
+
+description: |
+  Implements horizontal-plan.md H2's POST subset. Depends on pw-08 (the
+  write primitive's parity bar, proven cross-transport) and pw-02 (the GET
+  routes + CORS already shipped on lib/mnemosyne/server.ts -- this story
+  extends the same file, reuses the same CORS header, no second design
+  pass needed).
+
+acceptance_criteria:
+  - "Given valid persona fields, when POST /persona/:tier/:scopeId is called, then it produces the identical on-disk file writeGlobalPersona/writeRepoLocalPersona would produce via any other transport -- verified by a direct filesystem read after the HTTP call, not just a 200 response"
+  - "Given an invalid write (mandateSections smuggling, tier mismatch), when POST /persona/:tier/:scopeId is called, then it surfaces as a 400 via the existing badRequest/sendJson convention, never a 500"
+  - "The route reuses pw-02's already-shipped CORS header -- confirmed NOT a second CORS implementation"
+  - "The route calls writeGlobalPersona/writeRepoLocalPersona directly -- no re-implemented validation/locking logic"
+
+steps:
+  - id: research
+    description: Re-read pw-02's shipped GET routes and CORS implementation, and writeGlobalPersona/writeRepoLocalPersona's exact error-throwing shape (persona-store-global.ts, persona-store-repo-local.ts) to map thrown errors to badRequest's 400 convention correctly.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests extending test/http-api.mjs's convention: a
+      successful POST /persona/:tier/:scopeId that produces a real,
+      independently-verified file, and validation-rejection cases (mandate
+      smuggling, tier mismatch) surfacing as 400s.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add the POST route to lib/mnemosyne/server.ts, wrapping writeGlobalPersona/writeRepoLocalPersona directly, reusing pw-02's CORS header.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm write-path non-duplication (same principle as pw-02) and that the CORS header isn't reimplemented for this route.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/server.ts
+      purpose: "pw-02's GET routes + CORS header, extended here with a POST route on the same file."
+    - path: lib/mnemosyne/layer1/persona-store-global.ts
+      purpose: "writeGlobalPersona -- wrapped directly."
+    - path: lib/mnemosyne/layer1/persona-store-repo-local.ts
+      purpose: "writeRepoLocalPersona -- wrapped directly."
+
+files_to_modify:
+  - file: lib/mnemosyne/server.ts
+    change: "Add POST /persona/:tier/:scopeId route."
+  - file: test/http-api.mjs
+    change: "Extend with POST route tests, including validation-rejection cases."
+
+design_decisions:
+  - decision: "POST /persona/:tier/:scopeId, matching pw-02's GET path shape exactly -- repo-local writes need repo in the request body or query."
+    rationale: "vertical-plan.md's Resolved Ambiguities #2 -- consistent route shape across GET/POST."
+
+cross_cutting: []
+
+risks:
+  - severity: medium
+    description: "This becomes a 4th concurrent write-capable transport alongside CLI/MCP/skill-harness."
+    mitigation: "withLock is already file-scoped/advisory and already handles cross-transport races (Epic 1's pf-03, reproven cross-transport in pw-08) -- this route goes through the exact same writeGlobalPersona/writeRepoLocalPersona calls, no new locking design."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-wizard/docs/vertical-plan.md
+    relevant_excerpt: |
+      Sub-slice 4a: Backend — POST routes. Why cut here: same justification
+      as Sub-slice 1a — independently testable... and reuses 1a's already-
+      solved CORS header rather than needing a second design pass.

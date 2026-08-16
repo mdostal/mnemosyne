@@ -1,0 +1,70 @@
+id: pw-13-crawl-and-feed-wiring
+epic: mnemosyne-persona-wizard
+title: Crawl-and-feed - remember() wiring using resolved mapping
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [pw-09-remember-scope-mapping, pw-12-interview-skill-skip-all-regression]
+
+description: |
+  The convergence point of pw-09 (remember()-scope mapping) and pw-10/11/12
+  (interview mechanics) -- cannot be built before either exists. Implements
+  the epic's stated release-gate requirement (design-discussion.md §1):
+  after the interview produces a Persona, the skill makes real remember()
+  calls indexing whatever source material the interview surfaced, scoped
+  via pw-09's resolved mapping.
+
+acceptance_criteria:
+  - "After a completed interview writes a Persona (pw-11), at least one real remember() call fires, indexing the interview's source material"
+  - "The remember() call's scope is resolved via pw-09's mapping function -- not a hardcoded or ad-hoc scope choice inside this story's own code"
+  - "A maximally-skipped interview (pw-12) still triggers a real remember() call (even if the indexed content is minimal) -- crawl-and-feed does not silently no-op just because most questions were skipped"
+
+steps:
+  - id: research
+    description: Re-read pw-09's resolved mapping function and confirm which remember() implementation (engine.mjs's or client.ts's) the interview skill should call, matching whichever transport pw-11 already chose for the write primitive.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for a completed interview firing a real remember() call, correctly scoped via pw-09's resolver.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Wire the remember() call into the interview skill's completion step, using pw-09's resolver for the scope argument.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the scope resolution genuinely goes through pw-09's function -- not a parallel, slightly-different scope decision made inline in this story.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: src/engine.mjs
+      purpose: "remember(text, scope, opts) -- one of two real call targets, per pw-09's resolved decision."
+    - path: lib/mnemosyne/client.ts
+      purpose: "MnemosyneClient.remember(content, scope, layer?) -- the other real call target."
+
+files_to_modify:
+  - file: skills/mnemosyne-persona-interview/SKILL.md
+    change: "Extend with the crawl-and-feed step, calling remember() with pw-09's resolved scope."
+
+design_decisions:
+  - decision: "This story is the actual convergence point of two independently-built tracks (pw-09 and pw-10/11/12) -- built last within Slice 3, not in parallel with either."
+    rationale: "vertical-plan.md Decision 3 / Sub-slice 3c: 'the actual convergence point of 3a and 3b -- cannot be built before either sub-slice above exists, and is genuinely the epic's stated release-gate requirement.'"
+
+cross_cutting: []
+
+risks:
+  - severity: medium
+    description: "A crawl-and-feed step that silently no-ops on a maximally-skipped interview would defeat the 'initial crawl and feeding' requirement for exactly the interviews where it matters least (heavily-skipped ones, likely quick/low-effort authoring) but is still expected to happen."
+    mitigation: "pw-12's maximally-skipped scenario is explicitly re-tested against this story's remember() firing, not just against Persona validity."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-wizard/docs/design-discussion.md
+    relevant_excerpt: |
+      §1 Goal: an LLM-interview wizard that authors real persona content...
+      triggers real remember() writes as the "initial crawl and feeding."

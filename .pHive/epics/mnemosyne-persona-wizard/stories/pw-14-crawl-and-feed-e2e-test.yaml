@@ -1,0 +1,64 @@
+id: pw-14-crawl-and-feed-e2e-test
+epic: mnemosyne-persona-wizard
+title: Crawl-and-feed - end-to-end test
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [pw-13-crawl-and-feed-wiring]
+
+description: |
+  Closes Slice 3. An end-to-end test proving the full interview flow works
+  together: interview → Persona written (via Slice 2's write primitive) →
+  remember() call(s) fired, correctly scoped (via pw-09's resolver) -- the
+  complete "initial crawl and feeding" story the epic exists to deliver.
+
+acceptance_criteria:
+  - "A full, real end-to-end run: start the interview, answer questions (or skip per pw-12's regression case), confirm a real Persona file exists on disk (via Slice 2's write primitive), confirm at least one real remember() call fired with the correct scope"
+  - "The test covers BOTH repo-spinup-lifecycle moments (design-discussion.md §3e): a global-tier persona authored before any repo exists, and a code-architect persona authored with a real repo present"
+  - "Full Slice 1 and Slice 2 regression suites still pass unmodified after Slice 3's changes"
+
+steps:
+  - id: research
+    description: Re-read pw-08's cross-transport round-trip test pattern and Epic 1's pf-05/pf-10 end-to-end integration test conventions to match the same rigor for this epic's own closing story.
+    agent: researcher
+  - id: test-spec
+    description: Write the failing end-to-end test itself, covering both lifecycle moments.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: "Fix anything the end-to-end test surfaces across pw-09 through pw-13 (expected result: minor integration gaps, if any)."
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the test is genuinely end-to-end (real interview flow, real Persona write, real remember() call) -- not three separately-mocked assertions stitched together.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch. This closes Slice 3 -- confirm pw-09 through pw-14 are green together, then run the full test suite (npm test) to confirm Slice 3's integration is clean end-to-end before Slice 4 starts.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: .pHive/epics/mnemosyne-persona-wizard/docs/design-discussion.md
+      purpose: "§1's full goal statement -- the exact end-to-end scenario this test proves."
+
+files_to_modify:
+  - file: skills/mnemosyne-persona-interview/__tests__/e2e.mjs
+    change: "New file. Full end-to-end interview -> persona -> remember() test, both lifecycle moments."
+
+design_decisions:
+  - decision: "This is Slice 3's closing story, matching Epic 1's own pattern of a real end-to-end/regression story closing each slice."
+    rationale: "Consistent with how pf-05/pf-10/pf-14 closed Epic 1's 3 slices -- proof, not assumption, that everything in the slice works together."
+
+cross_cutting: []
+
+risks: []
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-wizard/docs/vertical-plan.md
+    relevant_excerpt: |
+      Sub-slice 3c: Crawl-and-feed wiring... Tests proving at least one
+      real remember() call fires per completed interview, correctly
+      scoped.

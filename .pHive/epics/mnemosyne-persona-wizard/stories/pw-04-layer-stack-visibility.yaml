@@ -1,0 +1,73 @@
+id: pw-04-layer-stack-visibility
+epic: mnemosyne-persona-wizard
+title: Layer-stack visibility section (reuses GET /layers) + Level 0 pointer
+status: pending
+complexity: low
+methodology: tdd
+depends_on: [pw-02-get-persona-routes-cors]
+
+description: |
+  Implements horizontal-plan.md H3's layer-stack section: a second,
+  clearly-separated part of the Personas panel showing the active memory
+  layer stack (mnemosyne.layers.json/MNEMOSYNE_LAYERS) via the ALREADY-
+  SHIPPED GET /layers route -- no new backend work, this is purely a second
+  loadX()-style call against existing infrastructure. Also carries forward
+  Level 0's view-only status from Epic 1: a pointer to ~/.mnemosyne/level0-
+  rules.md, never an edit affordance.
+
+acceptance_criteria:
+  - "Given the UI is opened, when the layer-stack section loads, then it shows the currently configured layer stack, fetched from the existing GET /layers route -- confirmed NOT a new route"
+  - "The layer-stack section is visually/structurally distinct from the persona list -- never merged into one list (research-brief.md §6)"
+  - "A Level 0 pointer (path to ~/.mnemosyne/level0-rules.md) is shown, with NO edit form or edit affordance anywhere"
+
+steps:
+  - id: research
+    description: Confirm GET /layers's exact response shape (server.ts:142-147) and locate the existing Level 0 path constant (level0.ts's DEFAULT_LEVEL0_PATH) for the pointer display.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for the layer-stack section's rendering, asserting it calls GET /layers (not a new route) and that no edit-Level-0 UI element exists anywhere in the rendered output.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add the layer-stack section to the Personas panel (pw-03's markup), fetching GET /layers and rendering the result, plus a static Level 0 path pointer.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm no new backend route was added for this story (GET /layers reused as-is) and that Level 0 stays genuinely view-only.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/server.ts
+      purpose: "GET /layers (lines 142-147) -- already exists, already correct, reused as-is."
+    - path: lib/mnemosyne/layer1/level0.ts
+      purpose: "DEFAULT_LEVEL0_PATH -- the pointer this section displays."
+
+files_to_modify:
+  - file: ui/index.html
+    change: "Layer-stack sub-section within the Personas panel (pw-03), plus a Level 0 pointer line."
+  - file: ui/app.js
+    change: "Extend the Personas panel's loading logic (or a small companion function) to also fetch GET /layers."
+
+design_decisions:
+  - decision: "No new backend route -- GET /layers is reused exactly as Epic 1 shipped it."
+    rationale: "horizontal-plan.md H2.2: 'This reduces H2's actual new-route surface to persona listing/reading only -- the layer-stack section is a second loadX() call against an already-shipped route, not new backend work.'"
+  - decision: "Level 0 stays view-only -- no edit form, in this story or anywhere else in this epic."
+    rationale: "design-discussion.md §3d/§6 OQ4: carried forward from Epic 1's own recommendation given Level 0's global blast radius (one file affecting every repo/persona)."
+
+cross_cutting: []
+
+risks: []
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-wizard/docs/horizontal-plan.md
+    relevant_excerpt: |
+      Layer-stack visibility needs no new route. GET /layers already exists
+      and is exactly the "active layer stack" data Slice 1's UI section
+      needs.

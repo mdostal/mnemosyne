@@ -1,0 +1,85 @@
+id: pw-10-interview-skill-mechanics
+epic: mnemosyne-persona-wizard
+title: Interview skill - adaptive question sequencing
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [pw-08-cross-transport-roundtrip]
+
+description: |
+  Implements horizontal-plan.md H6's core mechanics: a new Claude Code
+  skill implementing a multi-turn persona-authoring interview, grounded in
+  plugin-hive's kickoff-protocol.md "Phase 3b: Discovery Questions" pattern
+  -- the only real, working precedent for this shape anywhere this repo
+  depends on. No interview/multi-turn pattern exists in this repo today
+  (skills/mnemosyne-standalone/SKILL.md is stateless, table-driven, one
+  action per call).
+
+  This is the largest, least-precedented story in the epic -- genuinely new
+  territory for this codebase, though not for the plugin-hive ecosystem it
+  already leans on for planning.
+
+acceptance_criteria:
+  - "The skill sequences a small core set of individually-skippable questions (what does this tier/persona know; what does it explicitly NOT hold; does it have a parent to query up to), mirroring kickoff's adaptive core+optional-follow-up shape"
+  - "Given context that already answers a question, the skill does NOT re-ask it -- adaptive skip, matching kickoff-protocol.md's explicit rule"
+  - "Skipped CORE questions get an explicit placeholder in the resulting content (kickoff's convention: an explicit marker, never silent omission); skipped OPTIONAL questions are omitted entirely"
+  - "The interview works at both repo-spinup-lifecycle moments named in design-discussion.md §3e: authoring a global-tier persona before any repo exists, and authoring a code-architect persona once a repo exists -- parameterized by which tier/store it's authoring for, no new storage-level work"
+
+steps:
+  - id: research
+    description: "Read kickoff-protocol.md's 'Phase 3b: Discovery Questions' section in full (~/.claude/plugins/cache/plugin-hive/plugin-hive/*/hive/references/kickoff-protocol.md) -- the adaptive question set, persistence rule, non-blocking hard-fail rule, and structured output schema this skill must reproduce for persona authoring specifically."
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests (as much as a skill's markdown-driven behavior can
+      be tested -- likely a scripted/simulated interview harness, or a
+      structural test asserting the skill file itself contains the required
+      adaptive-skip/persistence/non-blocking-hard-fail instructions) for a
+      full-answers interview run and a partially-skipped run.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Write the new skill file (SKILL.md + any helper scripts it needs), grounded explicitly in kickoff-protocol.md's Phase 3b shape, sequencing the persona-authoring questions.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review against kickoff-protocol.md's actual mechanics line-by-line -- confirm the skill genuinely reproduces adaptive skip / persist-on-skip / non-blocking hard-fail, not just a superficially similar Q&A flow.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: skills/mnemosyne-standalone/SKILL.md
+      purpose: "The one existing skill in this repo -- explicitly stateless/table-driven, the contrast this new skill's multi-turn nature departs from deliberately."
+    - path: lib/mnemosyne/layer1/persona.ts
+      purpose: "assertValidPersona's real required-field set (tier, non-empty scopeId/displayName/scope, well-shaped sections) -- the skill's non-blocking hard-fail rule must still produce a record that passes this validation even when maximally skipped."
+
+files_to_modify:
+  - file: skills/mnemosyne-persona-interview/SKILL.md
+    change: "New file. The interview skill itself, grounded in kickoff-protocol.md's Phase 3b pattern."
+
+design_decisions:
+  - decision: "Grounded explicitly in kickoff-protocol.md's Phase 3b pattern (adaptive skip, persist-on-skip, non-blocking hard-fail, structured output schema) rather than inventing new interview mechanics."
+    rationale: "research-brief.md §5: 'a real, working precedent exists in the plugin-hive ecosystem this repo already depends on for its own planning' -- design-discussion.md's Risks table explicitly warns against reinventing this."
+  - decision: "Parameterized by tier/store, works at both repo-spinup-lifecycle moments, with zero new storage-level work."
+    rationale: "design-discussion.md §3e: Epic 1's two-store split already structurally supports both moments -- this story only needs to work correctly for both, not build new lifecycle infrastructure."
+
+cross_cutting: []
+
+risks:
+  - severity: medium
+    description: "The interview skill invents its own question-sequencing mechanics instead of reusing kickoff-protocol.md's already-working shape, duplicating effort and diverging in quality/robustness."
+    mitigation: "Explicit line-by-line grounding in kickoff-protocol.md during research and review, not just a passing resemblance."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-wizard/docs/horizontal-plan.md
+    relevant_excerpt: |
+      H6.1-3: adaptive question set... persistence rule for skipped
+      fields... non-blocking hard-fail rule: the interview MUST continue
+      and still produce a valid, writable Persona record regardless of how
+      many questions are skipped.

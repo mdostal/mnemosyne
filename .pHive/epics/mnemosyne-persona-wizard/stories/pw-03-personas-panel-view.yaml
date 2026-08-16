@@ -1,0 +1,80 @@
+id: pw-03-personas-panel-view
+epic: mnemosyne-persona-wizard
+title: Personas panel markup + loadPersonas() (view-only)
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [pw-02-get-persona-routes-cors]
+
+description: |
+  Implements horizontal-plan.md H3 (view-only subset): a new "Personas"
+  panel in the standalone UI, matching every existing panel's exact
+  structure/CSS convention. This is the operator-facing feature Slice 1
+  exists to ship -- "walk the memory layer stack, see what's assigned to
+  what."
+
+acceptance_criteria:
+  - "Given the UI is opened, when the Personas panel loads, then it shows every existing persona (tier, scopeId, displayName) fetched from pw-02's GET /persona route"
+  - "Given a persona with parentRefs, when it's rendered, then only the pointer (tier + scopeId) is shown -- NEVER the parent's actual sections content fetched-and-inlined (reproduces getPersonaContent's own non-copy-down guarantee in the UI)"
+  - "The panel is wired into refreshAll() -- loading on page load and on manual refresh, matching every other panel, with no auto-polling"
+  - "Panel follows the exact existing structure: <h2> + <p class=\"panel-status\" id=\"personas-status\">, matching the Lanes panel's table convention"
+
+steps:
+  - id: research
+    description: Read ui/index.html's Lanes panel markup (table/tbody convention) and ui/app.js's loadLanes()/loadGraph() functions in full to mirror the exact structure/loading-state pattern.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests (extending whatever UI test convention this repo uses, e.g. test/ui-shell.mjs if it exists, or a new DOM-level test) for loadPersonas() fetching pw-02's route and rendering rows, including the parentRefs pointer-only rendering.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add the Personas panel markup to ui/index.html and loadPersonas() to ui/app.js, wired into refreshAll().
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review specifically that parentRefs never gets fetched-and-inlined -- the UI must reproduce the pointer-only guarantee, not silently reintroduce copy-down (research-brief.md §6's explicit warning).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: ui/index.html
+      purpose: "Lines 16-194: existing 6-panel structure. Lanes panel (lines 28-59) is the closest table-based analog to mirror."
+    - path: ui/app.js
+      purpose: "loadLanes() (lines 112-138), loadGraph() (lines 946-1021), setStatus() helper (lines 16-19), refreshAll() (lines 1152-1160) -- every convention this story must match exactly."
+    - path: lib/mnemosyne/layer1/persona.ts
+      purpose: "buildParentContextSections (lines 216-242) -- the pointer-only rendering guarantee this UI story must reproduce, not bypass."
+
+files_to_modify:
+  - file: ui/index.html
+    change: "New <section class=\"panel panel-wide\" id=\"personas\"> with a persona-list table."
+  - file: ui/app.js
+    change: "New loadPersonas() function; refreshAll()'s Promise.all grows a 7th call."
+  - file: ui/style.css
+    change: "Only if the existing panel/table classes don't already cover the new markup -- reuse existing classes first."
+
+design_decisions:
+  - decision: "Persona list and layer-stack sections are visually/structurally distinct within the same panel, never merged into one list."
+    rationale: "research-brief.md §6: persona content and layer-stack config are genuinely different data models -- carried forward from Epic 1's own UI design principle."
+  - decision: "parentRefs render as named pointers only (tier + scopeId), reproducing getPersonaContent's own guarantee, not re-fetching the parent."
+    rationale: "Direct extension of Epic 1's pf-12 principle ('query up, never copy down') into the UI layer -- the same guarantee must hold everywhere a persona's content is displayed, not just in the CLI-synced harness file."
+
+cross_cutting: []
+
+risks:
+  - severity: medium
+    description: "A UI implementation that 'helpfully' fetches and displays a parentRef's actual content (for a nicer preview) would silently reintroduce the copy-down risk Epic 1's pf-12 specifically closed."
+    mitigation: "Explicit review step + test asserting the panel never issues a second fetch for a referenced parent's content."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-wizard/docs/horizontal-plan.md
+    relevant_excerpt: |
+      H3.3: parentRefs render as pointer-only, never the parent's real
+      content -- the UI must reproduce getPersonaContent's own guarantee
+      rather than re-fetching and inlining the parent, which would silently
+      reintroduce the copy-down risk.

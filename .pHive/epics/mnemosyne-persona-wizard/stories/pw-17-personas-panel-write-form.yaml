@@ -1,0 +1,70 @@
+id: pw-17-personas-panel-write-form
+epic: mnemosyne-persona-wizard
+title: Create/edit form in the Personas panel
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [pw-15-post-persona-routes, pw-03-personas-panel-view]
+
+description: |
+  Implements horizontal-plan.md H3's write-capable subset -- closes the
+  epic. A create/edit form in the Personas panel (pw-03), following the
+  exact `add-lane-form` convention already established in ui/app.js.
+  Operator-confirmed committed scope (design-discussion.md §6 OQ5), not
+  deferred.
+
+acceptance_criteria:
+  - "Given the Personas panel, when the operator fills in and submits the create/edit form, then a real persona is written via pw-15's POST route"
+  - "On successful submission, the panel calls loadPersonas() again (pw-03's function, not rebuilt) to reflect the new/edited persona immediately, without a manual page reload"
+  - "On a validation failure (e.g. mandateSections smuggling somehow reaching the form, or a tier mismatch), the form surfaces the error via setStatus(), matching every other form's pass/fail convention"
+  - "The form follows add-lane-form's exact structure (form-row divs, submit handler shape)"
+
+steps:
+  - id: research
+    description: Read ui/index.html's add-lane-form markup (lines 43-59) and ui/app.js's submit handler (lines 140-172) in full to mirror the exact convention.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for the form's submit handler POSTing to pw-15's route, calling loadPersonas() on success, and surfacing errors via setStatus() on failure.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add the create/edit form to the Personas panel (pw-03's markup) and its submit handler to ui/app.js.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the form reuses pw-03's loadPersonas() rather than duplicating a second rendering path, and matches add-lane-form's established convention exactly.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch. This closes Slice 4 and the epic -- confirm the full pw-01 through pw-17 story set is green together, then run the full test suite.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: ui/index.html
+      purpose: "add-lane-form markup (lines 43-59) -- this story's form mirrors this exactly."
+    - path: ui/app.js
+      purpose: "add-lane-form's submit handler (lines 140-172) -- same 'POST, setStatus, re-load on success' convention this story reuses."
+
+files_to_modify:
+  - file: ui/index.html
+    change: "Create/edit persona form within the Personas panel."
+  - file: ui/app.js
+    change: "Submit handler for the new form, POSTing to pw-15's route, calling loadPersonas() on success."
+
+design_decisions:
+  - decision: "Form reuses pw-03's loadPersonas() for the post-submit refresh, rather than a separate rendering path."
+    rationale: "horizontal-plan.md H3.6: 'same re-load after mutation convention add-lane-form's handler already uses.'"
+
+cross_cutting: []
+
+risks: []
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-wizard/docs/vertical-plan.md
+    relevant_excerpt: |
+      Sub-slice 4b: UI form. Why cut here: pure form/DOM work, depends only
+      on 4a's route existing; follows the add-lane-form convention already
+      established in this same file, so it's mechanical once 4a is proven.

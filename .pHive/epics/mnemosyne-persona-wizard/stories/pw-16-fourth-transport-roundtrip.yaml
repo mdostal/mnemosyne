@@ -1,0 +1,65 @@
+id: pw-16-fourth-transport-roundtrip
+epic: mnemosyne-persona-wizard
+title: 4th-transport (HTTP) round-trip test
+status: pending
+complexity: low
+methodology: tdd
+depends_on: [pw-15-post-persona-routes]
+
+description: |
+  Completes pw-08's cross-transport round-trip story, which deliberately
+  left the HTTP transport out (it didn't exist yet at Slice 2 time). Now
+  that pw-15 ships POST /persona/*, this story extends the SAME round-trip
+  test to include HTTP as a 4th real transport -- write via HTTP, read via
+  CLI/MCP/skill-harness and vice versa.
+
+acceptance_criteria:
+  - "Given a persona written via HTTP (pw-15), when read back via CLI's show, MCP's persona_show, or the skill-harness's persona-show, then the content matches exactly"
+  - "Given a persona written via CLI/MCP/skill-harness, when read back via HTTP's GET /persona/:tier/:scopeId, then the content matches exactly"
+  - "This is a mechanical extension of pw-08's already-built test infrastructure, not a new test harness"
+
+steps:
+  - id: research
+    description: Re-read pw-08's test/persona-cross-transport.mjs file to extend it consistently.
+    agent: researcher
+  - id: test-spec
+    description: Add HTTP as a 4th transport to pw-08's existing round-trip matrix.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: This story is expected to require zero production-code changes if pw-15 is correct -- if the test surfaces a real divergence, fix it minimally.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm this extends pw-08's existing test file rather than duplicating a parallel test harness.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: test/persona-cross-transport.mjs
+      purpose: "pw-08's existing 3-transport round-trip matrix -- extended here to 4."
+
+files_to_modify:
+  - file: test/persona-cross-transport.mjs
+    change: "Extend the round-trip matrix with HTTP as a 4th transport."
+
+design_decisions:
+  - decision: "Mechanical extension of pw-08's existing test, not a new test file."
+    rationale: "vertical-plan.md Sub-slice 4a: 'this is the natural point to complete the 4th transport round-trip story Sub-slice 2d left open.'"
+
+cross_cutting: []
+
+risks: []
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-wizard/docs/horizontal-plan.md
+    relevant_excerpt: |
+      H5's cross-layer-dependency note: this round-trip story's real
+      completion (across all 4 transports, not just 3) is a natural Slice
+      4 extension, not solely a Slice 2 deliverable.

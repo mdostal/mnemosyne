@@ -1,0 +1,76 @@
+id: pw-06-skill-harness-persona-create
+epic: mnemosyne-persona-wizard
+title: skill-harness personaCreateAction
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [pw-05-cli-persona-create]
+
+description: |
+  Implements horizontal-plan.md H4's skill-harness component. Depends on
+  pw-05 -- this story subprocess-execs the CLI verb pw-05 built, the exact
+  same shape personaSyncAction/personaSeedAction/personaShowAction already
+  use via personaCliRun(). No new logic invented here.
+
+acceptance_criteria:
+  - "Given valid persona-create arguments, when personaCreateAction runs, then it produces the identical on-disk file pw-05's CLI verb alone would produce (same subprocess call, same result)"
+  - "Given the skill-harness CLI dispatcher, when `node bin/mnemosyne-skill-helper.mjs persona-create '{...}'` runs, then it works end-to-end (matches the existing persona-sync/persona-seed/persona-show dispatcher entries)"
+  - "skills/mnemosyne-standalone/SKILL.md's action table gains a persona-create row, documented the same way persona-sync/persona-seed/persona-show already are"
+
+steps:
+  - id: research
+    description: Read bin/mnemosyne-skill-helper.mjs's personaSyncAction/personaSeedAction/personaShowAction and personaCliRun() in full (lines 239-298) to add personaCreateAction in the identical shape.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests extending test/skill-harness.mjs's persona-*
+      action test block (added in the v0.7.0 MCP-tools follow-on) with
+      personaCreateAction coverage -- real subprocess, fake $HOME, matching
+      the existing pattern.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add personaCreateAction to bin/mnemosyne-skill-helper.mjs (following personaCliRun's exact shape), add to SIMPLE_ACTIONS, update skills/mnemosyne-standalone/SKILL.md's action table.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm this story invents zero new logic -- personaCreateAction must be a pure subprocess pass-through to pw-05's CLI verb, matching the existing persona-* actions' exact shape.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: bin/mnemosyne-skill-helper.mjs
+      purpose: "personaCliRun() (lines 239-282) and the existing 3 persona-* actions (lines 286-298) -- personaCreateAction mirrors this shape exactly."
+    - path: skills/mnemosyne-standalone/SKILL.md
+      purpose: "Existing table-driven action documentation this story adds one row to."
+    - path: test/skill-harness.mjs
+      purpose: "The persona-* action test block (added v0.7.0) this story's tests extend."
+
+files_to_modify:
+  - file: bin/mnemosyne-skill-helper.mjs
+    change: "New personaCreateAction, added to SIMPLE_ACTIONS as persona-create."
+  - file: skills/mnemosyne-standalone/SKILL.md
+    change: "New persona-create row in the action table."
+  - file: test/skill-harness.mjs
+    change: "New personaCreateAction test coverage."
+
+design_decisions:
+  - decision: "personaCreateAction is a pure subprocess pass-through, no new business logic -- same principle as the existing 3 persona-* actions."
+    rationale: "horizontal-plan.md H4.2: 'does not implement new logic -- it subprocess-shells to the CLI, exactly like personaSyncAction/personaSeedAction/personaShowAction already do.'"
+
+cross_cutting: []
+
+risks: []
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-wizard/docs/vertical-plan.md
+    relevant_excerpt: |
+      Sub-slice 2b: skill-harness. Why cut here: depends on 2a (subprocess-
+      execs the CLI verb, same shape as existing personaSyncAction/etc.) --
+      cannot be built first.
