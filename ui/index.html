@@ -214,6 +214,55 @@
         </thead>
         <tbody id="personas-tbody"></tbody>
       </table>
+
+      <!-- pw-17-personas-panel-write-form: create/edit form, following
+           add-lane-form's exact convention (form-row divs, single submit
+           button, panel-status pass/fail element). POSTs to pw-15's
+           POST /persona/:tier/:scopeId route on the persona service (same
+           cross-origin personaServiceOrigin() pattern loadPersonas() above
+           already uses -- see ui/app.js). On success, re-loads via
+           loadPersonas() (pw-03) -- no second rendering path. A single
+           "knows" section (heading + body) is the v1 minimum viable write
+           path, not a full multi-section editor. -->
+      <form id="persona-form">
+        <h3>Create / edit persona</h3>
+        <div class="form-row">
+          <label for="persona-tier">Tier</label>
+          <select id="persona-tier" name="tier" required>
+            <option value="" disabled selected>select a tier…</option>
+            <option value="top-orchestrator">top-orchestrator</option>
+            <option value="company-director">company-director</option>
+            <option value="project-orchestrator">project-orchestrator</option>
+            <option value="code-architect">code-architect</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="persona-scope-id">Scope ID</label>
+          <input id="persona-scope-id" name="scopeId" type="text" required placeholder="e.g. mnemosyne" />
+        </div>
+        <div class="form-row">
+          <label for="persona-display-name">Display name</label>
+          <input id="persona-display-name" name="displayName" type="text" required placeholder="e.g. Mnemosyne Code Architect" />
+        </div>
+        <div class="form-row">
+          <label for="persona-scope">Scope (one-line responsibility)</label>
+          <input id="persona-scope" name="scope" type="text" required placeholder="what this persona owns, one line" />
+        </div>
+        <div class="form-row">
+          <label for="persona-section-heading">Section heading</label>
+          <input id="persona-section-heading" name="sectionHeading" type="text" required placeholder="e.g. What this persona knows" />
+        </div>
+        <div class="form-row">
+          <label for="persona-section-body">Section body</label>
+          <textarea id="persona-section-body" name="sectionBody" required rows="4" placeholder="the section's content…"></textarea>
+        </div>
+        <div class="form-row">
+          <label for="persona-repo">Repo (optional — required for code-architect)</label>
+          <input id="persona-repo" name="repo" type="text" placeholder="e.g. /path/to/repo -- only required for the code-architect tier" />
+        </div>
+        <button type="submit">Save persona</button>
+        <p class="panel-status" id="persona-form-status"></p>
+      </form>
     </section>
 
     <!-- ================================================================

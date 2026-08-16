@@ -1276,6 +1276,73 @@ async function loadPersonas() {
   }
 }
 
+// --- Personas panel write form (pw-17-personas-panel-write-form): closes
+// the epic. Same "form-row divs, POST, setStatus() pass/fail, re-load on
+// success" convention addLaneForm's handler above already established --
+// see that handler for the exact shape this mirrors. POSTs to pw-15's
+// POST /persona/:tier/:scopeId route on the persona service (same
+// cross-origin personaServiceOrigin() this file's loadPersonas() above
+// already uses -- the persona service runs on a different port, 3141, than
+// this UI's own server). The request body is the bare persona candidate
+// pw-15's route expects ({tier, scopeId, displayName, scope, sections,
+// repo?}) -- never mandateSections, which the server-side
+// assertValidPersona rejects on mere presence (persona.ts). A single
+// "knows" section (heading + body) is the v1 minimum viable write path,
+// not a full multi-section editor. On success, calls loadPersonas() again
+// (pw-03's existing function) so the panel reflects the new/edited persona
+// immediately -- no second rendering path is built here.
+const personaForm = document.getElementById("persona-form");
+const personaFormStatusEl = document.getElementById("persona-form-status");
+
+personaForm.addEventListener("submit", async (evt) => {
+  evt.preventDefault();
+  const submitBtn = personaForm.querySelector("button[type=submit]");
+  const formData = new FormData(personaForm);
+  const tier = String(formData.get("tier") || "").trim();
+  const scopeId = String(formData.get("scopeId") || "").trim();
+  const displayName = String(formData.get("displayName") || "").trim();
+  const scope = String(formData.get("scope") || "").trim();
+  const sectionHeading = String(formData.get("sectionHeading") || "").trim();
+  const sectionBody = String(formData.get("sectionBody") || "").trim();
+  const repo = String(formData.get("repo") || "").trim();
+
+  const candidate = {
+    tier,
+    scopeId,
+    displayName,
+    scope,
+    sections: [{ heading: sectionHeading, body: sectionBody }],
+  };
+  if (repo) candidate.repo = repo;
+
+  setStatus(personaFormStatusEl, "loading", "saving…");
+  submitBtn.disabled = true;
+  try {
+    const origin = personaServiceOrigin();
+    const res = await fetch(
+      `${origin}/persona/${encodeURIComponent(tier)}/${encodeURIComponent(scopeId)}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(candidate),
+      }
+    );
+    const body = await res.json();
+    if (!res.ok) {
+      const message = (body.error && (body.error.message || body.error)) || `HTTP ${res.status}`;
+      setStatus(personaFormStatusEl, "fail", `FAIL — ${message}`);
+      return;
+    }
+    setStatus(personaFormStatusEl, "pass", `saved persona '${body.scopeId}' (${body.tier})`);
+    personaForm.reset();
+    await loadPersonas();
+  } catch (err) {
+    setStatus(personaFormStatusEl, "fail", `FAIL — ${err && err.message ? err.message : err}`);
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+
 async function loadPersonaLayerStack() {
   // Guards against running against an older served index.html that predates
   // this section (e.g. a stale cached page) -- never throws either way.
