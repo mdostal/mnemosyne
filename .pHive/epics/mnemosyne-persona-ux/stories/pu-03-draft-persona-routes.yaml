@@ -1,9 +1,27 @@
 id: pu-03-draft-persona-routes
 epic: mnemosyne-persona-ux
 title: "Draft /persona/draft/* HTTP routes on lib/mnemosyne/server.ts (list/read/propose/approve/discard)"
-status: planned
+status: complete
 complexity: medium
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit ca72692). Independently verified: confirmed the
+  draft route block genuinely precedes the generic GET/POST /persona/*
+  handlers in source order (line 427 vs. 634/674). Confirmed via grep the
+  remember()-firing condition (typeof sourceSummary === 'string' &&
+  sourceSummary.trim() !== '') is byte-identical to pu-04's already-merged
+  CLI logic. Confirmed no re-implemented assertValidPersona anywhere in the
+  new code. Reran node test/http-api.mjs myself -- all new draft-route and
+  remember()-timing checks pass (including the pending-review-window
+  recall-returns-nothing proof and the no-sourceSummary-means-no-note-file
+  proof); only the 3 pre-existing/unrelated POST /remember failures remain.
+  Reran tsc --noEmit (clean) and vitest lib/mnemosyne/layer1 (230/230)
+  myself. Note: this ticket's worktree branched from a stale base (missing
+  pu-04's already-merged commits) -- resolved by merging via commit hash
+  directly into the up-to-date integration worktree rather than a
+  branch-name merge, avoiding a lost-update risk. All acceptance criteria
+  met.
 depends_on: [pu-02-draft-persona-store]
 
 description: |
