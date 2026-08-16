@@ -70,6 +70,51 @@
 //   --scope-id ID    (seed only) overrides the "default" seed scopeId --
 //                     see mnemosyne-persona-seed.mjs; not required.
 //
+//   create           pw-05-cli-persona-create: closes Epic 1's one
+//                     deliberately-deferred gap -- writeGlobalPersona/
+//                     writeRepoLocalPersona (persona-store-global.ts /
+//                     persona-store-repo-local.ts) were real, tested,
+//                     TS-only functions with zero CLI/MCP/skill-harness
+//                     wrapper anywhere before this verb. A THIN wrapper: the
+//                     whole persona candidate (tier, scopeId, displayName,
+//                     scope, sections, optional parentRefs) lives in
+//                     --file's YAML document, parsed and passed through
+//                     UNCHANGED (no field picking, no merging) to whichever
+//                     store function is called -- so a smuggled
+//                     `mandateSections` key is preserved all the way to
+//                     assertValidPersona's own guard (persona.ts) instead of
+//                     being silently dropped by this CLI layer first.
+//   --file PATH      required -- path to a YAML file containing the FULL
+//                     persona candidate. Chosen over a flag-per-field design
+//                     (e.g. --display-name/--section) because `sections`
+//                     (and optional `parentRefs`) are arrays of
+//                     {heading, body} objects with no clean flat-flag
+//                     encoding, and because this is exactly the same YAML
+//                     shape persona-store-{global,repo-local}.ts already
+//                     persist to disk (their own `stringify(candidate)`) --
+//                     one document shape for both directions, not a second,
+//                     CLI-specific encoding.
+//   --repo PATH      when given, routes the write to the REPO-LOCAL store
+//                     (writeRepoLocalPersona(--repo, candidate)) -- required
+//                     for a code-architect candidate, since that store's
+//                     root IS the target repo. This is the CLI's OWN routing
+//                     decision, independent of whatever candidate.tier
+//                     actually says: if the candidate's tier doesn't belong
+//                     in the store this routes to, writeRepoLocalPersona's
+//                     own assertRepoLocalTier guard rejects it before any
+//                     disk write -- not a second, CLI-level copy of that
+//                     check.
+//   --root PATH      (create only, and only when --repo is NOT given)
+//                     overrides the global persona store's root -- mirrors
+//                     `seed`'s own --root, primarily for test isolation.
+//                     Without --repo, create routes to the GLOBAL store
+//                     (writeGlobalPersona(candidate, --root ?? default)); if
+//                     candidate.tier is actually code-architect, this is
+//                     exactly the "a code-architect candidate routed at the
+//                     global store" tier/store-mismatch case --
+//                     writeGlobalPersona's own assertGlobalTier guard
+//                     rejects it before any disk write.
+//
 //   show TIER SCOPE_ID   pf-13-cli-persona-show: the on-demand fetch surface
 //                     an agent uses after following pf-12's rendered
 //                     "Parent context (query up)" pointer -- prints that
@@ -114,13 +159,15 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse as parseYaml } from "yaml";
 import { buildManagedBody, syncAllHarnesses } from "../lib/mnemosyne/layer1/sync.ts";
 import { spliceManagedBlock } from "../lib/mnemosyne/layer1/block.ts";
 import { HARNESS_TARGETS } from "../lib/mnemosyne/layer1/harness.ts";
 import { DEFAULT_LEVEL0_PATH, readLevel0Content } from "../lib/mnemosyne/layer1/level0.ts";
 import { TIERS } from "../lib/mnemosyne/layer1/tiers.ts";
 import { PERSONA_STORE_BY_TIER } from "../lib/mnemosyne/layer1/persona.ts";
-import { readGlobalPersona } from "../lib/mnemosyne/layer1/persona-store-global.ts";
+import { readGlobalPersona, writeGlobalPersona } from "../lib/mnemosyne/layer1/persona-store-global.ts";
+import { writeRepoLocalPersona } from "../lib/mnemosyne/layer1/persona-store-repo-local.ts";
 import { run as runPersonaSeed } from "./mnemosyne-persona-seed.mjs";
 
 const USAGE_SYNC = [
@@ -148,10 +195,32 @@ const USAGE_SHOW = [
   "  -- code-architect personas live in the repo-local store, which this verb does not read.",
 ].join("\n");
 
-const USAGE = `${USAGE_SYNC}\n${USAGE_SEED}\n${USAGE_SHOW}`;
+const USAGE_CREATE = [
+  "usage: mnemosyne persona create --file <path-to-yaml> [--repo <path>] [--root <path>]",
+  "  --file is required -- a YAML document with the full persona candidate:",
+  "  {tier, scopeId, displayName, scope, sections, parentRefs?}. Passed through UNCHANGED to",
+  "  writeGlobalPersona/writeRepoLocalPersona, so a smuggled 'mandateSections' key is rejected by",
+  "  their own guard, not silently stripped here.",
+  "  --repo, when given, routes the write to the repo-local store (writeRepoLocalPersona) --",
+  "  required for a code-architect candidate. Without --repo, the write routes to the global",
+  "  store (writeGlobalPersona). A tier that doesn't belong in the store this routes to is",
+  "  rejected before any disk write.",
+  "  --root (only without --repo) overrides the global persona store's root -- mirrors seed's own",
+  "  --root, primarily for test isolation.",
+].join("\n");
+
+const USAGE = `${USAGE_SYNC}\n${USAGE_SEED}\n${USAGE_SHOW}\n${USAGE_CREATE}`;
 
 export function parseArgs(argv) {
-  const args = { subcommand: undefined, repo: undefined, tier: undefined, scopeId: undefined, dryRun: false };
+  const args = {
+    subcommand: undefined,
+    repo: undefined,
+    tier: undefined,
+    scopeId: undefined,
+    dryRun: false,
+    file: undefined,
+    root: undefined,
+  };
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -159,6 +228,8 @@ export function parseArgs(argv) {
     else if (a === "--tier") args.tier = argv[++i];
     else if (a === "--scope-id") args.scopeId = argv[++i];
     else if (a === "--dry-run") args.dryRun = true;
+    else if (a === "--file") args.file = argv[++i];
+    else if (a === "--root") args.root = argv[++i];
     else positional.push(a);
   }
   args.subcommand = positional[0];
@@ -351,6 +422,56 @@ function runShow(argv, { log, warn }) {
   return { ok: true, persona };
 }
 
+/**
+ * `persona create --file <path> [--repo <path>] [--root <path>]` -- pw-05.
+ * A thin wrapper over writeGlobalPersona/writeRepoLocalPersona (Epic 1,
+ * pf-06/pf-01): parses --file's YAML into a candidate and passes it through
+ * UNCHANGED to exactly one of those two functions, picked by whether --repo
+ * was given. No business logic is reimplemented here -- validation
+ * (including the mandateSections-smuggling guard), the tier/store-mismatch
+ * guard, directory creation, and the withLock'd write are all handled
+ * entirely inside the store functions themselves, same as pf-08's seed
+ * script already does for its own writeGlobalPersona calls.
+ */
+function runCreate(args, { log, warn }) {
+  if (!args.file) {
+    warn("mnemosyne persona create: --file <path-to-yaml> is required");
+    warn(USAGE_CREATE);
+    return { ok: false };
+  }
+
+  const filePath = path.resolve(args.file);
+  if (!existsSync(filePath)) {
+    warn(`mnemosyne persona create: no such file '${filePath}'`);
+    return { ok: false };
+  }
+
+  let candidate;
+  try {
+    candidate = parseYaml(readFileSync(filePath, "utf8"));
+  } catch (e) {
+    warn(`mnemosyne persona create: failed to parse --file as YAML: ${e.message}`);
+    return { ok: false };
+  }
+
+  const storeKind = args.repo ? "repo-local" : "global";
+  let writtenPath;
+  try {
+    if (args.repo) {
+      writtenPath = writeRepoLocalPersona(path.resolve(args.repo), candidate);
+    } else {
+      const root = args.root ? path.resolve(args.root) : undefined;
+      writtenPath = root !== undefined ? writeGlobalPersona(candidate, root) : writeGlobalPersona(candidate);
+    }
+  } catch (e) {
+    warn(`mnemosyne persona create: ${e.message}`);
+    return { ok: false };
+  }
+
+  log(`created ${storeKind} persona ${candidate?.tier}/${candidate?.scopeId} -> ${writtenPath}`);
+  return { ok: true, filePath: writtenPath };
+}
+
 export async function run(argv, { log = console.log, warn = console.error } = {}) {
   if (argv[0] === "--help" || argv[0] === "-h") {
     log(USAGE);
@@ -369,6 +490,9 @@ export async function run(argv, { log = console.log, warn = console.error } = {}
   }
 
   const args = parseArgs(argv);
+  if (args.subcommand === "create") {
+    return runCreate(args, { log, warn });
+  }
   if (args.subcommand !== "sync") {
     warn(`mnemosyne persona: unknown or missing subcommand '${args.subcommand ?? ""}'`);
     warn(USAGE);

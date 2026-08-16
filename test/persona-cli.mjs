@@ -65,6 +65,32 @@
 //                     read off disk on every invocation, not a cached or
 //                     synced copy.
 //
+// Extended by pw-05-cli-persona-create (epic: mnemosyne-persona-wizard) to
+// also cover the one deliberately-deferred gap from Epic 1:
+// writeGlobalPersona/writeRepoLocalPersona had zero CLI wrapper before this.
+//   AC-create-parse         `persona create` argument parsing: missing
+//                            --file, a --file that does not exist.
+//   AC-create-write         `create`'s success path for BOTH stores: a
+//                            global-tier candidate with no --repo dispatches
+//                            to writeGlobalPersona (readable back via `show`
+//                            immediately after); a code-architect candidate
+//                            with --repo dispatches to writeRepoLocalPersona
+//                            (including parentRefs passing through
+//                            untouched), and the dispatcher
+//                            (`bin/mnemosyne persona create ...`) reaches the
+//                            same code.
+//   AC-create-mandate-reject a candidate smuggling a `mandateSections` key is
+//                            rejected with assertValidPersona's own clear
+//                            error, BEFORE any disk write -- not silently
+//                            stripped, not silently accepted.
+//   AC-create-tier-mismatch a tier/store mismatch in either direction (a
+//                            code-architect candidate routed at the global
+//                            store by omitting --repo; a global-tier
+//                            candidate routed at the repo-local store by
+//                            passing --repo) is rejected by
+//                            writeGlobalPersona's/writeRepoLocalPersona's own
+//                            tier guard, BEFORE any disk write.
+//
 // Usage: node test/persona-cli.mjs
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -138,6 +164,45 @@ async function writeFakeGlobalPersona(home, tier, scopeId, { displayName, scope,
       ...sections.flatMap((s) => [`  - heading: ${JSON.stringify(s.heading)}`, `    body: ${JSON.stringify(s.body)}`]),
     ].join("\n") + "\n";
   await writeFile(path.join(dir, `${scopeId}.yaml`), yamlText, "utf8");
+}
+
+/**
+ * Serializes an arbitrary persona-shaped candidate object to the same YAML
+ * shape persona-store-{global,repo-local}.ts round-trip via `stringify` --
+ * used as `pw-05`'s `persona create --file <path>` input fixture. Reuses
+ * `writeFakeGlobalPersona`'s hand-rolled approach (JSON.stringify'd scalars
+ * are valid YAML flow scalars) rather than adding a "yaml" import to this
+ * test file, and deliberately serializes WHATEVER keys the candidate object
+ * has -- including a smuggled `mandateSections` key, for AC-create-mandate-
+ * reject -- so nothing gets silently dropped before the CLI even sees it.
+ */
+function personaCandidateYaml(candidate) {
+  const lines = [];
+  for (const key of ["tier", "scopeId", "displayName", "scope"]) {
+    if (candidate[key] !== undefined) lines.push(`${key}: ${JSON.stringify(candidate[key])}`);
+  }
+  for (const key of ["sections", "mandateSections"]) {
+    if (candidate[key] !== undefined) {
+      lines.push(`${key}:`);
+      for (const s of candidate[key]) {
+        lines.push(`  - heading: ${JSON.stringify(s.heading)}`, `    body: ${JSON.stringify(s.body)}`);
+      }
+    }
+  }
+  if (candidate.parentRefs !== undefined) {
+    lines.push("parentRefs:");
+    for (const r of candidate.parentRefs) {
+      lines.push(`  - tier: ${JSON.stringify(r.tier)}`, `    scopeId: ${JSON.stringify(r.scopeId)}`);
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+
+/** Writes a `persona create --file <path>` fixture under `dir`, returning the file path written. */
+async function writeCandidateFile(dir, filename, candidate) {
+  const filePath = path.join(dir, filename);
+  await writeFile(filePath, personaCandidateYaml(candidate), "utf8");
+  return filePath;
 }
 
 /**
@@ -510,6 +575,197 @@ async function main() {
     await rm(home, { recursive: true, force: true });
   }
 
+  // --- AC-create-parse: `persona create` argument parsing (pw-05) ----------
+  {
+    const home = await makeFakeHome();
+
+    const noArgs = await runCli(["create"], { home });
+    ok(noArgs.code !== 0, `create with no args -> non-zero exit (got ${noArgs.code})`);
+    ok(/--file.*required/i.test(noArgs.stderr), `create with no args -> clear stderr message -> ${short(noArgs.stderr)}`);
+
+    const missingFile = await runCli(["create", "--file", "/no/such/file.yaml"], { home });
+    ok(missingFile.code !== 0, `create with a --file that does not exist -> non-zero exit (got ${missingFile.code})`);
+    ok(/no such file/i.test(missingFile.stderr), `create with a missing --file -> clear stderr message -> ${short(missingFile.stderr)}`);
+
+    await rm(home, { recursive: true, force: true });
+  }
+
+  // --- AC-create-write: `persona create`'s success path, both stores (pw-05) -----------------
+  {
+    // Global tier, no --repo -> writeGlobalPersona, PERSONA_STORE_BY_TIER dispatch.
+    const home = await makeFakeHome();
+    const contentDir = await makeTempDir("mnemosyne-persona-cli-create-content-");
+
+    const candidateFile = await writeCandidateFile(contentDir, "candidate.yaml", {
+      tier: "project-orchestrator",
+      scopeId: "create-global-scope",
+      displayName: "Project Orchestrator",
+      scope: "CREATE_GLOBAL_SCOPE_MARKER — authored via `persona create`.",
+      sections: [{ heading: "Authored section", body: "CREATE_GLOBAL_BODY_MARKER — real create() write." }],
+    });
+
+    const result = await runCli(["create", "--file", candidateFile], { home });
+    ok(result.code === 0, `create (global tier, no --repo) -> exit 0 (got ${result.code}, stderr=${short(result.stderr)})`);
+    ok(/created/.test(result.stdout), `create reports the write -> ${short(result.stdout)}`);
+
+    const written = await readFile(
+      path.join(home, ".mnemosyne", "personas", "project-orchestrator", "create-global-scope.yaml"),
+      "utf8",
+    );
+    ok(written.includes("CREATE_GLOBAL_SCOPE_MARKER"), "create actually wrote the persona's scope text to the global store");
+    ok(written.includes("CREATE_GLOBAL_BODY_MARKER"), "create actually wrote the persona's section body to the global store");
+
+    // Confirm it round-trips through `persona show` (the read path already tested by pf-13).
+    const shown = await runCli(["show", "project-orchestrator", "create-global-scope"], { home });
+    ok(shown.code === 0, `show after create -> exit 0 (got ${shown.code})`);
+    ok(shown.stdout.includes("CREATE_GLOBAL_SCOPE_MARKER"), "show after create reflects the just-created persona");
+
+    await rm(home, { recursive: true, force: true });
+    await rm(contentDir, { recursive: true, force: true });
+  }
+  {
+    // Repo-local tier, --repo given -> writeRepoLocalPersona, PERSONA_STORE_BY_TIER dispatch.
+    const home = await makeFakeHome();
+    const repo = await makeTempDir("mnemosyne-persona-cli-create-repo-");
+    const contentDir = await makeTempDir("mnemosyne-persona-cli-create-content-");
+
+    const candidateFile = await writeCandidateFile(contentDir, "candidate.yaml", {
+      tier: "code-architect",
+      scopeId: "create-repo-scope",
+      displayName: "Code/Area Architect",
+      scope: "CREATE_REPO_SCOPE_MARKER — authored via `persona create`.",
+      sections: [{ heading: "Authored section", body: "CREATE_REPO_BODY_MARKER — real create() write." }],
+      parentRefs: [{ tier: "project-orchestrator", scopeId: "create-global-scope" }],
+    });
+
+    const result = await runCli(["create", "--file", candidateFile, "--repo", repo], { home });
+    ok(result.code === 0, `create (repo-local tier, --repo given) -> exit 0 (got ${result.code}, stderr=${short(result.stderr)})`);
+
+    const written = await readFile(path.join(repo, ".mnemosyne", "personas", "create-repo-scope.yaml"), "utf8");
+    ok(written.includes("CREATE_REPO_SCOPE_MARKER"), "create actually wrote the persona's scope text to the repo-local store");
+    ok(written.includes("CREATE_REPO_BODY_MARKER"), "create actually wrote the persona's section body to the repo-local store");
+    ok(written.includes("project-orchestrator"), "create wrote the persona's parentRefs through untouched");
+
+    // Dispatcher wiring: `bin/mnemosyne persona create ...` reaches the same code.
+    const repoViaDispatcher = await makeTempDir("mnemosyne-persona-cli-create-dispatcher-repo-");
+    const candidateFileDispatcher = await writeCandidateFile(contentDir, "candidate-dispatcher.yaml", {
+      tier: "code-architect",
+      scopeId: "create-dispatcher-scope",
+      displayName: "Code/Area Architect",
+      scope: "CREATE_DISPATCHER_SCOPE_MARKER",
+      sections: [{ heading: "Section", body: "body" }],
+    });
+    const viaDispatcher = await runCli(
+      ["create", "--file", candidateFileDispatcher, "--repo", repoViaDispatcher],
+      { home, viaDispatcher: true },
+    );
+    ok(viaDispatcher.code === 0, `bin/mnemosyne persona create ... -> exit 0 (got ${viaDispatcher.code}, stderr=${short(viaDispatcher.stderr)})`);
+    const writtenViaDispatcher = await readFile(
+      path.join(repoViaDispatcher, ".mnemosyne", "personas", "create-dispatcher-scope.yaml"),
+      "utf8",
+    ).catch(() => null);
+    ok(writtenViaDispatcher !== null, "bin/mnemosyne persona create ... actually wrote the persona through the dispatcher");
+
+    await rm(home, { recursive: true, force: true });
+    await rm(repo, { recursive: true, force: true });
+    await rm(repoViaDispatcher, { recursive: true, force: true });
+    await rm(contentDir, { recursive: true, force: true });
+  }
+
+  // --- AC-create-mandate-reject: mandateSections smuggling is rejected (pw-05) ----------------
+  {
+    const home = await makeFakeHome();
+    const contentDir = await makeTempDir("mnemosyne-persona-cli-create-mandate-");
+
+    const candidateFile = await writeCandidateFile(contentDir, "candidate.yaml", {
+      tier: "top-orchestrator",
+      scopeId: "mandate-smuggle-scope",
+      displayName: "Top Orchestrator",
+      scope: "Attempted mandateSections smuggling.",
+      sections: [{ heading: "Section", body: "body" }],
+      mandateSections: [{ heading: "Fake mandate", body: "should never be author-storable" }],
+    });
+
+    const result = await runCli(["create", "--file", candidateFile], { home });
+    ok(result.code !== 0, `create with a smuggled mandateSections -> non-zero exit (got ${result.code})`);
+    ok(
+      /mandateSections.*never author-storable/i.test(result.stderr),
+      `create with a smuggled mandateSections -> clear stderr message, assertValidPersona's own guard -> ${short(result.stderr)}`,
+    );
+
+    const wasWritten = await stat(
+      path.join(home, ".mnemosyne", "personas", "top-orchestrator", "mandate-smuggle-scope.yaml"),
+    )
+      .then(() => true)
+      .catch(() => false);
+    ok(wasWritten === false, "create rejected the mandateSections smuggling BEFORE any disk write -- no file created");
+
+    await rm(home, { recursive: true, force: true });
+    await rm(contentDir, { recursive: true, force: true });
+  }
+
+  // --- AC-create-tier-mismatch: tier/store mismatch is rejected before any disk write (pw-05) --
+  {
+    // A code-architect candidate, but no --repo given -> routed at the GLOBAL store -> rejected.
+    const home = await makeFakeHome();
+    const contentDir = await makeTempDir("mnemosyne-persona-cli-create-mismatch-");
+
+    const candidateFile = await writeCandidateFile(contentDir, "candidate.yaml", {
+      tier: "code-architect",
+      scopeId: "mismatch-scope",
+      displayName: "Code/Area Architect",
+      scope: "A code-architect persona wrongly routed at the global store.",
+      sections: [{ heading: "Section", body: "body" }],
+    });
+
+    const result = await runCli(["create", "--file", candidateFile], { home });
+    ok(result.code !== 0, `create (code-architect candidate, no --repo -> global store) -> non-zero exit (got ${result.code})`);
+    ok(
+      /global persona store never holds 'code-architect'/i.test(result.stderr),
+      `create tier/store mismatch -> clear stderr message, writeGlobalPersona's own tier guard -> ${short(result.stderr)}`,
+    );
+
+    const wasWritten = await stat(
+      path.join(home, ".mnemosyne", "personas", "code-architect", "mismatch-scope.yaml"),
+    )
+      .then(() => true)
+      .catch(() => false);
+    ok(wasWritten === false, "create rejected the tier/store mismatch BEFORE any disk write -- no file created under the global store either");
+
+    await rm(home, { recursive: true, force: true });
+    await rm(contentDir, { recursive: true, force: true });
+  }
+  {
+    // A global-tier candidate, but --repo given -> routed at the REPO-LOCAL store -> rejected.
+    const home = await makeFakeHome();
+    const repo = await makeTempDir("mnemosyne-persona-cli-create-mismatch2-repo-");
+    const contentDir = await makeTempDir("mnemosyne-persona-cli-create-mismatch2-");
+
+    const candidateFile = await writeCandidateFile(contentDir, "candidate.yaml", {
+      tier: "company-director",
+      scopeId: "mismatch-scope-2",
+      displayName: "Company Director",
+      scope: "A company-director persona wrongly routed at the repo-local store.",
+      sections: [{ heading: "Section", body: "body" }],
+    });
+
+    const result = await runCli(["create", "--file", candidateFile, "--repo", repo], { home });
+    ok(result.code !== 0, `create (global-tier candidate, --repo given -> repo-local store) -> non-zero exit (got ${result.code})`);
+    ok(
+      /repo-local persona store only holds 'code-architect'/i.test(result.stderr),
+      `create tier/store mismatch (reverse direction) -> clear stderr message, writeRepoLocalPersona's own tier guard -> ${short(result.stderr)}`,
+    );
+
+    const wasWritten = await stat(path.join(repo, ".mnemosyne", "personas", "mismatch-scope-2.yaml"))
+      .then(() => true)
+      .catch(() => false);
+    ok(wasWritten === false, "create rejected the reverse tier/store mismatch BEFORE any disk write -- no file created under the repo-local store either");
+
+    await rm(home, { recursive: true, force: true });
+    await rm(repo, { recursive: true, force: true });
+    await rm(contentDir, { recursive: true, force: true });
+  }
+
   // --- AC-help: --help output distinguishes write-target from content-source (pf-09) ------------
   {
     const help = await runCli(["--help"]);
@@ -521,6 +777,7 @@ async function main() {
       `persona --help explicitly distinguishes global-tier content (global store) from code-architect (--repo) -> ${short(helpText)}`,
     );
     ok(/show <tier> <scope-id>/.test(helpText), `persona --help mentions the show subcommand -> ${short(helpText)}`);
+    ok(/create --file/.test(helpText), `persona --help mentions the create subcommand -> ${short(helpText)}`);
   }
 }
 
