@@ -1,10 +1,71 @@
 id: pw-14-crawl-and-feed-e2e-test
 epic: mnemosyne-persona-wizard
 title: Crawl-and-feed - end-to-end test
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
 depends_on: [pw-13-crawl-and-feed-wiring]
+
+note_on_completion: >
+  Read persona-interview-crawl-and-feed.test.ts (pw-13) in full first.
+  Confirmed it already provides, real subprocess/real disk throughout: (1) a
+  full-answers code-architect (repo-local) interview -> real
+  writePersonaViaCli --repo -> real rememberInterviewSource() -> real
+  note-file read-back; (2) a full-answers project-orchestrator (global)
+  interview -> real rememberInterviewSource() with an independent
+  resolveRememberScope() cross-check, but NO writePersonaViaCli call, so no
+  proof a real Persona file exists on disk for that case; (3) both
+  top-orchestrator (global) and code-architect (repo-local) MAX-SKIP
+  interviews -> real write -> real remember() -> real note-file read-back,
+  covering both lifecycle moments for the maximally-skipped case only.
+
+  The one gap: no full-answers GLOBAL-tier case had both a real on-disk
+  Persona file AND a real landed remember() call proven together. Added
+  lib/mnemosyne/layer1/__tests__/persona-interview-global-full-answers-e2e.test.ts
+  (TS/vitest convention, matching pw-09 through pw-13's own test files, not
+  the story's originally-proposed skills/mnemosyne-persona-interview/__tests__/e2e.mjs
+  -- no such directory existed, and every prior story in this epic's Slice 3
+  used lib/mnemosyne/layer1/__tests__/*.test.ts instead). It runs a
+  full-answers company-director interview (the one global tier untouched by
+  pw-13's own full-answers case, project-orchestrator) through: interview ->
+  real `mnemosyne persona create` CLI write (writePersonaViaCli, throwaway
+  $HOME) -> independent on-disk read-back via readGlobalPersona
+  (persona-store-global.ts) confirming a real file exists -> real
+  rememberInterviewSource() -> independent on-disk read-back of the real note
+  file remember() wrote, matching pw-13's own readNoteFile convention. A
+  second test does a structural check (execFile usage, no in-process
+  engine.mjs import, no hand-rolled fetch() in real code) confirming the
+  pipeline is genuinely three real boundary-crossings, not mocked/stitched
+  pieces. Reused pw-13's own fake-swarm-memory-pw13 fixture unchanged (it
+  already provisions all four persona-* scopes) rather than forking a new
+  one, and a distinct server port (8542 vs pw-13's 8541) so both files run
+  concurrently under vitest without collision -- confirmed by running both
+  files together (17/17 passed).
+
+  Together, pw-11/pw-12/pw-13/pw-14 now jointly prove every
+  {tier-kind, full-answers-or-max-skip} combination end-to-end: global
+  full-answers (pw-14, company-director), global max-skip (pw-13,
+  top-orchestrator), repo-local full-answers (pw-13, code-architect),
+  repo-local max-skip (pw-13, code-architect) -- closing the epic's
+  release-gate claim (design-discussion.md §1: "an LLM-interview wizard that
+  authors real persona content and triggers real remember() writes") for
+  both repo-spinup-lifecycle moments (design-discussion.md §3e).
+
+  Verification performed: `npx vitest run
+  lib/mnemosyne/layer1/__tests__/persona-interview-global-full-answers-e2e.test.ts`
+  (2/2 passed alone; 17/17 passed run together with pw-11/pw-12/pw-13's own
+  files, confirming no port/fixture collision). `npx tsc --noEmit` (clean).
+  Full regression suite: `npx vitest run lib/mnemosyne lib/minerva benchmarks
+  src/planning src/config src/runners` (601/601, 46 files -- 599 pre-existing
+  plus this story's 2 new tests, no regressions). `node test/persona-cli.mjs`,
+  `node test/persona-cross-transport.mjs`, `node test/mcp-server-persona.mjs`,
+  `node test/mcp-server.mjs` all passed (mcp-server-persona.mjs's first run
+  hit a transient shared-daemon health-check timeout unrelated to this
+  story's changes; an immediate rerun passed cleanly). `node
+  test/skill-harness.mjs` showed exactly 1 failure -- the pre-existing,
+  already-documented rememberAction() response-shape drift (source_ref/status
+  keys), unrelated to this epic, matching the expected baseline exactly. All
+  acceptance criteria met.
 
 description: |
   Closes Slice 3. An end-to-end test proving the full interview flow works
