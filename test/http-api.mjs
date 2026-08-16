@@ -610,6 +610,48 @@ async function main() {
       `POST /persona/:tier/:scopeId with no Origin header -> Access-Control-Allow-Origin is never a wildcard (got ${postCorsNoOriginRes.headers.get("access-control-allow-origin")})`,
     );
 
+    // --- CORS preflight: OPTIONS /persona/:tier/:scopeId -- a real browser
+    // sends this before the actual POST (application/json bodies are not a
+    // "simple" cross-origin request). Without a handler, this fell through
+    // to the 404 catch-all with no CORS header, silently blocking the UI
+    // write form (pw-17) from a real browser even though every prior
+    // server-side fetch() test here never exercised preflight.
+    const preflightAllowed = await fetch(BASE + "/persona/company-director/pw17-preflight", {
+      method: "OPTIONS",
+      headers: {
+        origin: UI_ORIGIN_LOOPBACK,
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "content-type",
+      },
+    });
+    ok(preflightAllowed.status === 204, `OPTIONS /persona/:tier/:scopeId -> 204 (got ${preflightAllowed.status})`);
+    ok(
+      preflightAllowed.headers.get("access-control-allow-origin") === UI_ORIGIN_LOOPBACK,
+      `OPTIONS preflight from ${UI_ORIGIN_LOOPBACK} -> Access-Control-Allow-Origin: ${UI_ORIGIN_LOOPBACK} (got ${preflightAllowed.headers.get("access-control-allow-origin")})`,
+    );
+    ok(
+      (preflightAllowed.headers.get("access-control-allow-methods") || "").includes("POST"),
+      `OPTIONS preflight -> Access-Control-Allow-Methods includes POST (got ${preflightAllowed.headers.get("access-control-allow-methods")})`,
+    );
+    ok(
+      (preflightAllowed.headers.get("access-control-allow-headers") || "").toLowerCase().includes("content-type"),
+      `OPTIONS preflight -> Access-Control-Allow-Headers includes content-type (got ${preflightAllowed.headers.get("access-control-allow-headers")})`,
+    );
+
+    const preflightDisallowed = await fetch(BASE + "/persona/company-director/pw17-preflight-disallowed", {
+      method: "OPTIONS",
+      headers: {
+        origin: DISALLOWED_ORIGIN,
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "content-type",
+      },
+    });
+    ok(
+      preflightDisallowed.headers.get("access-control-allow-origin") !== "*" &&
+        preflightDisallowed.headers.get("access-control-allow-origin") !== DISALLOWED_ORIGIN,
+      `OPTIONS preflight from an unknown origin -> Access-Control-Allow-Origin is NOT a wildcard and does NOT reflect the disallowed origin (got ${preflightDisallowed.headers.get("access-control-allow-origin")})`,
+    );
+
     // POST /recall -> 200 with RecallResult JSON
     const recall = await j("POST", "/recall", { query: "target", scope: "project" });
     ok(recall.status === 200, `POST /recall -> 200 (got ${recall.status})`);

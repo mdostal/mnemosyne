@@ -197,6 +197,28 @@ const server = http.createServer(async (req, res) => {
   const route = `${req.method} ${url.pathname}`;
 
   try {
+    // CORS preflight (pw-17 follow-up): a browser sends a real OPTIONS
+    // preflight before POST /persona/:tier/:scopeId, since that request
+    // carries a `content-type: application/json` body -- one of the
+    // conditions that makes a cross-origin request non-"simple" per the
+    // Fetch spec, requiring the browser to get an explicit go-ahead first.
+    // Without an OPTIONS handler here, that preflight fell through to the
+    // 404 catch-all below with no CORS header on it, so the browser blocked
+    // the real POST before it was ever sent -- discovered when pw-17's UI
+    // write form was checked against this server directly rather than only
+    // against unit tests that call fetch() server-side (which never enforce
+    // preflight the way a real browser does). Scoped to /persona/*, the
+    // only route this UI actually POSTs cross-origin with a JSON body;
+    // reuses applyPersonaCors as-is (same allow-listed origins, same
+    // scoped-not-wildcard posture), never a second CORS implementation.
+    if (req.method === 'OPTIONS' && url.pathname.startsWith('/persona/')) {
+      applyPersonaCors(req, res);
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'content-type');
+      res.writeHead(204);
+      return res.end();
+    }
+
     if (route === 'GET /health') {
       const layers = [await fileLayerHealth()];
       const ok = layers.every((l) => l.available);

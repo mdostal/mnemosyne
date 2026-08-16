@@ -1,9 +1,43 @@
 id: pw-17-personas-panel-write-form
 epic: mnemosyne-persona-wizard
 title: Create/edit form in the Personas panel
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit efe8cb9, builder work; plus a same-day
+  orchestrator follow-up commit adding a CORS preflight OPTIONS handler --
+  see below). Independently verified: read the form markup (ui/index.html)
+  and submit handler (ui/app.js) in full -- confirmed it follows
+  add-lane-form's exact convention (form-row divs, single submit button,
+  panel-status pass/fail), confirmed it reuses loadPersonas() (pw-03) for
+  the post-submit refresh (grep-confirmed personasTbodyEl.appendChild
+  occurs in exactly one place -- no second rendering path), confirmed it
+  POSTs the bare candidate shape pw-15's route expects via
+  personaServiceOrigin()'s existing cross-origin pattern. Reran
+  persona-write-form.mjs (34/34), persona-layer-stack.mjs, ui-shell.mjs,
+  tsc --noEmit, and vitest lib/mnemosyne/layer1 (196/196) myself.
+
+  REAL GAP FOUND AND FIXED before considering this ticket done: the builder
+  correctly flagged that POST /persona/:tier/:scopeId's JSON body makes it a
+  non-"simple" cross-origin request, so a real browser sends an OPTIONS
+  preflight first -- and lib/mnemosyne/server.ts had no OPTIONS handler
+  anywhere, so that preflight fell through to the 404 catch-all with no CORS
+  header, meaning the just-built write form would have been silently
+  blocked by every real browser despite every unit test (which calls
+  fetch() server-side, never enforcing preflight) passing. This was NOT
+  caught by pw-02/pw-04/pw-15/pw-16's own tests for the same reason. Fixed
+  by adding a scoped OPTIONS handler for /persona/* that reuses
+  applyPersonaCors() as-is (no second CORS implementation) plus
+  Access-Control-Allow-Methods/-Headers, returning 204. Added 5 new
+  assertions to test/http-api.mjs proving the preflight now succeeds for an
+  allowed origin and stays unwildcarded for a disallowed one. Reran the
+  full extended http-api.mjs, persona-write-form.mjs, and
+  persona-cross-transport.mjs after the fix -- all pass (only the 3
+  pre-existing/unrelated POST /remember failures remain). This closes the
+  epic (pw-01 through pw-17) with the write form genuinely, not just
+  nominally, functional from a real browser. All acceptance criteria met.
 depends_on: [pw-15-post-persona-routes, pw-03-personas-panel-view]
 
 description: |
