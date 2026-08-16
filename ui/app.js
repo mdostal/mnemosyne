@@ -1220,15 +1220,260 @@ function personaLayerStackCell(text) {
 // the UI-layer half of the "query up, never copy down" guarantee
 // getPersonaContent's own buildParentContextSections (persona.ts) enforces
 // server-side: a parent's real sections content must NEVER be fetched or
-// inlined here, only named (research-brief.md §6).
+// inlined here, only named (research-brief.md §6). Kept as its own function
+// (used by personaParentCell below, and directly wherever plain text is
+// all that's needed) so the pointer-only guarantee stays in exactly one
+// place, unchanged from pw-03.
 function parentRefsText(parentRefs) {
   if (!Array.isArray(parentRefs) || parentRefs.length === 0) return "—";
   return parentRefs.map((ref) => `${ref.tier}: ${ref.scopeId}`).join(", ");
 }
 
+// --- pu-10-personas-panel-redesign-shell: new grouped/filterable shell ----
+// Rebuilds ONLY how loadPersonas()'s result is rendered/organized, per
+// selection.md's chosen synthesized option-2.md ("Trust-Gated Unified
+// Queue"). loadPersonas()'s own fetch logic (below) is unchanged from pw-03
+// -- still GET /persona + one GET /persona/:tier/:scopeId per entry, same
+// personaServiceOrigin() cross-origin pattern, no new route, no draft fetch
+// (horizontal-plan.md H7 component 1: "still reading the same GET
+// /persona/... routes underneath -- pure view rebuild").
+const personasTableEl = document.getElementById("personas-table");
+const personasEmptyEl = document.getElementById("personas-empty");
+const personasStatusFilterEl = document.getElementById("personas-status-filter");
+const personasLiveRegionEl = document.getElementById("personas-live-region");
+
+// Canonical tier cascade order (mirrors lib/mnemosyne/layer1/tiers.ts's
+// TIERS) -- used for stable Tier-group-by ordering and to label Repo-group-
+// by's 3 "global" sub-groups.
+const PERSONA_TIER_ORDER = ["top-orchestrator", "company-director", "project-orchestrator", "code-architect"];
+
+// Already-fetched persona rows, kept module-level so the group-by/status-
+// filter controls below can re-render client-side on every change -- no
+// re-fetch (selection.md §1: "toggling re-buckets already-fetched rows
+// client-side"; every other panel's manual-refresh-only convention).
+let loadedPersonas = [];
+
+function personaRowKey(tier, scopeId) {
+  return `${tier} ${scopeId}`;
+}
+
+// Status is always real cell text, never a bare glyph (accessibility.md,
+// onboarding-clarity.md). This ticket's data (GET /persona, unchanged) only
+// ever produces "live" rows -- the needs-review/needs-review-update/history
+// values exist here so the grouping/filtering/labeling machinery is
+// already correct once pu-12 merges in GET /persona/draft's rows
+// alongside these (horizontal-plan.md H7 component 3), not something this
+// ticket fabricates data for today.
+function personaStatusLabel(status) {
+  switch (status) {
+    case "needs-review":
+      return "needs review";
+    case "needs-review-update":
+      return "needs review — updates existing persona";
+    case "history":
+      return "history";
+    default:
+      return "live";
+  }
+}
+
+function personaMatchesStatusFilter(row, filterValue) {
+  if (filterValue === "all") return true;
+  if (filterValue === "needs-review") {
+    return row.status === "needs-review" || row.status === "needs-review-update";
+  }
+  return row.status === filterValue;
+}
+
+function currentPersonaGroupBy() {
+  const checked = document.querySelector('input[name="personas-group-by"]:checked');
+  return checked ? checked.value : "tier";
+}
+
+// Buckets already-loaded (and already status-filtered) rows for the
+// current group-by mode. Pure client-side recompute -- no fetch anywhere
+// in this function. Repo-grouping keeps the 3 global tiers as 3 separate,
+// explicitly labeled sub-groups ("<tier> — global — not repo-scoped")
+// rather than collapsing them into one undifferentiated "global" bucket --
+// the concrete fix for hierarchy-legibility.md's named gap in original
+// Option 3 (selection.md "the deciding factor"). loadPersonas() only ever
+// fetches the 3 global tiers (GET /persona, no ?repo=), so no code-architect
+// row can appear via this ticket's data; the per-repo branch below is
+// written for correctness/forward-compatibility but has nothing to
+// populate yet under this ticket's own reuse-loadPersonas()-unchanged
+// scope boundary.
+function groupPersonaRows(rows, groupBy) {
+  const groups = new Map(); // label -> rows[]
+  const order = [];
+  const push = (label, row) => {
+    if (!groups.has(label)) {
+      groups.set(label, []);
+      order.push(label);
+    }
+    groups.get(label).push(row);
+  };
+
+  if (groupBy === "status") {
+    for (const status of ["live", "needs-review", "needs-review-update", "history"]) {
+      const label = personaStatusLabel(status);
+      for (const row of rows) if (row.status === status) push(label, row);
+    }
+  } else if (groupBy === "repo") {
+    for (const tier of PERSONA_TIER_ORDER) {
+      if (tier === "code-architect") continue; // no repo-scoped rows loaded by this ticket
+      const label = `${tier} — global — not repo-scoped`;
+      for (const row of rows) if (row.tier === tier) push(label, row);
+    }
+    for (const row of rows) if (row.tier === "code-architect") push(row.repo || "(unknown repo)", row);
+  } else {
+    for (const tier of PERSONA_TIER_ORDER) {
+      for (const row of rows) if (row.tier === tier) push(tier, row);
+    }
+  }
+  return order.map((label) => ({ label, rows: groups.get(label) }));
+}
+
+// personaCell(text) is defined once, above (personaServiceOrigin()'s
+// section) -- reused here unchanged, not redefined.
+
+// Builds the Parent(s) <td> for one row: plain pointer-only text (via
+// parentRefsText's exact phrasing) for a parentRef with no matching row in
+// the currently loaded set, or a real <button> (never an href="#" anchor --
+// there is nothing to navigate to, only in-page focus to move) for one that
+// does. Still never fetches anything -- clicking only moves focus among
+// rows already rendered from loadPersonas()'s own result.
+function personaParentCell(parentRefs, loadedByKey) {
+  const td = document.createElement("td");
+  if (!Array.isArray(parentRefs) || parentRefs.length === 0) {
+    td.textContent = "—";
+    return td;
+  }
+  parentRefs.forEach((ref, i) => {
+    if (i > 0) td.appendChild(document.createTextNode(", "));
+    const label = `${ref.tier}: ${ref.scopeId}`;
+    if (!loadedByKey.has(personaRowKey(ref.tier, ref.scopeId))) {
+      td.appendChild(document.createTextNode(label));
+      return;
+    }
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "persona-parent-link";
+    btn.textContent = label;
+    btn.addEventListener("click", () => jumpToPersonaRow(ref.tier, ref.scopeId));
+    td.appendChild(btn);
+  });
+  return td;
+}
+
+// Moves real DOM focus to {tier, scopeId}'s row (accessibility.md: "nothing
+// said about moving actual focus... or otherwise giving a screen reader
+// user any signal that the jump happened" -- flagged against a prior
+// design's "scroll to and flash"). If the identity is in the loaded set but
+// currently hidden by the active status filter, resets the filter to "all"
+// (never the group-by mode, to avoid disorienting the operator further)
+// and announces the reset via the aria-live region instead of silently
+// pointing at nothing (hierarchy-legibility.md's gap in original Option 3).
+function jumpToPersonaRow(tier, scopeId) {
+  const findRow = () =>
+    Array.from(personasTbodyEl.querySelectorAll("tr[data-tier]")).find(
+      (tr) => tr.dataset.tier === tier && tr.dataset.scopeId === scopeId
+    );
+
+  let target = findRow();
+  if (!target) {
+    personasStatusFilterEl.value = "all";
+    renderPersonas();
+    target = findRow();
+    if (personasLiveRegionEl) {
+      personasLiveRegionEl.textContent = `Filter cleared to show parent ${tier} / ${scopeId}.`;
+    }
+  }
+  if (target) {
+    target.scrollIntoView({ block: "center" });
+    target.focus();
+  }
+}
+
+// Single funnel point for every <tr> renderPersonas() appends into the
+// personas tbody -- so that append call is made from exactly one place in
+// this file (group-header rows and data rows both route through here),
+// matching test/persona-write-form.mjs's existing "no second persona-
+// rendering path" guard, even though this shell now appends two kinds of
+// <tr> per group.
+function appendPersonaTbodyRow(tr) {
+  personasTbodyEl.appendChild(tr);
+}
+
+function resetPersonaView() {
+  loadedPersonas = [];
+  personasTbodyEl.textContent = "";
+  personasTableEl.hidden = true;
+  personasEmptyEl.hidden = true;
+}
+
+// Re-renders #personas-table's grouped rows from already-fetched state --
+// never fetches. Called once by loadPersonas() after a real load, and
+// again by the group-by/status-filter controls' own change listeners below
+// on every client-side re-view.
+function renderPersonas() {
+  personasTbodyEl.textContent = "";
+
+  if (loadedPersonas.length === 0) {
+    personasTableEl.hidden = true;
+    personasEmptyEl.hidden = false;
+    personasEmptyEl.textContent = "No personas yet.";
+    return;
+  }
+
+  const filterValue = personasStatusFilterEl.value;
+  const groupBy = currentPersonaGroupBy();
+  const loadedByKey = new Map(loadedPersonas.map((p) => [personaRowKey(p.tier, p.scopeId), p]));
+  const visible = loadedPersonas.filter((p) => personaMatchesStatusFilter(p, filterValue));
+
+  if (visible.length === 0) {
+    personasTableEl.hidden = true;
+    personasEmptyEl.hidden = false;
+    personasEmptyEl.textContent = "No personas match the current filter.";
+    return;
+  }
+  personasTableEl.hidden = false;
+  personasEmptyEl.hidden = true;
+
+  for (const group of groupPersonaRows(visible, groupBy)) {
+    const headerRow = document.createElement("tr");
+    headerRow.className = "persona-group-header";
+    const th = document.createElement("th");
+    th.colSpan = 5;
+    th.scope = "colgroup";
+    th.textContent = `${group.label} (${group.rows.length})`;
+    headerRow.appendChild(th);
+    appendPersonaTbodyRow(headerRow);
+
+    for (const row of group.rows) {
+      const tr = document.createElement("tr");
+      tr.dataset.tier = row.tier;
+      tr.dataset.scopeId = row.scopeId;
+      // Programmatic focus target only (parent-ref jump above) -- not
+      // meant to sit in the regular Tab order, so tabindex stays -1.
+      tr.tabIndex = -1;
+      tr.appendChild(personaCell(row.tier));
+      tr.appendChild(personaCell(row.scopeId));
+      tr.appendChild(personaCell(row.displayName == null || row.displayName === "" ? "—" : row.displayName));
+      tr.appendChild(personaParentCell(row.parentRefs, loadedByKey));
+      tr.appendChild(personaCell(personaStatusLabel(row.status)));
+      appendPersonaTbodyRow(tr);
+    }
+  }
+}
+
+document.querySelectorAll('input[name="personas-group-by"]').forEach((el) => {
+  el.addEventListener("change", renderPersonas);
+});
+personasStatusFilterEl.addEventListener("change", renderPersonas);
+
 async function loadPersonas() {
   setStatus(personasStatusEl, "loading", "loading…");
-  personasTbodyEl.textContent = "";
+  resetPersonaView();
   try {
     const origin = personaServiceOrigin();
     const listRes = await fetch(`${origin}/persona`);
@@ -1244,7 +1489,8 @@ async function loadPersonas() {
     // carry) -- this is each persona's own content, not any parent's, so it
     // does not touch the copy-down guarantee above. CRITICAL: this never
     // loops over a persona's parentRefs to fetch THOSE -- see
-    // parentRefsText, the only thing rendered for parentRefs.
+    // parentRefsText/personaParentCell, the only things rendered for
+    // parentRefs.
     const personas = await Promise.all(
       entries.map(async (entry) => {
         try {
@@ -1262,14 +1508,13 @@ async function loadPersonas() {
       })
     );
 
-    for (const p of personas) {
-      const tr = document.createElement("tr");
-      tr.appendChild(personaCell(p.tier));
-      tr.appendChild(personaCell(p.scopeId));
-      tr.appendChild(personaCell(p.displayName == null || p.displayName === "" ? "—" : p.displayName));
-      tr.appendChild(personaCell(parentRefsText(p.parentRefs)));
-      personasTbodyEl.appendChild(tr);
-    }
+    // pu-10-personas-panel-redesign-shell: this ticket reuses GET /persona
+    // unchanged (no ?repo=, no /persona/draft) -- every row loaded here is
+    // therefore a committed, live record. pu-12 is the ticket that merges
+    // in GET /persona/draft's needs-review/needs-review-update rows
+    // alongside these (horizontal-plan.md H7 component 3).
+    loadedPersonas = personas.map((p) => ({ ...p, status: "live" }));
+    renderPersonas();
     setStatus(personasStatusEl, "pass", `${personas.length} persona(s)`);
   } catch (err) {
     setStatus(personasStatusEl, "fail", "FAIL — could not reach GET /persona");
