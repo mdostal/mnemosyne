@@ -1,9 +1,32 @@
 id: ml-07-file-store-index-query
 epic: mnemosyne-memory-levels
 title: "Query-time area-scoped narrowing + full-walk fallback + staleness-handling proof"
-status: pending
+status: complete
 complexity: high
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 0a7a23c). Given this ticket's flagged high risk,
+  gave it the deepest verification of any ticket in this epic: read
+  FileLayerAdapter.ts's full implementation, independently traced
+  walkArea's area-truncation logic by hand and confirmed it correctly
+  mirrors FileStoreIndex.ts's computeArea inverse mapping (>=2 segments ->
+  recursive walk of that subdirectory; 0/1 segments -> direct children
+  only). Then wrote and ran TWO of my own independent adversarial scripts
+  (not the builder's tests) directly against the real implementation: (1)
+  added a file to an indexed area AFTER building the index, confirmed an
+  area-scoped query still found it -- proving false negatives are
+  structurally impossible, not just untested; (2) modified an indexed
+  file's content after indexing, confirmed the query returns the NEW
+  content and never the stale pre-modification content -- proving the
+  no-cache/always-live-read design genuinely eliminates staleness. Both of
+  my own adversarial checks passed. Confirmed via diff that the ORIGINAL
+  FileLayerAdapter.test.ts suite has zero deletions (purely additive).
+  Confirmed the area===undefined path makes zero extra filesystem calls
+  (byte-for-byte pre-ticket behavior). Reran vitest lib/mnemosyne/layers
+  (128/128) and tsc --noEmit (clean) myself after a fresh npm install
+  (worktree had no node_modules). All acceptance criteria met, verified
+  beyond the builder's own claims.
 depends_on: [ml-06-file-store-index-build]
 
 description: |
