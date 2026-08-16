@@ -195,13 +195,25 @@
     <section id="personas" class="panel panel-wide">
       <h2>Personas</h2>
       <p class="panel-status" id="personas-status">loading…</p>
+      <!-- pu-12-draft-review-approve-ui: loadDrafts()'s own status element,
+           following loadPersonas()'s existing "fetch, setStatus, render"
+           convention (personas-status above), kept as its own element rather
+           than overloading personas-status -- the two fetches (GET /persona,
+           GET /persona/draft) are independent and can succeed/fail
+           independently, exactly as loadPersonaLayerStack() below already
+           has its own status element distinct from personas-status. -->
+      <p class="panel-status" id="personas-drafts-status">loading…</p>
       <p class="panel-hint">
         Every existing persona (global tiers: <code>top-orchestrator</code>,
         <code>company-director</code>, <code>project-orchestrator</code>) — fetched
         from the persona service on port 3141 (a different server than this UI's
         own, see <code>lib/mnemosyne/server.ts</code>). A persona's parent(s) render
         as pointer-only text (tier + scope ID) — the parent's actual content is
-        never fetched or inlined here.
+        never fetched or inlined here. Rows with a pending draft (agent-proposed
+        or human-typed) are merged into the SAME list below, per
+        <code>.pHive/design/mnemosyne-persona-ux/synthesized/option-2.md</code>
+        §1/§3 ("one continuous list holds every persona identity — live and
+        drafted").
       </p>
 
       <!-- pu-10-personas-panel-redesign-shell: glossary block, addressing
@@ -220,7 +232,7 @@
           <dt>Parent(s)</dt>
           <dd>A pointer to where this persona's own content stops and a parent's begins ("query up, never copy down") — the parent's real content is never fetched or shown here, only named.</dd>
           <dt>sourceSummary</dt>
-          <dd>What an agent read before proposing a draft revision of a persona. Shown once draft review lands in this panel — this ticket's shell doesn't fetch draft data yet.</dd>
+          <dd>What an agent read before proposing a draft — shown under the label "Why the agent proposed this" when reviewing a draft below. A human-typed draft has no sourceSummary, and never shows a fabricated one.</dd>
         </dl>
       </details>
 
@@ -250,8 +262,11 @@
 
       <!-- aria-live region: announces approve/discard/parent-jump outcomes
            (accessibility.md: "no mention of an aria-live announcement...").
-           This ticket only uses it for the parent-ref filter self-heal
-           (§5/personas-toolbar above); pu-12 wires it for approve/discard. -->
+           pu-10 used it only for the parent-ref filter self-heal (§5/
+           personas-toolbar above); pu-12-draft-review-approve-ui wires it
+           for approve/discard outcomes too (ui/app.js, approveDraft()/
+           discardDraft()) -- same single element, never a second aria-live
+           region. -->
       <p id="personas-live-region" class="sr-only" aria-live="polite"></p>
 
       <!-- Outer shape (section -> h2 -> panel-status -> table) unchanged,
@@ -259,7 +274,14 @@
            existing <section class="panel panel-wide"> -> <h2> ->
            panel-status -> <table> shape unchanged at the outer level."
            Grouping happens INSIDE the one table via group-header <tr>s in
-           #personas-tbody, not a separate table per group. -->
+           #personas-tbody, not a separate table per group. pu-12 adds one
+           new "Actions" column (Review/Edit toggle per row) -- the merged
+           live+draft rows and their expandable draft-detail panels
+           (source summary, read-before-edit gate, Approve/Discard) are
+           rendered by ui/app.js's renderPersonas()/buildPersonaDraftDetailRow(),
+           not new static markup here, following the same "row shape lives
+           in JS, static markup is only the outer table" convention pu-10
+           already established for grouping. -->
       <table id="personas-table">
         <thead>
           <tr>
@@ -268,38 +290,36 @@
             <th>Display name</th>
             <th>Parent(s)</th>
             <th>Status</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody id="personas-tbody"></tbody>
       </table>
       <p class="panel-status" id="personas-empty" hidden></p>
 
-      <!-- pw-17-personas-panel-write-form: create/edit form, following
-           add-lane-form's exact convention (form-row divs, single submit
-           button, panel-status pass/fail element). POSTs to pw-15's
-           POST /persona/:tier/:scopeId route on the persona service (same
-           cross-origin personaServiceOrigin() pattern loadPersonas() above
-           already uses -- see ui/app.js). On success, re-loads via
-           loadPersonas() (pw-03) -- no second rendering path. A single
-           "knows" section (heading + body) is the v1 minimum viable write
-           path, not a full multi-section editor.
-
-           pu-10-personas-panel-redesign-shell note: this ticket is a pure
-           view-layer rebuild of the LIST above (loadPersonas()/GET /persona
-           only, no draft fetch -- horizontal-plan.md H7 component 1). Per
-           synthesized option-2.md §1/§4, "+ New draft" is meant to open the
-           SAME row-level accordion editor described there (source-summary,
-           read-before-edit gate, Approve/Discard) -- but that editor only
-           makes sense wired to pu-03's draft routes (GET/POST
-           /persona/draft/:tier/:scopeId), which this ticket deliberately
-           does not fetch/post (design_decisions: "no data-model or backend
-           change happens in this ticket"). Retargeting this form into that
-           accordion editor is pu-12-draft-review-approve-ui's explicit job
-           (horizontal-plan.md H7 component 3) -- left fully intact and
-           working here in the meantime, not removed ahead of its
-           replacement being ready. -->
+      <!-- pw-17-personas-panel-write-form, RETARGETED by
+           pu-12-draft-review-approve-ui: same add-lane-form-derived
+           convention (form-row divs, single submit button, panel-status
+           pass/fail element), same field set (design-discussion.md §9.4:
+           one editor, reused, for both authoring paths) -- but now POSTs to
+           pu-03's POST /persona/draft/:tier/:scopeId route instead of the
+           real POST /persona/:tier/:scopeId (pw-15). A human typing a
+           persona by hand now produces an active DRAFT, not an immediate
+           commit -- reviewed/approved through the exact same queue below as
+           an agent-proposed draft (selection.md/synthesized option-2.md
+           §1/§4: "+ New draft" opens the same row-level editor; §4.4: "one
+           editor, reused, not a second one"). On success, calls loadDrafts()
+           (ui/app.js) -- never loadPersonas() directly, since proposing/
+           editing a draft never touches the real persona store; only
+           approve does that (see the draft-detail panel's Approve handler
+           below, which calls both). Also reused as the "Edit" affordance for
+           an existing live persona or an existing draft: clicking either
+           row's Edit/Review-then-edit control pre-fills these same fields
+           (populatePersonaForm(), ui/app.js) rather than building a second
+           form. A single "knows" section (heading + body) remains the v1
+           minimum viable write path, not a full multi-section editor. -->
       <form id="persona-form">
-        <h3>Create / edit persona</h3>
+        <h3>Propose / edit persona draft</h3>
         <div class="form-row">
           <label for="persona-tier">Tier</label>
           <select id="persona-tier" name="tier" required>
@@ -334,7 +354,7 @@
           <label for="persona-repo">Repo (optional — required for code-architect)</label>
           <input id="persona-repo" name="repo" type="text" placeholder="e.g. /path/to/repo -- only required for the code-architect tier" />
         </div>
-        <button type="submit">Save persona</button>
+        <button type="submit">Save draft</button>
         <p class="panel-status" id="persona-form-status"></p>
       </form>
 
