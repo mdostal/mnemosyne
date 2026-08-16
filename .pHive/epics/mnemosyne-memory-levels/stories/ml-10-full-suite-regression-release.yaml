@@ -1,10 +1,67 @@
 id: ml-10-full-suite-regression-release
 epic: mnemosyne-memory-levels
 title: Full-suite regression pass + version bump + release note
-status: pending
+status: complete
 complexity: low
 methodology: tdd
 depends_on: [ml-09-doc-reconciliation]
+
+note_on_completion: >
+  Merged 2026-08-16. This worktree had zero node_modules installed (matching
+  the same environmental gap ml-06's independent reviewer hit and resolved
+  the same way) -- ran `npm install` first (149 packages, package.json/
+  package-lock.json identical to the main repo's copy before this fix,
+  confirmed via diff), which also caught and fixed a real stale-lockfile gap
+  (package-lock.json was missing the `mnemosyne-file-index` bin entry ml-08
+  had already added to package.json). Full suite on this epic's final state
+  (commit c373eb7 + this story's own changes): all `.mjs` scripts pass
+  individually (single-layer-config/git-hooks/install-git-hooks/lifecycle-
+  compliance-audit/persona-cli all clean; bundle/inject/write-through/
+  health-drift/code-graph/reindex/vector/parallel-keyword/keyword-recall-
+  regression/recall-status-filtering/layer1-mandate-hook/review-auto-merge
+  all clean); test/http-api.mjs: 277 PASS, 3 FAIL, all 3 on POST /remember's
+  default-layer assertions (`ok:true`/`layer:file (default)`/`has
+  provenance`) -- confirmed via git blame + client.ts's own doc comment
+  ("'vector' remains the default target, matching pre-pl-01 behavior
+  exactly") that this predates mnemosyne-memory-levels entirely (it's a
+  pluggable-layers-implementation-epic decision) and was already
+  independently flagged as pre-existing/unrelated in ml-04's own completion
+  note ("only the 3 pre-existing/unrelated POST /remember failures remain").
+  vitest (lib/mnemosyne lib/minerva benchmarks src/planning src/config
+  src/runners): 663/663 passing (49/49 files) on a clean rerun --
+  CodeGraphLayerAdapter.test.ts's better-sqlite3 native-binding crash named
+  in this story's own acceptance criteria did NOT reproduce in this fresh
+  install (4/4 passing in isolation); a single vitest run under heavy
+  concurrent-agent system load produced one transient timing flake in
+  client-keyword-cascade.test.ts (expected <300ms, got 330ms), confirmed
+  non-reproducing (2/2 clean reruns in isolation, 12/12 tests each time,
+  then 663/663 clean on a full-suite rerun) -- a load artifact, not a code
+  regression. `npx tsc --noEmit`: clean, zero errors.
+
+  Real stash-and-reproduce proof (per this story's own acceptance criteria
+  and la-01's precedent): rather than a working-tree `git stash` (this
+  epic's full changeset is already committed across 25 commits, ml-01
+  through ml-09), created a temporary local branch at this branch's
+  merge-base with main (`git merge-base main HEAD` = commit `e079b17`,
+  the persona-wizard v0.8.0 release -- confirmed identical to origin/main),
+  checked it out (a real branch, not detached HEAD -- a first attempt at
+  detached HEAD broke write-through.mjs's git-branch flight-status
+  auto-detection, an artifact of the checkout method, not a real failure),
+  and reran the identical full suite + tsc --noEmit there. Result: byte-
+  identical failure set -- test/http-api.mjs: 254 PASS, 3 FAIL, the exact
+  same 3 POST /remember assertions and no others; all other .mjs scripts
+  clean; tsc --noEmit clean; vitest 601/601 passing (46/46 files -- 62 fewer
+  tests and 3 fewer files than the epic tree, exactly this epic's own new
+  test files, confirming no other test-count drift). Deleted the temporary
+  branch and switched back to feat/mnemosyne-memory-levels afterward.
+
+  Version bumped 0.8.0 -> 0.9.0 (minor, per epic.yaml's version_bump field
+  and both prior epics' convention) in package.json + package-lock.json.
+  Release note written in CHANGELOG.md (this repo's existing convention,
+  matching the format of the 0.6.0/0.7.0/0.8.0 entries) covering all three
+  real deliverables: the taxonomy+mnemosyne.md+route+UI work (ml-01-ml-05),
+  the Level 4 file-store sub-index (ml-06-ml-08), and the doc reconciliation
+  (ml-09). All acceptance criteria met.
 
 description: |
   The epic's closing, integrative story — gated on every other story
