@@ -2,6 +2,81 @@
 
 All notable changes to Mnemosyne are documented here.
 
+## [0.8.0] — 2026-08-16
+
+Full `mnemosyne-persona-wizard` epic (`pw-01`..`pw-17`) — Epic 2 of 2 in the
+persona work. Turns Layer 1 from a code-and-CLI-only surface into a real,
+browser-usable authoring tool: an operator can now list, view, and create
+personas from the standalone UI, and an LLM-driven interview can author a
+persona and index its own source material as real memory — the "initial
+crawl and feeding" the operator asked for. Every story independently
+verified with real tests (real subprocesses, real HTTP calls, real disk
+read-backs) before merging; one real, live-breaking CORS preflight gap was
+found and fixed during final verification (see below).
+
+### Added
+
+- **Personas panel (view + write) in the standalone UI** — a new panel
+  lists every persona (global tiers plus, when a repo is given, that repo's
+  `code-architect` personas), rendering a persona's `parentRefs` as
+  pointer-only text (never fetching/inlining the parent's actual content —
+  the same "query up, never copy down" guarantee Epic 1 enforces
+  server-side). A create/edit form, following the existing `add-lane-form`
+  convention exactly, writes a new persona via the HTTP route below and
+  refreshes the list in place, no manual reload.
+- **Memory layer stack panel** — a second, distinct panel shows the
+  currently configured memory layer stack (via the already-shipped
+  `GET /layers` route) and a view-only Level 0 pointer, kept structurally
+  separate from the persona list.
+- **`GET`/`POST /persona/:tier/:scopeId` + `GET /persona`** on
+  `lib/mnemosyne/server.ts` — Layer 1 persona read/write is now reachable
+  over plain HTTP, not just the CLI/MCP/skill-harness. Scoped
+  `Access-Control-Allow-Origin` CORS (an allow-list of the UI's own known
+  origins, never a wildcard) plus a real preflight `OPTIONS` handler, so
+  the UI's write form actually works from a real browser (a gap found
+  during this epic's own final verification — every server-side `fetch()`
+  test had passed without ever exercising real preflight; see Fixed below).
+- **`mnemosyne persona create` (CLI) / `persona_create` (MCP) /
+  `persona-create` (skill-harness)** — the fourth write surface joining
+  HTTP, all four now proven to funnel through the exact same
+  `writeGlobalPersona`/`writeRepoLocalPersona` + `withLock` path via a real
+  cross-transport round-trip test, including a genuine cross-transport
+  concurrency race (a CLI subprocess and an MCP tool call racing a write to
+  the same file) proving no lost updates or corruption.
+- **`mnemosyne-persona-interview` skill** — a multi-turn, adaptive
+  interview that authors a Layer 1 `Persona` record by conversing with an
+  operator, grounded line-by-line in plugin-hive's own
+  `kickoff-protocol.md` "Phase 3b: Discovery Questions" pattern (adaptive
+  skip, explicit-marker-never-silent-omission persistence, non-blocking
+  hard-fail rule). Works at both repo-spinup-lifecycle moments — authoring
+  a global-tier persona before any repo exists, and a `code-architect`
+  persona once one does — with zero new storage-level work, reusing Epic
+  1's two-store split as-is.
+- **`resolveRememberScope()`** (`lib/mnemosyne/layer1/persona.ts`) — the
+  first real, deterministic mapping from a persona's `{tier, scopeId}` to a
+  `remember()` call's scope/tag arguments (tier selects one of four fixed
+  `persona-*` lanes; `scopeId` returns as a sanitized tag rather than being
+  folded into the scope string, to avoid unbounded per-persona lane
+  provisioning). Documented in both a code comment and a design-discussion
+  addendum.
+- **Crawl-and-feed wiring** — a completed interview now fires a real
+  `remember()` call indexing its own source material, scoped via
+  `resolveRememberScope()`, proven to fire even for a maximally-skipped
+  interview (crawl-and-feed never silently no-ops just because most
+  questions were skipped).
+
+### Fixed
+
+- **CORS preflight on `/persona/*`** — `POST /persona/:tier/:scopeId`'s
+  JSON body makes it a non-"simple" cross-origin request, so a real browser
+  sends an `OPTIONS` preflight before the actual write. `lib/mnemosyne/server.ts`
+  had no `OPTIONS` handler at all, so that preflight fell through to the
+  404 catch-all with no CORS header — silently blocking the new Personas
+  panel's write form in every real browser, despite every unit test (which
+  calls `fetch()` server-side and never enforces preflight) passing green.
+  Found during this epic's own final verification pass, fixed alongside the
+  UI form that surfaced it.
+
 ## [0.7.0] — 2026-08-15
 
 Full MCP/skill-harness coverage for the persona CLI shipped in `v0.6.0` —
