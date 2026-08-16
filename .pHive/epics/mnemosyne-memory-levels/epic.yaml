@@ -1,0 +1,47 @@
+name: mnemosyne-memory-levels
+title: Correct the 5-level memory-store-type model (0-4) and build its three real gaps — mnemosyne.md, memory-levels UI/route, file-store sub-index
+target_codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+methodology: tdd
+version_bump: minor
+
+stories:
+  - id: ml-01-memory-level-taxonomy
+    title: Canonical memory-level taxonomy module (levels 0-4)
+    complexity: low
+    depends_on: []
+  - id: ml-02-mnemosyne-md-source-reader
+    title: "mnemosyne.md canonical source + level1Source.ts reader + MANDATE_SECTIONS sourcing decision"
+    complexity: medium
+    depends_on: [ml-01-memory-level-taxonomy]
+  - id: ml-03-sync-three-source-composition
+    title: "sync.ts 3-part/2-part composition + idempotency regression + install-mechanism confirmation"
+    complexity: medium
+    depends_on: [ml-02-mnemosyne-md-source-reader]
+  - id: ml-04-memory-levels-route
+    title: "GET /memory-levels route + GET /layers byte-for-byte-unchanged regression proof"
+    complexity: medium
+    depends_on: [ml-01-memory-level-taxonomy]
+  - id: ml-05-memory-levels-ui
+    title: "UI: rename Memory Layer Stack -> Retrieval Layer Stack + new Memory Levels (0-4) section"
+    complexity: medium
+    depends_on: [ml-04-memory-levels-route]
+  - id: ml-06-file-store-index-build
+    title: "FileStoreIndex.ts build + persisted manifest + real-fixture verification tests"
+    complexity: medium
+    depends_on: [ml-01-memory-level-taxonomy]
+  - id: ml-07-file-store-index-query
+    title: "Query-time area-scoped narrowing + full-walk fallback + staleness-handling proof"
+    complexity: high
+    depends_on: [ml-06-file-store-index-build]
+  - id: ml-08-file-store-index-rebuild
+    title: "Level 4 sub-index rebuild trigger (CLI verb) + regression test"
+    complexity: low
+    depends_on: [ml-07-file-store-index-query]
+  - id: ml-09-doc-reconciliation
+    title: "Doc reconciliation -- correct docs/layer-architecture-v2-plan.md's conflated Layer 1/2/3 table"
+    complexity: low
+    depends_on: [ml-03-sync-three-source-composition, ml-05-memory-levels-ui, ml-08-file-store-index-rebuild]
+  - id: ml-10-full-suite-regression-release
+    title: Full-suite regression pass + version bump + release note
+    complexity: low
+    depends_on: [ml-09-doc-reconciliation]

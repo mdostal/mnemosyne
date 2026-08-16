@@ -1,0 +1,110 @@
+id: ml-02-mnemosyne-md-source-reader
+epic: mnemosyne-memory-levels
+title: "mnemosyne.md canonical source + level1Source.ts reader + MANDATE_SECTIONS sourcing decision"
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [ml-01-memory-level-taxonomy]
+
+description: |
+  Builds Level 1's missing piece, per the operator's own words: "1 is the in
+  repo persona overlay etc like the claude/agents/gemini/etc with the
+  adapter (we should make our own mnemosyne.md and then include it INTO the
+  others with an install script or something to lock that in easy...)".
+
+  Level 1's underlying splice mechanism (block.ts/lock.ts/harness.ts) is
+  already real and shipped (la-01, epic mnemosyne-layer-architecture-v2) —
+  what's missing is a canonical, human-editable, git-committed markdown
+  file. Today Level 1's content is generated purely from TypeScript
+  (tiers.ts's hardcoded TIER_CONTENT/MANDATE_SECTIONS, persona.ts's YAML
+  Persona records) — there is no file a human edits directly.
+
+  This story creates `mnemosyne.md` at repo root, seeded from tiers.ts's
+  MANDATE_SECTIONS constant (the closest existing analog: already
+  harness-agnostic, tier-agnostic, mandatory content — moving it into an
+  editable file is a direct realization of the operator's ask, not new
+  content invention, per design-discussion.md §4a), and a reader module
+  mirroring level0.ts's shape exactly, EXCEPT that a missing file is not a
+  hard failure (design-discussion.md §7.2's resolved judgment call: Level 1
+  is new, per-repo, opt-in content — every existing repo lacks a
+  mnemosyne.md on day one, so hard-requiring it would break every existing
+  harness sync the moment this epic ships).
+
+  This story also makes and documents the MANDATE_SECTIONS-sourcing
+  decision design-discussion.md §9's risk table requires (mnemosyne.md and
+  tiers.ts's MANDATE_SECTIONS must not become two independently-editable
+  copies of the same mandate text going forward) — left as this story's own
+  call per vertical-plan.md's "Ambiguities Not Resolved" #1, since it's a
+  small, contained decision.
+
+  Does NOT touch sync.ts's composition logic (that's ml-03) — this story
+  only produces the file and a working, tested reader for it.
+
+acceptance_criteria:
+  - "Given mnemosyne.md exists at repo root, when readMnemosyneMdContent() is called with the default path, then it returns the file's exact content, read fresh (no module-level caching, matching level0.ts's own hard rule)"
+  - "Given mnemosyne.md does NOT exist at the given path, when readMnemosyneMdContent() is called, then it returns null (or empty string — implementer's choice, documented), never throws — unlike level0.ts's readLevel0Content, which hard-fails on a missing file"
+  - "Given mnemosyne.md's initial seed content, when compared to tiers.ts's MANDATE_SECTIONS text, then the two are either (a) generated from one canonical source (mnemosyne.md generates MANDATE_SECTIONS, or vice versa) or (b) one is explicitly documented, in a durable code comment, as the now-secondary/derived copy — never left as two independently hand-editable copies of the same content with no documented relationship"
+  - "Given the reader module, when its exported function signature and file-existence-check behavior are compared to level0.ts's readLevel0Content, then they are structurally parallel (same fresh-read-every-call rule, same default-path constant pattern) except for the documented required-vs-optional divergence"
+
+steps:
+  - id: research
+    description: Re-read level0.ts in full immediately before writing the parallel reader, plus tiers.ts's MANDATE_SECTIONS block, to ground the sourcing decision in the real current text rather than a paraphrase.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for readMnemosyneMdContent()'s present/absent behavior, the default-path constant, and (once the sourcing decision is made) a test proving MANDATE_SECTIONS and mnemosyne.md's mandate content stay in sync (either structurally, via generation, or via an explicit cross-reference test).
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Write mnemosyne.md (seeded from MANDATE_SECTIONS), lib/mnemosyne/layer1/level1Source.ts's readMnemosyneMdContent(), and implement the chosen MANDATE_SECTIONS-sourcing mechanism.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the missing-file behavior is genuinely non-throwing (unlike Level 0, intentionally), confirm the sourcing decision is documented durably (not just in a commit message), confirm mnemosyne.md's content reads correctly as real, harness-agnostic, tier-agnostic guidance.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-memory-levels.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/layer1/level0.ts
+      purpose: "The exact structural pattern this story's reader mirrors (default-path constant, fresh-read-every-call) — deviates only in the required-vs-optional missing-file behavior, which must be a deliberate, documented divergence, not an accidental one."
+    - path: lib/mnemosyne/layer1/tiers.ts
+      purpose: "MANDATE_SECTIONS (lines ~110-126) is mnemosyne.md's seed content and the subject of this story's sourcing decision."
+    - path: .pHive/epics/mnemosyne-memory-levels/docs/design-discussion.md
+      purpose: "§4a/§7.2 have the resolved reasoning this story implements — read before diverging from either."
+
+files_to_modify:
+  - file: mnemosyne.md
+    change: "New: repo-root canonical Level 1 source file, seeded from MANDATE_SECTIONS."
+  - file: lib/mnemosyne/layer1/level1Source.ts
+    change: "New: readMnemosyneMdContent() reader, mirroring level0.ts's shape with documented required-vs-optional divergence."
+  - file: lib/mnemosyne/layer1/tiers.ts
+    change: "MANDATE_SECTIONS sourcing decision implemented — either generated from mnemosyne.md, or documented as the now-secondary copy with an explicit cross-reference comment."
+  - file: lib/mnemosyne/layer1/__tests__/level1Source.test.ts
+    change: "New: reader present/absent/fresh-read tests."
+
+design_decisions:
+  - decision: "mnemosyne.md's missing-file behavior returns null/empty, never throws"
+    rationale: "design-discussion.md §7.2: unlike Level 0 (operator-global, must never be silently omitted), Level 1's new file is opt-in, per-repo content this epic is introducing to a codebase where every existing repo currently lacks one — hard-requiring it would regress every already-adopted repo's sync the moment this ships."
+  - decision: "mnemosyne.md seeded from tiers.ts's existing MANDATE_SECTIONS text, not newly authored content"
+    rationale: "design-discussion.md §4a: MANDATE_SECTIONS is already exactly the right shape (harness-agnostic, tier-agnostic, mandatory) — reusing it is a direct realization of the operator's ask, not scope creep into inventing new policy content."
+
+risks:
+  - severity: medium
+    description: "Leaving MANDATE_SECTIONS and mnemosyne.md as two independently hand-editable copies of the same text would drift silently over time."
+    mitigation: "This story's acceptance criteria explicitly require one canonical direction (generated-from or documented-as-secondary) before it can be considered done — not deferred to a later story."
+
+references:
+  - path: .pHive/epics/mnemosyne-memory-levels/docs/vertical-plan.md
+    relevant_excerpt: |
+      Sub-slice 2a: mnemosyne.md seed content + reader module. Why cut here:
+      independently real and testable without touching sync.ts at all — a
+      reader that returns the right content (or null when absent) for a
+      given path is a pure, small, isolable unit, exactly the shape
+      level0.ts itself is.
+
+cross_cutting: []

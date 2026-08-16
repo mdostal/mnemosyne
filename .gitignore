@@ -50,3 +50,5 @@ config/minerva.local.yaml
 !.pHive/epics/mnemosyne-persona-foundation/**
 !.pHive/epics/mnemosyne-persona-wizard/
 !.pHive/epics/mnemosyne-persona-wizard/**
+!.pHive/epics/mnemosyne-memory-levels/
+!.pHive/epics/mnemosyne-memory-levels/**

@@ -1,0 +1,110 @@
+id: ml-01-memory-level-taxonomy
+epic: mnemosyne-memory-levels
+title: Canonical memory-level taxonomy module (levels 0-4)
+status: pending
+complexity: low
+methodology: tdd
+depends_on: []
+
+description: |
+  Corrects a real, documented miscommunication (design-discussion.md §0/§1):
+  this codebase already has THREE independent, coexisting uses of the word
+  "layer" (the `lib/mnemosyne/layer1/` harness-sync module, the pluggable
+  `lib/mnemosyne/layers/` retrieval-adapter registry, and
+  `docs/layer-architecture-v2-plan.md` §1's "Layer 1/2/3" table, which itself
+  conflates memory-store types with the harness-sync mechanism) — and NONE of
+  them is the operator's actual model. Per the operator's own, exact words:
+  "Each MEMORY STORE TYPE is a level ... The Orchestration MAPPINGs ARE
+  LAYERS -- however, that is not MEMORY LAYERS but team/orchestration
+  layers."
+
+  This story builds the single, small, shared module every other story in
+  this epic reads from: a static definition of the 5 canonical memory levels
+  (0-4), each a distinct memory-STORE-TYPE, with an explicit, durable doc
+  comment distinguishing this axis from (a) the 4-tier
+  top-orchestrator/company-director/project-orchestrator/code-architect
+  orchestration hierarchy (`lib/mnemosyne/layer1/tiers.ts`, entirely
+  untouched by this epic) and (b) the runtime retrieval-cascade config
+  (`GET /layers`, `MNEMOSYNE_LAYERS`, `lib/mnemosyne/layers/`, also entirely
+  untouched — read from, never modified, by this epic).
+
+  Placed at `lib/mnemosyne/memory-levels/levels.ts` (a new top-level module,
+  NOT inside `layer1/`) specifically to avoid compounding the naming
+  collision this story's own research already identified — see
+  design-discussion.md §7's resolved judgment call and §8 OQ2 (flagged, not
+  fully closed at the product-naming level).
+
+  Pure static data + types. No file reads, no environment checks, no runtime
+  resolution — later stories (ml-04's `GET /memory-levels` route) layer live
+  checks (does `mnemosyne.md` exist, is a level's adapter active in the
+  current retrieval cascade) on top of this module's data; this module never
+  performs I/O itself.
+
+acceptance_criteria:
+  - "Given the module is imported, when `MEMORY_LEVELS` is read, then it contains exactly 5 entries with ids 0, 1, 2, 3, 4, each carrying at minimum {id, label, storeType, mechanism, sourceRef}"
+  - "Given the module's top-of-file doc comment, when read, then it quotes the operator's exact words (design-discussion.md §1) as the module's stated ground truth, and explicitly names both the orchestration-tier axis (pointing at tiers.ts) and the retrieval-cascade axis (pointing at lib/mnemosyne/layers/) as things this module is NOT and must never be confused with"
+  - "Given any entry's `label` or `mechanism` text, when inspected, then it never uses the word 'tier' — a unit test asserts this programmatically (string-search across all 5 entries), not just by author discipline"
+  - "Given the module is imported anywhere, when import happens, then zero file I/O, environment reads, or network calls occur — a test asserts import alone (no function call) produces no observable side effect"
+  - "Given level 2 and level 3's entries, when inspected, then each documents (as data, not prose) which real `lib/mnemosyne/layers/` adapter name(s) correspond to it (e.g. level 2 -> ['graphify', 'code-graph'], level 3 -> ['vector', 'keyword'], level 4 -> ['file']) — this is the exact mapping ml-04's route needs and must not reinvent"
+
+steps:
+  - id: research
+    description: Re-confirm (do not assume from this epic's planning docs alone) the exact real mechanism backing each of levels 0-4 by reading level0.ts, harness.ts, sync.ts, tiers.ts's MANDATE_SECTIONS, and lib/mnemosyne/layers/registry.ts's adapter names one more time immediately before writing the module, since accuracy here is load-bearing for every later story.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for MEMORY_LEVELS's shape (5 entries, correct ids, required fields present), the doc-comment disambiguation-phrase assertions, the no-"tier"-language assertion, the zero-import-side-effect assertion, and the adapter-name-mapping data for levels 2-4.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement lib/mnemosyne/memory-levels/levels.ts — MEMORY_LEVELS, types, doc comment.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the taxonomy accurately reflects the real mechanisms (cross-check every sourceRef against the actual file it names), confirm no orchestration-tier or retrieval-cascade vocabulary leaked in, confirm the module has zero I/O.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-memory-levels.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/layer1/tiers.ts
+      purpose: "The 4-tier orchestration hierarchy this module must never relabel or number — read to confirm the exact tier vocabulary to explicitly exclude from this module's own language."
+    - path: lib/mnemosyne/layer1/level0.ts
+      purpose: "Level 0's real mechanism — this module's level-0 entry's sourceRef/mechanism text must accurately describe it."
+    - path: lib/mnemosyne/layer1/harness.ts
+      purpose: "Level 1's real target files (CLAUDE.md/AGENTS.md/GEMINI.md) — informs level-1's entry."
+    - path: lib/mnemosyne/layers/registry.ts
+      purpose: "The real, current set of registered retrieval-adapter names — needed to build the accurate level-2/3/4-to-adapter-name mapping this module's data carries."
+    - path: .pHive/epics/mnemosyne-memory-levels/docs/design-discussion.md
+      purpose: "§1 has the operator's exact verbatim words this module's doc comment must quote; §7 has the resolved module-location judgment call this story implements."
+
+files_to_modify:
+  - file: lib/mnemosyne/memory-levels/levels.ts
+    change: "New: MEMORY_LEVELS static taxonomy + types + disambiguation doc comment."
+  - file: lib/mnemosyne/memory-levels/__tests__/levels.test.ts
+    change: "New: shape/content/no-side-effect tests."
+
+design_decisions:
+  - decision: "New top-level module (lib/mnemosyne/memory-levels/), not inside lib/mnemosyne/layer1/"
+    rationale: "design-discussion.md §7's resolved judgment call: placing it inside layer1/ would compound the already-identified layer1/layers naming collision (research-brief.md §0) that is itself part of the miscommunication this epic corrects. Flagged as not fully closed at the product-naming level in §8 OQ2, but a concrete path is needed to build against."
+  - decision: "Pure static data, zero I/O in this module"
+    rationale: "Every later story (ml-04's route) needs live checks (file existence, current cascade membership) layered on top — keeping those out of this module keeps it trivially testable and reusable by every consumer without accidentally coupling them to a particular runtime context."
+
+risks:
+  - severity: medium
+    description: "If this module's data is even slightly wrong (a mismatched sourceRef, a level assigned the wrong adapter names), every later story built against it inherits the error silently."
+    mitigation: "The review step explicitly cross-checks every sourceRef/mechanism/adapter-name mapping against the real file it names, not just against this story's own description."
+
+references:
+  - path: .pHive/epics/mnemosyne-memory-levels/docs/research-brief.md
+    relevant_excerpt: |
+      Three different numbering schemes already exist in this codebase's
+      docs/code, none of which is the operator's actual 5-level
+      memory-store-type model — see research-brief.md §0 for the full
+      three-way comparison this module's doc comment must not repeat.
+
+cross_cutting: []

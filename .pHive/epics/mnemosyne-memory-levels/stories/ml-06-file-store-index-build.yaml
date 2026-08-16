@@ -1,0 +1,106 @@
+id: ml-06-file-store-index-build
+epic: mnemosyne-memory-levels
+title: "FileStoreIndex.ts build + persisted manifest + real-fixture verification tests"
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [ml-01-memory-level-taxonomy]
+
+description: |
+  Builds the operator's third, explicitly named deliverable: "the file doc
+  store (and we should do an index of the contents OF the file doc store so
+  we can index areas of it for a quick search as well)."
+
+  FileLayerAdapter.ts (level 4's real implementation) is confirmed to have
+  ZERO indexing today — a full recursive directory walk + line-by-line
+  substring match on every single call, "no indexing step, no embedder, no
+  cached hash store" (this repo's own layers/README.md, verbatim). This
+  story builds a standalone, rebuildable, persisted index over that same
+  target directory, keyed by "area" (the operator's own word) — resolved
+  per design-discussion.md §7.4 as directory + markdown-heading granularity,
+  deliberately NOT a semantic/embedding-based scheme (that would duplicate
+  level 3/vector's job inside level 4, blurring the exact distinction this
+  epic exists to keep sharp).
+
+  This story builds ONLY the index artifact + its build logic — it does NOT
+  touch FileLayerAdapter.recall() or wire query-time narrowing (that's
+  ml-07). "Can we build a correct, independently-verifiable manifest" is a
+  complete, self-contained claim on its own, matching la-03-graphify-doc-index's
+  own "verify the raw node/line data before touching recall()" sequencing
+  discipline (a real, already-shipped precedent in this exact codebase for
+  this same reasoning shape).
+
+  Explicitly distinct from la-03-graphify-doc-index (already shipped,
+  epic mnemosyne-layer-architecture-v2): that story indexes markdown docs
+  THROUGH Graphify's own AST graph (a level-2 mechanism) — this story
+  indexes the raw, brute-force level-4 file layer directly, with zero
+  Graphify dependency, so area-scoped search works even in a repo with no
+  Graphify install.
+
+acceptance_criteria:
+  - "Given a real fixture directory containing nested subdirectories and at least one markdown file with real `#`/`##` headings, when the index is built, then the resulting manifest records each file's top-level (and one nested level of) directory as its area, and each markdown file's real heading text + line number as sub-areas"
+  - "Given the manifest's recorded heading/line-number data, when independently verified against the real fixture file's actual content (read the file, split lines, assert the recorded line number's content matches the recorded heading text), then it matches exactly — mirroring la-03's own verification discipline, not just 'a value was written'"
+  - "Given each indexed file, when the manifest is inspected, then it carries a sha256 content hash computed via the SAME sha256() helper FileLayerAdapter.ts already uses (reused, not reimplemented) — this is the exact mechanism ml-07's staleness detection depends on"
+  - "Given FileLayerAdapter's existing walk() logic and ignored-directories convention (.git/node_modules/dist/build/coverage), when the index build walks a target directory, then it applies the identical ignore rules — never a second, divergent directory-scan implementation that could disagree with what FileLayerAdapter itself would walk"
+  - "Given the index build runs against an empty or non-existent target directory, then it produces a valid, empty manifest (not a throw) — matching FileLayerAdapter's own graceful-degradation posture for a missing/empty target"
+  - "Given the manifest file, when written, then it lands at a documented, predictable path (e.g. <repoRoot>/.mnemosyne/file-index.json) that a human can inspect directly, never an opaque binary format"
+
+steps:
+  - id: research
+    description: Re-read FileLayerAdapter.ts's walk()/ignoredDirectories/sha256() in full, and la-03-graphify-doc-index's verification approach (its own story note), immediately before designing the index-build module, to reuse rather than reinvent both the walk convention and the verification discipline.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests against a real fixture directory (nested subdirs, real markdown headings at known line numbers) asserting correct area/heading/hash recording, ignored-directory parity with FileLayerAdapter, and graceful empty/missing-directory handling.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement lib/mnemosyne/layers/FileStoreIndex.ts's build function + the persisted JSON manifest writer, reusing FileLayerAdapter's walk()/sha256() logic directly (extract to a shared helper if needed, rather than duplicating).
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Directly read the real fixture file's content after a test run and independently confirm every recorded heading/line/hash matches, not just that the test asserts it (spot-check by hand, matching la-03's own review discipline).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-memory-levels.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/layers/FileLayerAdapter.ts
+      purpose: "walk() (lines 118-135) and sha256() (lines 171-173) are the exact conventions this story's index build must reuse, not reimplement — a second, divergent directory-scan would risk disagreeing with what FileLayerAdapter itself actually walks."
+    - path: .pHive/epics/mnemosyne-layer-architecture-v2/stories/la-03-graphify-doc-index.yaml
+      purpose: "The verification-discipline precedent this story's review step follows: read real fixture content after indexing and independently confirm recorded line numbers, not just assert a value exists."
+    - path: .pHive/epics/mnemosyne-memory-levels/docs/design-discussion.md
+      purpose: "§7.4 has the resolved granularity decision (directory + markdown-heading, not semantic clustering) this story implements."
+
+files_to_modify:
+  - file: lib/mnemosyne/layers/FileStoreIndex.ts
+    change: "New: index-build logic, walks target directory (reusing FileLayerAdapter's walk/ignore conventions), records area/heading/hash data."
+  - file: lib/mnemosyne/layers/FileLayerAdapter.ts
+    change: "Extract walk()/sha256() to a shared, importable helper if not already easily reusable, so FileStoreIndex.ts imports rather than duplicates them."
+  - file: lib/mnemosyne/layers/__tests__/FileStoreIndex.test.ts
+    change: "New: real-fixture build + independent-verification tests."
+
+design_decisions:
+  - decision: "Directory + markdown-heading granularity, not semantic/embedding-based area clustering"
+    rationale: "design-discussion.md §7.4: the operator's ask doesn't specify granularity; this is the simplest mechanism delivering real narrowing value without a new dependency or duplicating level 3/vector's already-existing semantic-search job inside level 4."
+  - decision: "Reuse FileLayerAdapter's own walk()/sha256() logic rather than a second implementation"
+    rationale: "A divergent directory-scan or hash convention could disagree with what FileLayerAdapter itself actually walks/hashes at query time (ml-07), silently breaking the staleness-detection contract this story's manifest exists to serve."
+
+risks:
+  - severity: low
+    description: "A second, subtly-different directory-walk implementation could index files FileLayerAdapter itself would never actually return (or vice versa)."
+    mitigation: "Explicit acceptance criterion requiring identical ignored-directory behavior, verified by reusing the exact same walk()/ignoredDirectories code path rather than reimplementing it."
+
+references:
+  - path: lib/mnemosyne/layers/README.md
+    relevant_excerpt: |
+      FileLayerAdapter is the raw filesystem search floor. It scans a
+      target directory directly with Node.js file I/O, so there is no
+      indexing step, no embedder, and no cached hash store. This story
+      closes exactly that gap.
+
+cross_cutting: []

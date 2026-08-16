@@ -1,0 +1,97 @@
+id: ml-03-sync-three-source-composition
+epic: mnemosyne-memory-levels
+title: "sync.ts 3-part/2-part composition + idempotency regression + install-mechanism confirmation"
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [ml-02-mnemosyne-md-source-reader]
+
+description: |
+  Wires ml-02's mnemosyne.md reader into the real, already-shipped
+  splice/lock pipeline (block.ts/lock.ts/harness.ts, unchanged), closing out
+  Level 1's install mechanism per the operator's ask: "include it INTO the
+  others with an install script or something to lock that in easy."
+
+  Resolved (design-discussion.md §4c/§7.1): the install mechanism is a
+  full-content splice via the EXISTING sync pipeline, reusing
+  spliceManagedBlock/withLock unmodified — not a new per-harness native
+  `@include` directive (unverified for 2 of 3 target harnesses) and not a
+  new bin script (bin/mnemosyne-persona.mjs's existing `sync` verb already
+  is, today, the Layer-1-install verb — research-brief.md §8).
+
+  sync.ts's buildManagedBody grows from a 2-part join (Level 0 + tier) to a
+  3-part join (Level 0 + Level 1 + tier) WHEN mnemosyne.md is present, and
+  stays byte-for-byte the existing 2-part join when it is absent — this is
+  the one genuinely new correctness surface this story owns: a three-source
+  composition has never been exercised in this codebase before (Level 0 +
+  tier is the only composition tested to date).
+
+acceptance_criteria:
+  - "Given mnemosyne.md is present, when syncHarnessFile/syncAllHarnesses runs, then the managed block in every target harness file (CLAUDE.md/AGENTS.md/GEMINI.md) contains Level 0 content first (verbatim), Level 1 (mnemosyne.md) content second (verbatim), and tier/persona markdown third, in that exact order, never reordered"
+  - "Given mnemosyne.md is absent, when sync runs, then the managed block is byte-for-byte identical to today's pre-epic 2-part output (Level 0 + tier only) — zero regression for every repo that has not yet adopted mnemosyne.md"
+  - "Given a repo that previously had no mnemosyne.md and now has one added, when sync is re-run (the existing `bin/mnemosyne-persona.mjs sync` verb, no new CLI flag or command), then the managed block correctly grows to the 3-part composition on that very next run, with no manual re-trigger step beyond the existing verb — this IS the install mechanism, and this criterion is its acceptance proof"
+  - "Given sync is run twice in succession with mnemosyne.md present both times, then the second run's output is byte-identical to the first (idempotent, no duplication of any of the 3 parts)"
+  - "Given the block-splice mechanism (spliceManagedBlock/withLock), when this story's changes are reviewed, then zero modifications were made to block.ts or lock.ts themselves — only buildManagedBody's composition logic changed, confirming the existing mechanism truly needed no redesign"
+
+steps:
+  - id: research
+    description: Re-read sync.ts's buildManagedBody and syncHarnessFile in full immediately before modifying them, to confirm the exact insertion point for Level 1 content without disturbing the existing Level 0-first/tier-content-last ordering guarantees.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for the 3-part composition (present case), the byte-identical 2-part fallback (absent case), the first-time-adoption re-sync scenario, and idempotency across repeated 3-part syncs — extending sync.test.ts/sync.integration.test.ts's existing conventions, not a new test file structure.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Extend buildManagedBody to conditionally compose 2 or 3 parts based on ml-02's reader's return value; zero changes to block.ts/lock.ts/harness.ts.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm zero regression for the absent-mnemosyne.md case via a real diff against pre-epic output, confirm ordering is never violated under any test permutation, confirm the existing `sync` CLI verb needs no changes to serve as the install trigger.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-memory-levels.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/layer1/sync.ts
+      purpose: "buildManagedBody (lines 57-61) is this story's exact edit point — the 2-part join grows to a conditional 2-or-3-part join."
+    - path: lib/mnemosyne/layer1/block.ts
+      purpose: "spliceManagedBlock — confirmed unchanged by this story; operates on the whole composed body string regardless of how many logical parts fed into it."
+    - path: bin/mnemosyne-persona.mjs
+      purpose: "Its existing `sync` verb is the install mechanism this story confirms needs no new CLI surface — re-verify its exact dispatch path to syncAllHarnesses before claiming this."
+    - path: lib/mnemosyne/layer1/__tests__/sync.integration.test.ts
+      purpose: "The existing real-file (not just fixture) integration-test convention this story's new 3-source test should extend, matching this repo's established rigor for sync correctness."
+
+files_to_modify:
+  - file: lib/mnemosyne/layer1/sync.ts
+    change: "buildManagedBody: conditional 2-part/3-part composition based on ml-02's mnemosyne.md reader."
+  - file: lib/mnemosyne/layer1/__tests__/sync.test.ts
+    change: "New tests: 3-part ordering, 2-part zero-regression, idempotency."
+  - file: lib/mnemosyne/layer1/__tests__/sync.integration.test.ts
+    change: "New integration test: first-time mnemosyne.md adoption re-sync scenario against real files."
+
+design_decisions:
+  - decision: "Install mechanism reuses the existing bin/mnemosyne-persona.mjs sync verb — no new bin script"
+    rationale: "design-discussion.md §4d: sync already is, today, the Layer-1-install verb (research-brief.md §8) — extending what content it composes is a change to buildManagedBody, not a new install surface, matching this repo's own 'no bespoke god wiring' ways-of-working principle."
+  - decision: "3-part composition only when mnemosyne.md is present, 2-part byte-identical fallback otherwise"
+    rationale: "design-discussion.md §7.2's resolved optionality decision — zero regression for the many existing repos that have not yet adopted a mnemosyne.md is a hard requirement, not a nice-to-have."
+
+risks:
+  - severity: medium
+    description: "A three-source composition (Level 0 + Level 1 + tier) has never been exercised in this codebase — the only tested composition to date is Level 0 + tier."
+    mitigation: "design-discussion.md §9's risk table requires a real three-source composition test as this story's own acceptance criteria, not assumed safe by analogy to the two-source case."
+
+references:
+  - path: .pHive/epics/mnemosyne-memory-levels/docs/vertical-plan.md
+    relevant_excerpt: |
+      Sub-slice 2b: sync.ts composition + install-mechanism regression. Why
+      cut here: depends on 2a's reader existing; this is where the real
+      risk lives — a three-source composition, never yet exercised — worth
+      its own story so the composition-ordering/idempotency proof is a
+      first-class deliverable, not a side effect of 2a.
+
+cross_cutting: []
