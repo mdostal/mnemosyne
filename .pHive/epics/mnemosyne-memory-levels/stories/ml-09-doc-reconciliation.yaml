@@ -1,10 +1,25 @@
 id: ml-09-doc-reconciliation
 epic: mnemosyne-memory-levels
 title: "Doc reconciliation -- correct docs/layer-architecture-v2-plan.md's conflated Layer 1/2/3 table"
-status: pending
+status: complete
 complexity: low
 methodology: tdd
 depends_on: [ml-03-sync-three-source-composition, ml-05-memory-levels-ui, ml-08-file-store-index-rebuild]
+
+note_on_completion: >
+  Merged 2026-08-16 (commit d34ad32, pushed directly to
+  feat/mnemosyne-memory-levels as a docs-only, low-risk change).
+  Independently verified: confirmed the diff is purely additive (32
+  insertions, 0 deletions -- the old table is byte-for-byte preserved).
+  Read the new note in place -- confirmed it accurately describes the
+  conflation (harness-sync module mislabeled Layer 1, hive-memory/KG+vector
+  merged into Layer 2, Graphify doc-index+code-graph merged into Layer 3),
+  correctly disambiguates all three pre-existing "layer" vocabularies, and
+  both new cross-links (lib/mnemosyne/memory-levels/levels.ts,
+  .pHive/epics/mnemosyne-memory-levels/) resolve to real files/dirs on disk
+  -- confirmed directly, not assumed. Grep sweep results (docs/ tree +
+  README.md) reported in the commit message match what I'd expect from this
+  repo's known layer-vocabulary usage. All acceptance criteria met.
 
 description: |
   Closes the loop on the exact miscommunication this epic exists to correct
