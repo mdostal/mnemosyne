@@ -12,6 +12,8 @@ const lanesStatusEl = document.getElementById("lanes-status");
 const lanesTbodyEl = document.getElementById("lanes-tbody");
 const addLaneForm = document.getElementById("add-lane-form");
 const addLaneStatusEl = document.getElementById("add-lane-status");
+const personasStatusEl = document.getElementById("personas-status");
+const personasTbodyEl = document.getElementById("personas-tbody");
 
 function setStatus(el, kind, text) {
   el.textContent = text;
@@ -1149,10 +1151,106 @@ refreshCacheBtn.addEventListener("click", async () => {
   }
 });
 
+// --- Personas panel (pw-03-personas-panel-view): renders GET /persona as a
+// table (tier, scopeId, displayName), following the exact Lanes-panel
+// table/tbody convention (laneCell/loadLanes above) and setStatus() for
+// pass/fail/loading states, same as every other panel.
+//
+// Cross-server fetch: the persona routes live on lib/mnemosyne/server.ts, a
+// DIFFERENT server/port (3141 default) than this UI's own server (8477,
+// src/server.mjs -- see that file's doc comment and server.ts's matching
+// one). A relative fetch("/persona") would hit THIS server, not the persona
+// service, and 404 -- every persona fetch below therefore uses an absolute
+// URL built from the page's own hostname (whichever of 127.0.0.1/localhost
+// this UI is actually being served from) plus the persona service's port,
+// matching one of the two origins server.ts's CORS allow-list (UI_ORIGINS)
+// actually grants: http://127.0.0.1:8477 / http://localhost:8477.
+const MNEMOSYNE_PERSONA_PORT = 3141;
+
+function personaServiceOrigin() {
+  return `${window.location.protocol}//${window.location.hostname}:${MNEMOSYNE_PERSONA_PORT}`;
+}
+
+function personaCell(text) {
+  const td = document.createElement("td");
+  td.textContent = text;
+  return td;
+}
+
+// Renders a persona's parentRefs as pointer-only text ("tier: scopeId",
+// comma-separated), built entirely from fields already present on the
+// persona record itself -- this function never fetches anything. This is
+// the UI-layer half of the "query up, never copy down" guarantee
+// getPersonaContent's own buildParentContextSections (persona.ts) enforces
+// server-side: a parent's real sections content must NEVER be fetched or
+// inlined here, only named (research-brief.md §6).
+function parentRefsText(parentRefs) {
+  if (!Array.isArray(parentRefs) || parentRefs.length === 0) return "—";
+  return parentRefs.map((ref) => `${ref.tier}: ${ref.scopeId}`).join(", ");
+}
+
+async function loadPersonas() {
+  setStatus(personasStatusEl, "loading", "loading…");
+  personasTbodyEl.textContent = "";
+  try {
+    const origin = personaServiceOrigin();
+    const listRes = await fetch(`${origin}/persona`);
+    const listBody = await listRes.json();
+    if (!listRes.ok) {
+      setStatus(personasStatusEl, "fail", `FAIL — GET /persona returned ${listRes.status}`);
+      return;
+    }
+    const entries = Array.isArray(listBody.personas) ? listBody.personas : [];
+
+    // One fetch per LISTED persona's OWN record only (needed for
+    // displayName + parentRefs, which GET /persona's list response doesn't
+    // carry) -- this is each persona's own content, not any parent's, so it
+    // does not touch the copy-down guarantee above. CRITICAL: this never
+    // loops over a persona's parentRefs to fetch THOSE -- see
+    // parentRefsText, the only thing rendered for parentRefs.
+    const personas = await Promise.all(
+      entries.map(async (entry) => {
+        try {
+          const res = await fetch(
+            `${origin}/persona/${encodeURIComponent(entry.tier)}/${encodeURIComponent(entry.scopeId)}`
+          );
+          const body = await res.json();
+          if (!res.ok || !body.persona) {
+            return { tier: entry.tier, scopeId: entry.scopeId, displayName: null, parentRefs: [] };
+          }
+          return body.persona;
+        } catch {
+          return { tier: entry.tier, scopeId: entry.scopeId, displayName: null, parentRefs: [] };
+        }
+      })
+    );
+
+    for (const p of personas) {
+      const tr = document.createElement("tr");
+      tr.appendChild(personaCell(p.tier));
+      tr.appendChild(personaCell(p.scopeId));
+      tr.appendChild(personaCell(p.displayName == null || p.displayName === "" ? "—" : p.displayName));
+      tr.appendChild(personaCell(parentRefsText(p.parentRefs)));
+      personasTbodyEl.appendChild(tr);
+    }
+    setStatus(personasStatusEl, "pass", `${personas.length} persona(s)`);
+  } catch (err) {
+    setStatus(personasStatusEl, "fail", "FAIL — could not reach GET /persona");
+  }
+}
+
 async function refreshAll() {
   refreshBtn.disabled = true;
   try {
-    await Promise.all([loadLiveliness(), loadSettings(), loadLanes(), loadSearchScopes(), loadGraph(), loadReindexLanes()]);
+    await Promise.all([
+      loadLiveliness(),
+      loadSettings(),
+      loadLanes(),
+      loadSearchScopes(),
+      loadGraph(),
+      loadReindexLanes(),
+      loadPersonas(),
+    ]);
     lastRefreshedEl.textContent = `last refreshed ${new Date().toLocaleTimeString()}`;
   } finally {
     refreshBtn.disabled = false;

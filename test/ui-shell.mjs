@@ -29,6 +29,12 @@ const ok = (c, m) => { console.log(`${c ? "  PASS" : "  FAIL"}  ${m}`); if (!c) 
   ok(/refresh/i.test(body), `GET /ui body has a manual refresh control`);
   ok(/lanes/i.test(body), `GET /ui body mentions a lanes panel (s-02)`);
   ok(/add-lane-form/i.test(body), `GET /ui body has an add-lane form (s-02)`);
+  // pw-03-personas-panel-view: the Personas panel follows the exact same
+  // panel-status/table convention as every other panel (e.g. Lanes above).
+  ok(/id="personas"/i.test(body), `GET /ui body has a personas panel (pw-03)`);
+  ok(/id="personas-status"/i.test(body), `GET /ui body has a personas-status element (pw-03)`);
+  ok(/id="personas-table"/i.test(body), `GET /ui body has a personas-table (pw-03)`);
+  ok(/id="personas-tbody"/i.test(body), `GET /ui body has a personas-tbody (pw-03)`);
 }
 
 // --- GET /ui/ (trailing slash) also serves the shell ------------------------

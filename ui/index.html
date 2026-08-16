@@ -192,6 +192,30 @@
         </div>
       </div>
     </section>
+
+    <section id="personas" class="panel panel-wide">
+      <h2>Personas</h2>
+      <p class="panel-status" id="personas-status">loading…</p>
+      <p class="panel-hint">
+        Every existing persona (global tiers: <code>top-orchestrator</code>,
+        <code>company-director</code>, <code>project-orchestrator</code>) — fetched
+        from the persona service on port 3141 (a different server than this UI's
+        own, see <code>lib/mnemosyne/server.ts</code>). A persona's parent(s) render
+        as pointer-only text (tier + scope ID) — the parent's actual content is
+        never fetched or inlined here.
+      </p>
+      <table id="personas-table">
+        <thead>
+          <tr>
+            <th>Tier</th>
+            <th>Scope ID</th>
+            <th>Display name</th>
+            <th>Parent(s)</th>
+          </tr>
+        </thead>
+        <tbody id="personas-tbody"></tbody>
+      </table>
+    </section>
   </main>
 
   <footer>
