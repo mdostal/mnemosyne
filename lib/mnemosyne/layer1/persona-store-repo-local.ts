@@ -19,7 +19,7 @@
  * Story: pf-01-persona-schema-repo-local-store (epic: mnemosyne-persona-foundation)
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { parse, stringify } from 'yaml';
 import { withLock } from './lock.js';
@@ -88,4 +88,25 @@ export function readRepoLocalPersona(repoRoot: string, scopeId: string): Persona
   const parsed: unknown = parse(raw);
   assertValidPersona(parsed, REPO_LOCAL_PERSONA_TIER);
   return parsed;
+}
+
+/**
+ * Enumerates every code-architect persona on disk for this repo --
+ * `readdir` + parse of the filename only, no file content is read or
+ * validated (story pw-01-listing-primitives: "readdir + parse only, no
+ * search, filter, or pagination"). Tier is always `code-architect`
+ * (`REPO_LOCAL_PERSONA_TIER`), so unlike `listGlobalPersonas` there is no
+ * per-entry tier to discriminate. A missing `<repoRoot>/.mnemosyne/personas`
+ * directory is NOT an error here, unlike `readRepoLocalPersona`'s
+ * missing-FILE contract -- it just means this repo has never had a persona
+ * written yet, i.e. legitimately empty.
+ */
+export function listRepoLocalPersonas(repoRoot: string): { scopeId: string }[] {
+  const personasDir = path.join(repoRoot, '.mnemosyne', 'personas');
+  if (!existsSync(personasDir)) {
+    return [];
+  }
+  return readdirSync(personasDir)
+    .filter((fileName) => fileName.endsWith('.yaml'))
+    .map((fileName) => ({ scopeId: fileName.slice(0, -'.yaml'.length) }));
 }
