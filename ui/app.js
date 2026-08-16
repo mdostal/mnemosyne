@@ -1179,18 +1179,23 @@ function personaCell(text) {
 
 // ============================================================================
 // pw-04-layer-stack-visibility: layer-stack visibility section.
-// ADDITIVE / SELF-CONTAINED -- own DOM refs, own small loader function.
-// Fetches the ALREADY-SHIPPED GET /layers route on lib/mnemosyne/server.ts
-// -- no new backend route. That service runs on a different origin/port
-// (3141, MNEMOSYNE_PORT) than this UI's own server (src/server.mjs, port
-// 8477), so this is a genuine cross-origin fetch -- same pattern
+// Own DOM refs, own small loader function. pu-11-layer-stack-integration-
+// redesign re-homed the markup these refs target from a standalone
+// top-level <section> into pu-10's new Personas panel shell (nested inside
+// #personas, ui/index.html) -- the element ids below, and everything in
+// loadPersonaLayerStack() itself, are UNCHANGED by that move. It fetches
+// the ALREADY-SHIPPED GET /layers route on lib/mnemosyne/server.ts -- no
+// new backend route. That service runs on a different origin/port (3141,
+// MNEMOSYNE_PORT) than this UI's own server (src/server.mjs, port 8477),
+// so this is a genuine cross-origin fetch -- same pattern
 // pw-02-get-persona-routes-cors's CORS fix already covers for /persona/*,
 // extended by this story to /layers (see server.ts).
 //
 // The Level 0 pointer rendered alongside it is a STATIC path display only
 // (no fetch, no form) -- intentionally view-only, matching Epic 1's own
-// recommendation (design-discussion.md §3d/§6 OQ4). There is no edit
-// affordance for it anywhere in this file.
+// recommendation (design-discussion.md §3d/§6 OQ4), carried forward
+// unchanged through the pu-11 re-home. There is no edit affordance for it
+// anywhere in this file.
 // ============================================================================
 const MNEMOSYNE_CLIENT_API_LOOPBACK = "http://127.0.0.1:3141";
 const MNEMOSYNE_CLIENT_API_LOCALHOST = "http://localhost:3141";

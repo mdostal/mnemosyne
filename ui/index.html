@@ -337,49 +337,65 @@
         <button type="submit">Save persona</button>
         <p class="panel-status" id="persona-form-status"></p>
       </form>
-    </section>
 
-    <!-- ================================================================
-         pw-04-layer-stack-visibility: layer-stack visibility section.
-         Deliberately its OWN <section>, never folded into the persona list
-         above: it shows the currently configured memory LAYER STACK (a
-         different data model from personas — research-brief.md §6) via the
-         ALREADY-SHIPPED GET /layers route, plus a static, view-only Level 0
-         pointer.
-         ================================================================ -->
-    <section id="persona-layer-stack" class="panel panel-wide">
-      <h2>Memory Layer Stack</h2>
-      <p class="panel-hint">
-        The currently configured memory layer stack — not a persona list.
-        Read-only introspection via the existing <code>GET /layers</code>
-        route, shown in cascade order.
-      </p>
-      <p class="panel-status" id="persona-layer-stack-status">loading…</p>
-      <table id="persona-layer-stack-table" hidden>
-        <thead>
-          <tr>
-            <th>#</th>
-            <th>Layer</th>
-            <th>Writable</th>
-          </tr>
-        </thead>
-        <tbody id="persona-layer-stack-tbody"></tbody>
-      </table>
-      <p class="panel-status" id="persona-layer-stack-empty" hidden>No layers configured.</p>
-
-      <div id="persona-level0-pointer">
-        <h3>Level 0</h3>
+      <!-- pu-11-layer-stack-integration-redesign: pw-04's layer-stack
+           visibility section, re-homed from a standalone top-level
+           <section> (a sibling of #personas) into pu-10's new Personas
+           panel shell (horizontal-plan.md H7 component 2: "pu-11 depends
+           on pu-10 -- extends its shell"). Still deliberately its OWN
+           <section>, set off from the persona list/form above by a
+           border-top divider (the same idiom #persona-level0-pointer below
+           already uses) -- NEVER folded into #personas-table/
+           #personas-tbody's unified queue (research-brief.md §6's
+           already-established boundary; selection.md/synthesized
+           option-2.md doesn't address this section, so its existing visual
+           treatment carries forward largely as-is per pu-11's own spec).
+           Shows the currently configured memory LAYER STACK (a different
+           data model from personas) via the ALREADY-SHIPPED GET /layers
+           route, plus a static, view-only Level 0 pointer.
+           loadPersonaLayerStack() (ui/app.js, pw-04) is reused completely
+           unchanged for fetching -- only this markup's position in the
+           document moved, so its DOM-target ids (below) are unchanged too.
+           Copy/labels here render exactly what GET /layers returns today
+           (layer names in cascade order, a writable boolean) and never
+           hard-code the sibling mnemosyne-memory-levels epic's not-yet-
+           shipped 0-4 numbering (design-discussion.md OQ1) -- "Level 0" is
+           the one carried-forward exception (Epic 1's original
+           recommendation, not relitigated here). -->
+      <section id="persona-layer-stack">
+        <h3>Memory Layer Stack</h3>
         <p class="panel-hint">
-          Global rules file — view-only here. This UI never offers an edit
-          form for it; edit the file directly on disk.
+          The currently configured memory layer stack — not a persona list.
+          Read-only introspection via the existing <code>GET /layers</code>
+          route, shown in cascade order.
         </p>
-        <dl class="fields">
-          <dt>path</dt>
-          <dd id="persona-level0-path">~/.mnemosyne/level0-rules.md</dd>
-        </dl>
-      </div>
+        <p class="panel-status" id="persona-layer-stack-status">loading…</p>
+        <table id="persona-layer-stack-table" hidden>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Layer</th>
+              <th>Writable</th>
+            </tr>
+          </thead>
+          <tbody id="persona-layer-stack-tbody"></tbody>
+        </table>
+        <p class="panel-status" id="persona-layer-stack-empty" hidden>No layers configured.</p>
+
+        <div id="persona-level0-pointer">
+          <h4>Level 0</h4>
+          <p class="panel-hint">
+            Global rules file — view-only here. This UI never offers an edit
+            form for it; edit the file directly on disk.
+          </p>
+          <dl class="fields">
+            <dt>path</dt>
+            <dd id="persona-level0-path">~/.mnemosyne/level0-rules.md</dd>
+          </dl>
+        </div>
+      </section>
+      <!-- ==================== end pu-11 re-homed section =============== -->
     </section>
-    <!-- ==================== end pw-04 section ======================= -->
   </main>
 
   <footer>
