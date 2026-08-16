@@ -72,13 +72,16 @@ async function main() {
       "graph_impact",
       "graph_stats",
       "grep",
+      "persona_seed",
+      "persona_show",
+      "persona_sync",
       "recall",
       "reindex",
       "remember",
     ];
     ok(
       expected.every((n) => names.includes(n)),
-      `tools/list returns all 8 expected tools (got: ${names.join(", ")})`,
+      `tools/list returns all ${expected.length} expected tools (got: ${names.join(", ")})`,
     );
     ok(tools.length === expected.length, `tools/list returns exactly ${expected.length} tools (got ${tools.length})`);
 

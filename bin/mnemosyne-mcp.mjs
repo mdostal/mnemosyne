@@ -3,9 +3,10 @@
 //
 // Third thin transport wrapper over Mnemosyne's actions, alongside
 // src/server.mjs's HTTP API and bin/mnemosyne-skill-helper.mjs's CLI
-// pass-throughs. Exposes recall/remember/grep/reindex/graph-* as MCP tools
-// over stdio (the transport Claude Desktop / Claude Code MCP configs expect
-// for a locally-launched server: one process, stdio, no port to manage).
+// pass-throughs. Exposes recall/remember/grep/reindex/graph-*/persona-* as
+// MCP tools over stdio (the transport Claude Desktop / Claude Code MCP
+// configs expect for a locally-launched server: one process, stdio, no port
+// to manage).
 //
 // This file contains NO business logic of its own — every tool handler
 // below is a direct call into bin/mnemosyne-skill-helper.mjs's existing,
@@ -56,6 +57,9 @@ import {
   graphEdgesAction,
   graphImpactAction,
   graphDepsAction,
+  personaSyncAction,
+  personaSeedAction,
+  personaShowAction,
 } from "./mnemosyne-skill-helper.mjs";
 import {
   isGraphifyConfigured,
@@ -224,6 +228,58 @@ export function createServer({ port = DEFAULT_PORT } = {}) {
     useGraphify
       ? wrapAction(port, (p, { node, depth }) => graphifyDepsAction(p, node, { depth }))
       : wrapAction(port, (p, { node, depth }) => graphDepsAction(p, node, { depth })),
+  );
+
+  // persona_* tools (mnemosyne-persona-mcp-tools) -- unlike every tool above,
+  // these never fetch() the HTTP API at all; they shell out to the already-
+  // tested bin/mnemosyne-persona.mjs CLI (via mnemosyne-skill-helper.mjs's
+  // personaSyncAction/personaSeedAction/personaShowAction), since Layer 1
+  // persona sync/seed/show has no HTTP route (see that file's header for
+  // why). `port` is still threaded through wrapAction for a uniform handler
+  // shape; these three actions ignore it.
+
+  server.registerTool(
+    "persona_sync",
+    {
+      title: "Persona sync",
+      description:
+        "Write resolved Layer 1 persona content into a repo's harness files (CLAUDE.md/AGENTS.md/GEMINI.md). --repo is always the write target for every tier; for the 3 global tiers (top-orchestrator/company-director/project-orchestrator) content comes from the global persona store, not from repo. Use dryRun to preview with zero filesystem writes.",
+      inputSchema: {
+        repo: z.string().describe("Path to the target repo whose harness files get synced"),
+        tier: z.string().describe("One of: top-orchestrator, company-director, project-orchestrator, code-architect"),
+        scopeId: z.string().describe("The persona's scope identifier"),
+        dryRun: z.boolean().optional().describe("Compute the would-be diff only, with zero filesystem writes"),
+      },
+    },
+    wrapAction(port, personaSyncAction),
+  );
+
+  server.registerTool(
+    "persona_seed",
+    {
+      title: "Persona seed",
+      description:
+        "Idempotently seed the 3 global tiers (top-orchestrator/company-director/project-orchestrator) from the hardcoded TIER_CONTENT default into the global persona store (~/.mnemosyne/personas), skipping any tier already present.",
+      inputSchema: {
+        root: z.string().optional().describe("Override the global persona store's root (defaults to ~/.mnemosyne/personas)"),
+        scopeId: z.string().optional().describe("Override the seed scopeId (defaults to 'default')"),
+      },
+    },
+    wrapAction(port, personaSeedAction),
+  );
+
+  server.registerTool(
+    "persona_show",
+    {
+      title: "Persona show",
+      description:
+        "Read-only, live fetch of a global-tier persona's real, current content straight off the global persona store. No harness file is touched, no lock is taken, nothing is cached. Only valid for top-orchestrator/company-director/project-orchestrator -- code-architect personas live in a repo-local store this tool does not read.",
+      inputSchema: {
+        tier: z.string().describe("One of: top-orchestrator, company-director, project-orchestrator"),
+        scopeId: z.string().describe("The persona's scope identifier"),
+      },
+    },
+    wrapAction(port, (p, { tier, scopeId }) => personaShowAction(p, tier, scopeId)),
   );
 
   return server;
