@@ -1,10 +1,37 @@
 id: pu-14-design-fidelity-review
 epic: mnemosyne-persona-ux
 title: Design-fidelity review against pu-01's chosen synthesized option
-status: planned
+status: complete
 complexity: low
 methodology: tdd
 depends_on: [pu-12-draft-review-approve-ui]
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 849a856). This ticket produced 4 FLAGGED,
+  4 ACCEPTED deviations against pu-01's chosen "Trust-Gated Unified Queue"
+  option -- independently spot-checked all 4 FLAGGED claims against the
+  real shipped code myself (not just the write-up): confirmed
+  #personas-status-filter's default option is genuinely "all" not
+  "needs-review" (D1); confirmed lib/mnemosyne/layer1/persona.ts's Persona
+  interface has no origin/provenance/approvedAt field at all (D3); grepped
+  ui/app.js and ui/index.html for "approve all"/"ready to commit"/"batch"
+  -- zero hits, confirming the batch-approve strip was never built (D2);
+  confirmed loadPersonas()/loadDrafts() never pass ?repo= in their own
+  fetch calls, so no code-architect row can ever populate despite the
+  repo-grouping logic being correctly coded (D4). All 4 FLAGGED findings
+  hold up under independent verification -- these are real, currently
+  unaddressed gaps, not review artifacts. FLAGGED items are being carried
+  forward for the user's attention rather than silently treated as
+  complete: (1) status filter defaults to All not Needs review, (2) the
+  brief's "central bet" batch-approve mechanism was never built, (3) no
+  post-approval provenance note/data-model field survives approval, (4)
+  the "deciding factor" repo-hierarchy fix that justified choosing this
+  design over its alternatives is currently unreachable in the running UI.
+  All 4 ACCEPTED deviations have real, defensible rationale confirmed by
+  reading the code directly. Every deviation has an explicit disposition,
+  none left ambiguous. This ticket does not require a test-suite rerun
+  (docs-only deliverable) -- confirmed the diff is purely additive
+  (2 new/updated files, .pHive/design/ only, zero code touched).
 
 description: |
   Implements horizontal-plan.md H8's fidelity component: a review pass
