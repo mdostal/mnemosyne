@@ -6,10 +6,11 @@
 // Usage: node test/http-api.mjs
 
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse as parseYaml } from "yaml";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -98,6 +99,30 @@ async function writeFakeRepoLocalPersona(repoRoot, scopeId, { displayName, scope
       ...sections.flatMap((s) => [`  - heading: ${JSON.stringify(s.heading)}`, `    body: ${JSON.stringify(s.body)}`]),
     ].join("\n") + "\n";
   await writeFile(path.join(dir, `${scopeId}.yaml`), yamlText, "utf8");
+}
+
+/**
+ * pw-15-post-persona-routes: reads a global persona back directly off disk
+ * at persona-store-global.ts's fixed location convention
+ * (`<home>/.mnemosyne/personas/<tier>/<scopeId>.yaml`) and parses it with
+ * the same `yaml` package's `parse()` that `readGlobalPersona` itself calls
+ * internally -- this plain-`node`-run test file can't import
+ * persona-store-global.ts's `readGlobalPersona` in-process (no build step
+ * for .ts, same constraint `writeFakeGlobalPersona` above documents), so
+ * this is the closest equivalent: a real filesystem read + the identical
+ * parse call, not just trusting the HTTP response body.
+ */
+async function readWrittenGlobalPersona(home, tier, scopeId) {
+  const filePath = path.join(home, ".mnemosyne", "personas", tier, `${scopeId}.yaml`);
+  const raw = await readFile(filePath, "utf8");
+  return { filePath, persona: parseYaml(raw) };
+}
+
+/** Same as readWrittenGlobalPersona, but for the repo-local store's fixed location. */
+async function readWrittenRepoLocalPersona(repoRoot, scopeId) {
+  const filePath = path.join(repoRoot, ".mnemosyne", "personas", `${scopeId}.yaml`);
+  const raw = await readFile(filePath, "utf8");
+  return { filePath, persona: parseYaml(raw) };
 }
 
 async function waitForHealth(timeoutMs) {
@@ -361,6 +386,228 @@ async function main() {
     ok(
       corsNoOrigin.headers.get("access-control-allow-origin") !== "*",
       `GET /persona with no Origin header -> Access-Control-Allow-Origin is never a wildcard (got ${corsNoOrigin.headers.get("access-control-allow-origin")})`,
+    );
+
+    // --- POST /persona/:tier/:scopeId -- pw-15-post-persona-routes -------
+    // The 4th write-capable transport alongside CLI/MCP/skill-harness,
+    // wrapping writeGlobalPersona/writeRepoLocalPersona directly. Every
+    // "reject" assertion below checks the response body's error.message
+    // against the EXACT string the underlying store function itself throws
+    // (persona.ts's assertValidPersona / persona-store-global.ts's
+    // assertGlobalTier / persona-store-repo-local.ts's assertRepoLocalTier)
+    // -- since this plain-`node`-run test file can't import those .ts
+    // functions in-process to call them side-by-side (no build step, same
+    // constraint documented on writeFakeGlobalPersona above), an exact
+    // string match against their known thrown messages is the strongest
+    // available proof that the HTTP route surfaces their real error
+    // unchanged, with no re-derived/rewritten validation logic in between.
+
+    // --- successful global-tier write -> real on-disk file --------------
+    const globalCreateBody = {
+      tier: "company-director",
+      scopeId: "pw15-global-scope",
+      displayName: "PW15 Global Director",
+      scope: "Owns PW15's global-write test scope.",
+      sections: [{ heading: "What this tier owns", body: "PW15_GLOBAL_CREATE_MARKER" }],
+    };
+    const globalCreate = await j("POST", "/persona/company-director/pw15-global-scope", globalCreateBody);
+    ok(globalCreate.status === 201, `POST /persona/company-director/pw15-global-scope -> 201 (got ${globalCreate.status})`);
+    ok(globalCreate.body.created === true, "POST /persona/company-director/pw15-global-scope -> created:true");
+    ok(
+      typeof globalCreate.body.path === "string" && globalCreate.body.path.length > 0,
+      `POST /persona/company-director/pw15-global-scope -> response includes the on-disk path (got ${JSON.stringify(globalCreate.body.path)})`,
+    );
+
+    const globalOnDisk = await readWrittenGlobalPersona(fakeHome, "company-director", "pw15-global-scope");
+    ok(
+      globalOnDisk.persona.tier === "company-director" &&
+        globalOnDisk.persona.scopeId === "pw15-global-scope" &&
+        globalOnDisk.persona.displayName === globalCreateBody.displayName &&
+        globalOnDisk.persona.scope === globalCreateBody.scope &&
+        JSON.stringify(globalOnDisk.persona.sections) === JSON.stringify(globalCreateBody.sections),
+      `POST /persona/company-director/pw15-global-scope -> a REAL on-disk file matches the posted candidate (read directly off disk, not just the HTTP response) (got ${JSON.stringify(globalOnDisk.persona)})`,
+    );
+    ok(
+      globalOnDisk.filePath === globalCreate.body.path,
+      `POST /persona/company-director/pw15-global-scope -> response 'path' matches the real on-disk file path (got response=${globalCreate.body.path} disk=${globalOnDisk.filePath})`,
+    );
+
+    // the write is visible through the existing GET route too -- same store, same function family
+    const globalReadBackAfterCreate = await j("GET", "/persona/company-director/pw15-global-scope");
+    ok(
+      globalReadBackAfterCreate.status === 200 &&
+        globalReadBackAfterCreate.body.persona?.displayName === globalCreateBody.displayName,
+      "POST then GET /persona/company-director/pw15-global-scope -> the POST write is visible via the read route too",
+    );
+
+    // --- successful repo-local write -> real on-disk file, ?repo= query -
+    const repoCreateBody = {
+      tier: "code-architect",
+      scopeId: "pw15-repo-scope",
+      displayName: "PW15 Repo Architect",
+      scope: "Owns PW15's repo-local write test scope.",
+      sections: [{ heading: "What this tier owns", body: "PW15_REPO_CREATE_MARKER" }],
+    };
+    const repoCreate = await j(
+      "POST",
+      `/persona/code-architect/pw15-repo-scope?repo=${encodeURIComponent(root)}`,
+      repoCreateBody,
+    );
+    ok(
+      repoCreate.status === 201,
+      `POST /persona/code-architect/pw15-repo-scope?repo=... -> 201 (got ${repoCreate.status})`,
+    );
+    const repoOnDisk = await readWrittenRepoLocalPersona(root, "pw15-repo-scope");
+    ok(
+      repoOnDisk.persona.tier === "code-architect" &&
+        repoOnDisk.persona.scopeId === "pw15-repo-scope" &&
+        repoOnDisk.persona.displayName === repoCreateBody.displayName &&
+        repoOnDisk.persona.scope === repoCreateBody.scope &&
+        JSON.stringify(repoOnDisk.persona.sections) === JSON.stringify(repoCreateBody.sections),
+      `POST /persona/code-architect/pw15-repo-scope?repo=... -> a REAL on-disk file matches the posted candidate (got ${JSON.stringify(repoOnDisk.persona)})`,
+    );
+
+    // repo-local write with `repo` given in the request body instead of the query string --
+    // design_decisions: "repo-local writes need repo in the request body or query"
+    const repoCreateBody2 = { ...repoCreateBody, scopeId: "pw15-repo-scope-body", repo: root };
+    const repoCreate2 = await j("POST", "/persona/code-architect/pw15-repo-scope-body", repoCreateBody2);
+    ok(
+      repoCreate2.status === 201,
+      `POST /persona/code-architect/pw15-repo-scope-body (repo in request body) -> 201 (got ${repoCreate2.status})`,
+    );
+    const repoOnDisk2 = await readWrittenRepoLocalPersona(root, "pw15-repo-scope-body");
+    ok(
+      repoOnDisk2.persona.scopeId === "pw15-repo-scope-body",
+      "POST /persona/... with 'repo' in the request body -> real on-disk file written at the repo-local store",
+    );
+
+    // --- rejection: repo-local write with no repo at all -> 400 --------
+    const repoCreateNoRepo = await j("POST", "/persona/code-architect/pw15-missing-repo", {
+      tier: "code-architect",
+      scopeId: "pw15-missing-repo",
+      displayName: "x",
+      scope: "y",
+      sections: [],
+    });
+    ok(
+      repoCreateNoRepo.status === 400,
+      `POST /persona/code-architect/:scopeId with no repo (body or query) -> 400, never a 500 (got ${repoCreateNoRepo.status})`,
+    );
+    ok(
+      repoCreateNoRepo.body.error?.code === "missing_repo",
+      `POST /persona/code-architect/... with no repo -> error.code === missing_repo (got ${JSON.stringify(repoCreateNoRepo.body.error)})`,
+    );
+
+    // --- rejection: mandateSections smuggling -> 400, exact underlying message ---
+    const mandateSmuggleBody = {
+      tier: "company-director",
+      scopeId: "pw15-mandate-smuggle",
+      displayName: "x",
+      scope: "y",
+      sections: [],
+      mandateSections: [{ heading: "smuggled", body: "smuggled" }],
+    };
+    const mandateSmuggle = await j("POST", "/persona/company-director/pw15-mandate-smuggle", mandateSmuggleBody);
+    ok(
+      mandateSmuggle.status === 400,
+      `POST /persona/... (mandateSections smuggling) -> 400, never a 500 (got ${mandateSmuggle.status})`,
+    );
+    ok(
+      mandateSmuggle.body.error?.message ===
+        "Invalid persona: 'mandateSections' is never author-storable -- it is a shared, code-owned constant re-injected at render time (design-discussion.md §3a), never per-persona content. Remove it from the candidate before writing.",
+      `POST /persona/... (mandateSections smuggling) -> 400 body carries the EXACT error assertValidPersona itself throws, proving no behavioral drift between the HTTP route and the underlying write function (got ${JSON.stringify(mandateSmuggle.body.error)})`,
+    );
+    // the candidate must never have reached disk
+    await readWrittenGlobalPersona(fakeHome, "company-director", "pw15-mandate-smuggle").then(
+      () => ok(false, "POST /persona/... (mandateSections smuggling) -> must NOT write a file to disk"),
+      () => ok(true, "POST /persona/... (mandateSections smuggling) -> no file was written to disk (rejected before any write)"),
+    );
+
+    // --- rejection: tier/target mismatch -> 400, exact underlying message ---
+    // a code-architect candidate posted at a global-store URL tier
+    const tierMismatchBody = {
+      tier: "code-architect",
+      scopeId: "pw15-tier-mismatch",
+      displayName: "x",
+      scope: "y",
+      sections: [],
+    };
+    const tierMismatch = await j("POST", "/persona/top-orchestrator/pw15-tier-mismatch", tierMismatchBody);
+    ok(
+      tierMismatch.status === 400,
+      `POST /persona/top-orchestrator/... (tier/target mismatch) -> 400, never a 500 (got ${tierMismatch.status})`,
+    );
+    ok(
+      tierMismatch.body.error?.message ===
+        "The global persona store never holds 'code-architect' personas -- got tier 'code-architect'. code-architect personas belong in the repo-local store (persona-store-repo-local.ts), not this one. Refusing to write.",
+      `POST /persona/top-orchestrator/... (tier/target mismatch) -> 400 body carries the EXACT error writeGlobalPersona's own assertGlobalTier throws, proving no behavioral drift (got ${JSON.stringify(tierMismatch.body.error)})`,
+    );
+
+    // mirror case: a global-store-tier candidate posted at the repo-local route
+    const tierMismatchRepoBody = {
+      tier: "company-director",
+      scopeId: "pw15-tier-mismatch-repo",
+      displayName: "x",
+      scope: "y",
+      sections: [],
+    };
+    const tierMismatchRepo = await j(
+      "POST",
+      `/persona/code-architect/pw15-tier-mismatch-repo?repo=${encodeURIComponent(root)}`,
+      tierMismatchRepoBody,
+    );
+    ok(
+      tierMismatchRepo.status === 400,
+      `POST /persona/code-architect/...?repo=... (tier/target mismatch, global-store tier at the repo-local route) -> 400, never a 500 (got ${tierMismatchRepo.status})`,
+    );
+    ok(
+      tierMismatchRepo.body.error?.message ===
+        "The repo-local persona store only holds 'code-architect' personas -- got tier 'company-director', which belongs in the global store (not this one). Refusing to write.",
+      `POST /persona/code-architect/...?repo=... (tier/target mismatch) -> 400 body carries the EXACT error writeRepoLocalPersona's own assertRepoLocalTier throws, proving no behavioral drift (got ${JSON.stringify(tierMismatchRepo.body.error)})`,
+    );
+
+    // --- CORS: Access-Control-Allow-Origin on POST /persona/*, scoped -- not "*" ---
+    const postCorsBase = { tier: "company-director", displayName: "x", scope: "y", sections: [] };
+
+    const postCorsLoopbackRes = await fetch(BASE + "/persona/company-director/pw15-cors-loopback", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: UI_ORIGIN_LOOPBACK },
+      body: JSON.stringify({ ...postCorsBase, scopeId: "pw15-cors-loopback" }),
+    });
+    ok(
+      postCorsLoopbackRes.headers.get("access-control-allow-origin") === UI_ORIGIN_LOOPBACK,
+      `POST /persona/:tier/:scopeId from ${UI_ORIGIN_LOOPBACK} -> Access-Control-Allow-Origin: ${UI_ORIGIN_LOOPBACK} (got ${postCorsLoopbackRes.headers.get("access-control-allow-origin")})`,
+    );
+
+    const postCorsLocalhostRes = await fetch(BASE + "/persona/company-director/pw15-cors-localhost", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: UI_ORIGIN_LOCALHOST },
+      body: JSON.stringify({ ...postCorsBase, scopeId: "pw15-cors-localhost" }),
+    });
+    ok(
+      postCorsLocalhostRes.headers.get("access-control-allow-origin") === UI_ORIGIN_LOCALHOST,
+      `POST /persona/:tier/:scopeId from ${UI_ORIGIN_LOCALHOST} -> Access-Control-Allow-Origin: ${UI_ORIGIN_LOCALHOST} (got ${postCorsLocalhostRes.headers.get("access-control-allow-origin")})`,
+    );
+
+    const postCorsDisallowedRes = await fetch(BASE + "/persona/company-director/pw15-cors-disallowed", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: DISALLOWED_ORIGIN },
+      body: JSON.stringify({ ...postCorsBase, scopeId: "pw15-cors-disallowed" }),
+    });
+    ok(
+      postCorsDisallowedRes.headers.get("access-control-allow-origin") !== "*" &&
+        postCorsDisallowedRes.headers.get("access-control-allow-origin") !== DISALLOWED_ORIGIN,
+      `POST /persona/:tier/:scopeId from an unknown origin -> Access-Control-Allow-Origin is NOT a wildcard and does NOT reflect the disallowed origin (got ${postCorsDisallowedRes.headers.get("access-control-allow-origin")})`,
+    );
+
+    const postCorsNoOriginRes = await fetch(BASE + "/persona/company-director/pw15-cors-noorigin", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...postCorsBase, scopeId: "pw15-cors-noorigin" }),
+    });
+    ok(
+      postCorsNoOriginRes.headers.get("access-control-allow-origin") !== "*",
+      `POST /persona/:tier/:scopeId with no Origin header -> Access-Control-Allow-Origin is never a wildcard (got ${postCorsNoOriginRes.headers.get("access-control-allow-origin")})`,
     );
 
     // POST /recall -> 200 with RecallResult JSON

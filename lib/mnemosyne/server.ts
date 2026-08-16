@@ -24,6 +24,18 @@
  *   GET  /persona/:tier/:scopeId  -> read one persona (?repo=<path> required
  *                               for tier=code-architect) -- wraps
  *                               readGlobalPersona/readRepoLocalPersona
+ *   POST /persona/:tier/:scopeId  -> write one persona (pw-15-post-persona-
+ *                               routes): body is the persona candidate
+ *                               itself ({tier, scopeId, displayName, scope,
+ *                               sections, parentRefs?} -- the same bare
+ *                               shape the CLI's --file YAML / MCP's
+ *                               persona_create / skill-harness's
+ *                               personaCreateAction already accept), plus an
+ *                               optional `repo` field (or ?repo= query,
+ *                               required for tier=code-architect) -- wraps
+ *                               writeGlobalPersona/writeRepoLocalPersona
+ *                               directly, the 4th write-capable transport
+ *                               alongside CLI/MCP/skill-harness
  *   POST /recall  {query, scope, intent?}            -> RecallResult
  *   POST /remember {content: {text, metadata?}, scope, layer?} -> RememberResult
  *
@@ -44,11 +56,12 @@ import { stat } from 'node:fs/promises';
 import { MnemosyneClient } from './client.js';
 import type { Layer, Scope } from './interfaces.js';
 import { PERSONA_STORE_BY_TIER } from './layer1/persona.js';
-import { listGlobalPersonas, readGlobalPersona } from './layer1/persona-store-global.js';
+import { listGlobalPersonas, readGlobalPersona, writeGlobalPersona } from './layer1/persona-store-global.js';
 import {
   listRepoLocalPersonas,
   readRepoLocalPersona,
   REPO_LOCAL_PERSONA_TIER,
+  writeRepoLocalPersona,
 } from './layer1/persona-store-repo-local.js';
 import { TIERS, type Tier } from './layer1/tiers.js';
 
@@ -267,6 +280,87 @@ const server = http.createServer(async (req, res) => {
             message: error instanceof Error ? error.message : String(error),
           },
         });
+      }
+    }
+
+    if (req.method === 'POST' && url.pathname.startsWith('/persona/')) {
+      // POST /persona/:tier/:scopeId -- pw-15-post-persona-routes: the 4th
+      // write-capable transport alongside CLI/MCP/skill-harness. Wraps
+      // writeGlobalPersona/writeRepoLocalPersona directly -- no
+      // re-implemented validation/locking logic here, the exact same
+      // "wrap, never re-derive" principle the GET routes above already
+      // follow. Reuses applyPersonaCors as-is (no second CORS block).
+      applyPersonaCors(req, res);
+      const segments = url.pathname.slice('/persona/'.length).split('/').filter(Boolean);
+      if (segments.length !== 2) {
+        return sendJson(res, 404, { error: { code: 'not_found', message: `no route for ${route}` } });
+      }
+      const [tierParam, urlScopeId] = segments as [string, string];
+      if (!(TIERS as readonly string[]).includes(tierParam)) {
+        return badRequest(res, 'invalid_tier', `"tier" must be one of: ${TIERS.join(', ')}`);
+      }
+      const tier = tierParam as Tier;
+
+      let body: Record<string, unknown>;
+      try {
+        body = await readJsonBody(req);
+      } catch (error) {
+        const e = error as HttpError;
+        return badRequest(res, e.code ?? 'invalid_body', e.message);
+      }
+
+      // The request body IS the persona candidate itself -- the same bare
+      // {tier, scopeId, displayName, scope, sections, parentRefs?} shape the
+      // CLI's --file YAML, MCP's persona_create tool, and skill-harness's
+      // personaCreateAction all already accept, just parsed as JSON instead
+      // of YAML here. `repo`, when present, is THIS route's own routing
+      // metadata (which store to write to) -- not a persona field -- so
+      // it's stripped out before the rest is passed through UNCHANGED as
+      // the write functions' candidate argument. The URL's :tier segment
+      // only selects which store to call (mirrors the GET route's dispatch
+      // above); it is deliberately NOT cross-checked against the body's own
+      // `tier` field here -- that's exactly the "tier/target mismatch" case
+      // writeGlobalPersona/writeRepoLocalPersona's own assertGlobalTier/
+      // assertRepoLocalTier guards already reject (a code-architect
+      // candidate routed at the global store, or vice versa), so re-checking
+      // it here would be the reimplemented-validation this story explicitly
+      // rules out.
+      const { repo: bodyRepo, ...candidate } = body;
+
+      try {
+        if (PERSONA_STORE_BY_TIER[tier] === 'global') {
+          const filePath = writeGlobalPersona(candidate);
+          return sendJson(res, 201, { created: true, store: 'global', tier, scopeId: urlScopeId, path: filePath });
+        }
+        // repo-local (code-architect): requires a repo target -- same
+        // convention as the GET repo-local routes' ?repo=, accepted from
+        // either the request body (`repo`) or the query string (?repo=)
+        // (vertical-plan.md's Resolved Ambiguities #2: "repo-local writes
+        // need repo in the request body or query, same convention as the
+        // GET").
+        const repo = (typeof bodyRepo === 'string' && bodyRepo) || url.searchParams.get('repo');
+        if (!repo) {
+          return badRequest(
+            res,
+            'missing_repo',
+            '"repo" (request body field or query parameter) is required to write a code-architect persona',
+          );
+        }
+        const filePath = writeRepoLocalPersona(repo, candidate);
+        return sendJson(res, 201, { created: true, store: 'repo-local', tier, scopeId: urlScopeId, path: filePath });
+      } catch (error) {
+        // writeGlobalPersona/writeRepoLocalPersona throw -- writing nothing
+        // to disk -- for every validation failure: mandateSections
+        // smuggling, tier/store mismatch, or a schema violation
+        // (persona.ts's assertValidPersona/assertGlobalTier/
+        // assertRepoLocalTier). All of these are "the caller sent an
+        // invalid candidate," i.e. a 400 via the existing badRequest
+        // convention, never a 500.
+        return badRequest(
+          res,
+          'invalid_persona',
+          error instanceof Error ? error.message : String(error),
+        );
       }
     }
 
