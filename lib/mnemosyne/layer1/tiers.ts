@@ -21,6 +21,10 @@
  * Story: la-01-role-meta-file-sync (epic: mnemosyne-layer-architecture-v2)
  */
 
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import { readMnemosyneMdContent } from './level1Source.js';
+
 export const TIERS = [
   'top-orchestrator',
   'company-director',
@@ -106,24 +110,85 @@ export interface TierContent {
  * hardcoded TIER_CONTENT map. A persona itself is never allowed to carry its
  * own `mandateSections` (see `persona.ts`'s `assertValidPersona`); this is
  * the one constant every render path re-attaches at render time.
+ *
+ * ml-02 SOURCING DECISION (design-discussion.md §9 risk table): `mnemosyne.md`
+ * (repo root) is the canonical source for this text -- NOT a second,
+ * independently hand-editable copy of it. `MANDATE_SECTIONS` below is
+ * GENERATED at module load by parsing the `## Memory-lifecycle mandate`
+ * section out of the repo's own root `mnemosyne.md` (`parseMandateSectionsFromMarkdown`,
+ * `MANDATE_SECTIONS_SOURCE_PATH` below -- anchored to THIS module's own file
+ * location via `import.meta.url`, deliberately NOT `process.cwd()`, since
+ * this must always resolve to the Mnemosyne codebase's own file regardless
+ * of what directory a CLI invocation's `--repo` target happens to be).
+ * Edit the mandate text in `mnemosyne.md`; this constant picks it up
+ * automatically on the next process start. A missing/malformed mandate
+ * section here is a hard error (unlike `level1Source.ts`'s
+ * `readMnemosyneMdContent`, which returns `null` for an OPTIONAL, per-repo
+ * `mnemosyne.md`) -- this repo's OWN `mnemosyne.md` is a required, always-
+ * committed file; if the mandate silently went missing here, every synced
+ * repo's harness content would silently lose it too.
  */
-export const MANDATE_SECTIONS: readonly TierContentSection[] = [
-  {
-    heading: 'Recall on entry (mandatory)',
-    body:
-      "Before doing any work -- reading code, answering a question, planning a task -- call recall for this tier's scope first. On Claude Code, this already happens automatically: the installed `hooks/pre-recall.mjs` fires on every `UserPromptSubmit` (including the first prompt of a session, i.e. on entry) and injects prior memory into context -- see hooks/README.md; run `bin/mnemosyne-install-hooks` if this checkout's hooks are not yet wired into your settings.json. Codex and Gemini CLI have no equivalent startup-hook mechanism -- on those harnesses, YOU must call recall explicitly (the Mnemosyne service's `POST /recall`, or the `swarm-memory recall` CLI) before starting; this instruction is the enforcement surface. Skipping recall and re-deriving something already decided is the exact failure this mandate exists to close.",
-  },
-  {
-    heading: 'Remember on exit (mandatory)',
-    body:
-      'Before ending a session or task, call remember with the outcome -- what you did, decided, or learned -- even a short note. On Claude Code this happens automatically via the installed `hooks/post-remember.mjs` on `Stop`/`SubagentStop`. On harnesses without a hook, call remember explicitly (`POST /remember`, or the `swarm-memory` CLI) before finishing. A task that ends without a remember() call leaves no trace for the next agent -- recall on entry only works if someone wrote it down.',
-  },
-  {
-    heading: 'Flight-status awareness (mandatory)',
-    body:
-      "Every remembered entry carries a flight status resolved from real git state: `confirmed` on the default branch, `provisional` on any other branch, or `superseded` once replaced (never deleted). Default recall only surfaces `confirmed` entries plus your OWN current branch's `provisional` entries -- another branch's unmerged `provisional` work is hidden by default and must NOT be treated as settled fact, including if you deliberately surface it via the explicit cross-branch opt-in for review/debugging. If recall surfaces something and you are unsure of its status, treat it as provisional until independently confirmed -- never build on another branch's in-flight memory as if it were merged ground truth.",
-  },
-];
+
+// This module's own file, not process.cwd() -- see doc comment above.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const MANDATE_SECTIONS_SOURCE_PATH = path.resolve(__dirname, '..', '..', '..', 'mnemosyne.md');
+
+/**
+ * Parses the `## Memory-lifecycle mandate` section of `mnemosyne.md`'s
+ * markdown into the same `TierContentSection[]` shape the hand-authored
+ * literal used to be, by splitting on its `### ` subsection headings.
+ */
+export function parseMandateSectionsFromMarkdown(markdown: string): TierContentSection[] {
+  const lines = markdown.split('\n');
+  const headingIndex = lines.findIndex((line) => line.trim() === '## Memory-lifecycle mandate');
+  if (headingIndex === -1) {
+    throw new Error(
+      'mnemosyne.md is missing its "## Memory-lifecycle mandate" section -- MANDATE_SECTIONS is ' +
+        'generated from it (ml-02 sourcing decision, design-discussion.md §9) and cannot be empty. ' +
+        'Restore the section or fix the heading text.',
+    );
+  }
+  let sectionEnd = lines.length;
+  for (let i = headingIndex + 1; i < lines.length; i++) {
+    if ((lines[i] ?? '').startsWith('## ')) {
+      sectionEnd = i;
+      break;
+    }
+  }
+  const sectionText = lines.slice(headingIndex + 1, sectionEnd).join('\n').trim();
+
+  const chunks = sectionText.split(/\n(?=### )/).map((chunk) => chunk.trim()).filter(Boolean);
+  const sections = chunks.map((chunk) => {
+    const match = chunk.match(/^### (.+?)\s*\n\n([\s\S]*)$/);
+    if (!match) {
+      throw new Error(`Malformed "## Memory-lifecycle mandate" subsection in mnemosyne.md: ${chunk.slice(0, 80)}...`);
+    }
+    return { heading: match[1]!.trim(), body: match[2]!.trim() };
+  });
+
+  if (sections.length === 0) {
+    throw new Error(
+      'mnemosyne.md\'s "## Memory-lifecycle mandate" section has no "### " subsections -- ' +
+        'MANDATE_SECTIONS cannot be empty (ml-02 sourcing decision, design-discussion.md §9).',
+    );
+  }
+  return sections;
+}
+
+function loadMandateSections(): TierContentSection[] {
+  const content = readMnemosyneMdContent(MANDATE_SECTIONS_SOURCE_PATH);
+  if (content === null) {
+    throw new Error(
+      `MANDATE_SECTIONS could not be generated -- this repo's own canonical mnemosyne.md is missing ` +
+        `at ${MANDATE_SECTIONS_SOURCE_PATH}. Unlike a target repo's optional Level 1 file, THIS ` +
+        'repo\'s root mnemosyne.md is required: it is the sole source of the la-07 memory-lifecycle ' +
+        'mandate every tier renders (ml-02 sourcing decision, design-discussion.md §9).',
+    );
+  }
+  return parseMandateSectionsFromMarkdown(content);
+}
+
+export const MANDATE_SECTIONS: readonly TierContentSection[] = loadMandateSections();
 
 function tier(
   id: Tier,
