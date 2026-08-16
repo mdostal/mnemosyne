@@ -206,26 +206,49 @@ in kickoff-protocol.md" further down for the full mapping.
      `readRepoLocalPersona`, `persona-store-repo-local.ts`).
 
 8. **`remember()` the source material** (design-discussion.md §3b's "initial
-   crawl and feeding" requirement), using pw-09's `resolveRememberScope()`
-   resolver (`lib/mnemosyne/layer1/persona.ts`) -- never a separate,
-   invented scope-mapping scheme:
-   - Call `resolveRememberScope({tier, scopeId})` to get `{scope, tag}` --
-     `scope` is one of the four fixed `persona-<tier>` lanes
-     (`PERSONA_REMEMBER_SCOPE_BY_TIER`), `tag` is `scopeId` pre-sanitized to
-     `engine.mjs remember()`'s own tag rule.
-   - Per that resolver's own doc comment ("this resolver only owns the
-     scope-argument mapping... The caller \[...\] SHOULD also fold scopeId
-     into the remembered text itself so it stays recall-searchable, not just
-     present in the note's filename"), build the remembered `text` so it
-     explicitly names the tier and scopeId, not just relies on `tag`.
-     `interview-engine.mjs`'s `buildRememberText(persona)` does exactly this
-     -- reuse it rather than composing a differently-shaped text string.
-   - Fire the actual call via whichever transport this session already has:
-     the `mnemosyne-standalone` skill's `remember` action
-     (`node bin/mnemosyne-skill-helper.mjs remember '{"text":"...","scope":"...","tag":"..."}'`)
-     or the MCP `remember` tool -- both resolve to `POST /remember` ->
-     `engine.mjs`'s `remember()`, the one real target `resolveRememberScope()`
-     was designed for (persona.ts's doc comment, design-discussion.md §8).
+   crawl and feeding" requirement). **Now wired for real (pw-13)** --
+   [`persona-remember.mjs`](persona-remember.mjs)'s
+   `rememberInterviewSource(persona, opts?)` is the reference implementation
+   of this step, used directly by
+   `lib/mnemosyne/layer1/__tests__/persona-interview-crawl-and-feed.test.ts`'s
+   real, HTTP-round-tripping proof. Call it with the completed interview's
+   `persona` record right after step 7's write succeeds:
+   - It resolves the scope via pw-09's `resolveRememberScope()`
+     (`lib/mnemosyne/layer1/persona.ts`) through a REAL `tsx`-launched
+     `mnemosyne persona resolve-remember-scope --tier <tier> --scope-id
+     <scopeId>` subprocess (`bin/mnemosyne-persona.mjs`'s
+     `resolve-remember-scope` subcommand, added by this story) -- never a
+     separate, invented scope-mapping scheme, and never a hand-copied
+     re-derivation of `PERSONA_REMEMBER_SCOPE_BY_TIER`. `scope` is one of
+     the four fixed `persona-<tier>` lanes; `tag` is `scopeId` pre-sanitized
+     to `engine.mjs remember()`'s own tag rule.
+   - It builds the remembered `text` via `interview-engine.mjs`'s
+     `buildRememberText(persona)`, reused unchanged (never a second,
+     differently-shaped text string) -- per `resolveRememberScope`'s own doc
+     comment, this folds `tier`/`scopeId` into the text itself so it stays
+     recall-searchable, not just present in the note's filename.
+   - It fires the actual call via a REAL
+     `node bin/mnemosyne-skill-helper.mjs remember '{"text":"...","scope":"...","tag":"..."}'`
+     subprocess -- the `mnemosyne-standalone` skill's `remember` action,
+     which itself does a real `POST /remember` -> `engine.mjs`'s
+     `remember()`, the one real target `resolveRememberScope()` was designed
+     for (persona.ts's doc comment, design-discussion.md §8). Chosen over
+     the MCP transport for the same reason step 7 picks the CLI over MCP for
+     the write primitive: a live Claude Code skill session always has a
+     direct shell-out primitive, but may not have an open MCP connection.
+     Nothing stops a caller from instead driving the MCP `remember` tool
+     with the same `{text, scope, tag}` -- both resolve to the same
+     `POST /remember` -- but the skill-helper CLI is this step's default.
+   - It fires **unconditionally**, even for a maximally-skipped interview:
+     `persona.sections` always has at least the 3 skip-placeholder core
+     entries (the non-blocking hard-fail rule, pw-10/pw-12), so
+     `buildRememberText` always produces real, non-empty text and
+     crawl-and-feed never silently no-ops just because most questions were
+     skipped (this story's explicit risk mitigation).
+   - Returns `{ok, scope, tag, text, file, chunksUpserted, response, error}`
+     -- `ok` is true only once the real `remember()` call itself reports
+     `remembered:true`; `file` is the real on-disk note path, usable to
+     independently confirm the write landed.
    - **Known operational caveat** (design-discussion.md §8, "Known tradeoff,
      accepted"): the four `persona-*` lanes must be provisioned once in
      `swarm-memory`'s `config.toml` before the first real `remember()` call
@@ -365,6 +388,18 @@ ever touches disk is by spawning the real `mnemosyne persona create` (and
 second, in-process write path. `persona-writer.d.mts` is its hand-written
 type companion (same convention as `interview-engine.d.mts`).
 
+[`persona-remember.mjs`](persona-remember.mjs) (pw-13) -- step 8's reference
+implementation: `rememberInterviewSource()`, `resolveRememberScopeViaCli()`,
+`fireRememberCall()`. Deliberately imports nothing from `persona.ts`
+directly (same TS/JS-boundary constraint `persona-writer.mjs` already works
+around) -- the only way it ever resolves a scope is by spawning the real
+`mnemosyne persona resolve-remember-scope` CLI subprocess
+(`bin/mnemosyne-persona.mjs`'s `resolve-remember-scope` subcommand), and the
+only way it ever calls `remember()` is by spawning the real `node
+bin/mnemosyne-skill-helper.mjs remember` CLI subprocess -- never a
+second, in-process/simulated write path. `persona-remember.d.mts` is its
+hand-written type companion (same convention as `interview-engine.d.mts`).
+
 ## See also
 
 - `~/.claude/plugins/cache/plugin-hive/plugin-hive/*/hive/references/kickoff-protocol.md`
@@ -393,3 +428,11 @@ type companion (same convention as `interview-engine.d.mts`).
   subprocess (full-answers, partially-skipped, code-architect + `parentRefs`
   cases), and a structural check that `persona-writer.mjs` introduces no
   new/parallel write path.
+- [`../../lib/mnemosyne/layer1/__tests__/persona-interview-crawl-and-feed.test.ts`](../../lib/mnemosyne/layer1/__tests__/persona-interview-crawl-and-feed.test.ts)
+  (pw-13) -- proves step 8's `rememberInterviewSource()` fires a REAL
+  `remember()` call (real HTTP -> `engine.mjs` -> note-file-on-disk, against
+  a real `src/server.mjs` subprocess with only the `swarm-memory` binary
+  itself swapped for a test double), that its scope genuinely comes from
+  `resolveRememberScope()` (not a hardcoded/parallel scheme), and that a
+  maximally-skipped interview (pw-12's exact skip-all pattern, both the
+  global-tier and code-architect cases) still triggers a real call.

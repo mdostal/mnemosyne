@@ -115,6 +115,18 @@
 //                     writeGlobalPersona's own assertGlobalTier guard
 //                     rejects it before any disk write.
 //
+//   resolve-remember-scope --tier <tier> --scope-id <id>
+//                     pw-13-crawl-and-feed-wiring: the ONE real TS/JS-boundary
+//                     crossing point for skills/mnemosyne-persona-interview/
+//                     persona-remember.mjs (a plain ESM module, same
+//                     no-build-step constraint as this whole file -- see the
+//                     "Must be launched via tsx" note below) to call pw-09's
+//                     resolveRememberScope() (persona.ts) for real, never a
+//                     hand-copied/reimplemented version of that mapping. Pure
+//                     pass-through: prints resolveRememberScope({tier,
+//                     scopeId})'s own `{scope, tag}` result as JSON, no
+//                     filesystem access, no persona-store read/write.
+//
 //   show TIER SCOPE_ID   pf-13-cli-persona-show: the on-demand fetch surface
 //                     an agent uses after following pf-12's rendered
 //                     "Parent context (query up)" pointer -- prints that
@@ -165,7 +177,7 @@ import { spliceManagedBlock } from "../lib/mnemosyne/layer1/block.ts";
 import { HARNESS_TARGETS } from "../lib/mnemosyne/layer1/harness.ts";
 import { DEFAULT_LEVEL0_PATH, readLevel0Content } from "../lib/mnemosyne/layer1/level0.ts";
 import { TIERS } from "../lib/mnemosyne/layer1/tiers.ts";
-import { PERSONA_STORE_BY_TIER } from "../lib/mnemosyne/layer1/persona.ts";
+import { PERSONA_STORE_BY_TIER, resolveRememberScope } from "../lib/mnemosyne/layer1/persona.ts";
 import { readGlobalPersona, writeGlobalPersona } from "../lib/mnemosyne/layer1/persona-store-global.ts";
 import { writeRepoLocalPersona } from "../lib/mnemosyne/layer1/persona-store-repo-local.ts";
 import { run as runPersonaSeed } from "./mnemosyne-persona-seed.mjs";
@@ -209,7 +221,13 @@ const USAGE_CREATE = [
   "  --root, primarily for test isolation.",
 ].join("\n");
 
-const USAGE = `${USAGE_SYNC}\n${USAGE_SEED}\n${USAGE_SHOW}\n${USAGE_CREATE}`;
+const USAGE_RESOLVE_REMEMBER_SCOPE = [
+  "usage: mnemosyne persona resolve-remember-scope --tier <tier> --scope-id <id>",
+  "  Prints resolveRememberScope({tier, scopeId})'s real {scope, tag} result as JSON --",
+  "  the ONE real remember()-scope mapping (persona.ts, pw-09). No filesystem access.",
+].join("\n");
+
+const USAGE = `${USAGE_SYNC}\n${USAGE_SEED}\n${USAGE_SHOW}\n${USAGE_CREATE}\n${USAGE_RESOLVE_REMEMBER_SCOPE}`;
 
 export function parseArgs(argv) {
   const args = {
@@ -472,6 +490,35 @@ function runCreate(args, { log, warn }) {
   return { ok: true, filePath: writtenPath };
 }
 
+/**
+ * `persona resolve-remember-scope --tier <tier> --scope-id <id>` -- pw-13.
+ * Pure pass-through to persona.ts's `resolveRememberScope` (pw-09) -- the
+ * ONE real crossing point a plain-ESM caller (persona-remember.mjs) uses to
+ * invoke that TS function for real, mirroring `create`'s/`show`'s own
+ * "thin wrapper, no reimplemented logic" shape. Zero filesystem access:
+ * resolveRememberScope is a pure `{tier, scopeId} -> {scope, tag}` function,
+ * same "same {tier, scopeId} in -> same {scope, tag} out, always" contract
+ * its own doc comment states.
+ */
+function runResolveRememberScope(args, { log, warn }) {
+  if (!args.tier || !args.scopeId) {
+    warn("mnemosyne persona resolve-remember-scope: --tier and --scope-id are both required");
+    warn(USAGE_RESOLVE_REMEMBER_SCOPE);
+    return { ok: false };
+  }
+
+  let resolution;
+  try {
+    resolution = resolveRememberScope({ tier: args.tier, scopeId: args.scopeId });
+  } catch (e) {
+    warn(`mnemosyne persona resolve-remember-scope: ${e.message}`);
+    return { ok: false };
+  }
+
+  log(JSON.stringify(resolution));
+  return { ok: true, ...resolution };
+}
+
 export async function run(argv, { log = console.log, warn = console.error } = {}) {
   if (argv[0] === "--help" || argv[0] === "-h") {
     log(USAGE);
@@ -492,6 +539,9 @@ export async function run(argv, { log = console.log, warn = console.error } = {}
   const args = parseArgs(argv);
   if (args.subcommand === "create") {
     return runCreate(args, { log, warn });
+  }
+  if (args.subcommand === "resolve-remember-scope") {
+    return runResolveRememberScope(args, { log, warn });
   }
   if (args.subcommand !== "sync") {
     warn(`mnemosyne persona: unknown or missing subcommand '${args.subcommand ?? ""}'`);
