@@ -1,10 +1,43 @@
 id: pu-10-personas-panel-redesign-shell
 epic: mnemosyne-persona-ux
 title: Personas panel shell rebuild per pu-01's chosen synthesized option
-status: planned
+status: complete
 complexity: high
 methodology: tdd
 depends_on: [pu-01-multi-swarm-design-exploration]
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 0fe3a67). Independently verified: read
+  selection.md and synthesized/option-2.md in full, cross-checked the
+  shipped shell's structure against it (single grouped/filterable list, no
+  tabs; group-by radiogroup reusing the .mode-toggle idiom; native <select>
+  status filter; Repo-grouping keeps the 3 global tiers as labeled
+  sub-groups per the "deciding factor" fix named in selection.md; glossary
+  <details> block; parentRefs upgraded to an interactive-but-still-
+  pointer-only focus jump with filter self-heal + aria-live announcement).
+  Confirmed the deliberate scope boundary (no draft-review accordion/
+  approve/discard/batch-approve here) is legitimate, not a shortfall --
+  cross-checked directly against this ticket's own acceptance criteria
+  (view-layer only, GET /persona/draft explicitly out of scope) and
+  horizontal-plan.md H7's component split, which assigns that surface to
+  pu-12. Read the full ui/app.js diff -- confirmed loadPersonas()'s fetch
+  logic is byte-for-byte unchanged (same fetch calls, same
+  personaServiceOrigin() pattern), only its final render loop was replaced
+  with a call to the new renderPersonas(), which itself makes zero fetch
+  calls. Confirmed the one modified pre-existing test assertion
+  (persona-write-form.mjs) is an honest, well-justified update, not a
+  weakened guard. Confirmed via merge-base check this worktree's base was
+  STALE (missing pu-09's merge) -- resolved by merging via commit hash into
+  the up-to-date integration worktree, not a branch-name merge. Reran the
+  full UI test suite myself in both the builder's worktree and the merged
+  integration worktree (personas-panel-shell.mjs: 47/47, persona-write-
+  form.mjs, persona-layer-stack.mjs, ui-shell.mjs: all passing), tsc
+  --noEmit (clean both times), and vitest lib/mnemosyne/layer1 (246/246) in
+  the merged tree as a broader regression check. Did not independently
+  reproduce the builder's own Playwright keyboard-walk, but the static
+  assertion suite's non-disabled/real-button/no-href=#/tabindex checks
+  substantiate the same keyboard-reachability claims from a different
+  angle. All acceptance criteria met.
 
 description: |
   Implements horizontal-plan.md H7's shell component: the actual "heavy
