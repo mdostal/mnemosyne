@@ -1,9 +1,16 @@
 id: pw-06-skill-harness-persona-create
 epic: mnemosyne-persona-wizard
 title: skill-harness personaCreateAction
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-15 (commit 0a483bf). Real TDD, independently verified:
+  reran skill-harness tests, vitest (150/150), tsc clean. Confirmed pure
+  subprocess pass-through, zero new business logic, matching the existing
+  persona-sync/persona-seed/persona-show shape exactly. All acceptance
+  criteria met.
 depends_on: [pw-05-cli-persona-create]
 
 description: |
