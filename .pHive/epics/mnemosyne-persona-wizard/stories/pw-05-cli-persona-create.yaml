@@ -1,9 +1,18 @@
 id: pw-05-cli-persona-create
 epic: mnemosyne-persona-wizard
 title: "CLI: mnemosyne persona create"
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-15 (commit d553a09). Real TDD, independently verified:
+  reran persona-cli tests (128/128), vitest (150/150), tsc clean. Sound
+  interface design: --file <path> for the full structured candidate
+  (sections/parentRefs have no clean flat-flag encoding), --repo presence
+  (not a redundant --tier flag) as the store-routing signal. Confirmed
+  mandateSections smuggling and tier/store mismatches (both directions)
+  rejected before any disk write. All acceptance criteria met.
 depends_on: []
 
 description: |
