@@ -1,9 +1,23 @@
 id: ml-03-sync-three-source-composition
 epic: mnemosyne-memory-levels
 title: "sync.ts 3-part/2-part composition + idempotency regression + install-mechanism confirmation"
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 98dbf14). Independently verified: manually
+  traced buildManagedBody's new flatMap-based join for both the 2-part
+  (Level 1 absent) and 3-part (present) cases and confirmed the 2-part case
+  produces byte-identical output to the original array-join code, and the
+  3-part case correctly orders Level 0 -> Level 1 -> tier content with the
+  same divider convention. Confirmed via git diff --stat that block.ts,
+  lock.ts, harness.ts, and bin/mnemosyne-persona.mjs all have zero diff --
+  the install mechanism genuinely needed no new CLI surface. Confirmed
+  buildManagedBody's external signature is unchanged (Level 1 resolved
+  internally from the existing repoRoot parameter). Reran the 7 new tests
+  plus the full suite (tsc --noEmit clean, vitest lib/mnemosyne/layer1
+  210/210) myself. All acceptance criteria met.
 depends_on: [ml-02-mnemosyne-md-source-reader]
 
 description: |
