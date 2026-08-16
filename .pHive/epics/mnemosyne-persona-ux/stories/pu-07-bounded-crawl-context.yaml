@@ -1,9 +1,26 @@
 id: pu-07-bounded-crawl-context
 epic: mnemosyne-persona-ux
 title: "Interview skill: bounded, capped crawl -> sourceSummary"
-status: planned
+status: complete
 complexity: medium
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 9b9e069). Independently verified: read
+  crawl-context.mjs in full -- confirmed a fixed, named 5-source list (README,
+  manifest, CLAUDE.md, AGENTS.md, parent-summary-via-CLI), confirmed all 3
+  caps (MAX_LINES_PER_SOURCE, MAX_CHARS_PER_SOURCE, MAX_SOURCE_SUMMARY_CHARS)
+  are genuinely enforced in code (capExcerpt/assembleSourceSummary), not
+  just documented. Confirmed the "query up, never copy down" guarantee for
+  the parent-persona source: readParentPersonaSummary only regex-extracts
+  the displayName:/scope: lines from `persona show`'s plain-text output and
+  discards everything from the blank line onward (the real sections
+  content) -- verified this is genuinely impossible to leak given the
+  parsing logic, not just asserted. Confirmed non-blocking behavior (always
+  returns a valid sourceSummary even with zero sources present). Reran the
+  13 new tests (13/13), tsc --noEmit (clean), and the combined suite with
+  pu-02 merged alongside (230/230 = 196 base + 21 pu-02 + 13 pu-07, no
+  conflicts) myself. All acceptance criteria met.
 depends_on: []
 
 description: |
