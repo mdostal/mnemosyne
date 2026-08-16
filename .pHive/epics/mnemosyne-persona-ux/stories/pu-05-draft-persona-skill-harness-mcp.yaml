@@ -1,9 +1,23 @@
 id: pu-05-draft-persona-skill-harness-mcp
 epic: mnemosyne-persona-ux
 title: Draft persona skill-harness action + MCP tool wraps
-status: planned
+status: complete
 complexity: low
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 39fbb44 + a fixup removing incidental
+  allowScripts noise the builder's own npm install run left in package.json,
+  found during review). Independently verified: grepped both
+  bin/mnemosyne-skill-helper.mjs and bin/mnemosyne-mcp.mjs for any import of
+  persona-draft-store.ts or persona-store-*.ts -- confirmed zero, only
+  doc-comment mentions. Reran test/skill-harness-persona-draft.mjs and
+  test/mcp-server-persona.mjs myself (all pass). Reran vitest
+  lib/mnemosyne/layer1 -- hit one real but understood transient failure (a
+  port-8542 collision with a concurrently-running, unrelated agent's own
+  test server for a completely different, unmodified test file) -- confirmed
+  clean (230/230) on rerun once the port freed. Reran tsc --noEmit (clean)
+  myself. All acceptance criteria met.
 depends_on: [pu-04-draft-persona-cli]
 
 description: |
