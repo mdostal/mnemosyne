@@ -1,6 +1,16 @@
 // mcp-server-persona.mjs — mnemosyne-persona-mcp-tools: real end-to-end
-// verification that persona_sync/persona_seed/persona_show work as real MCP
-// tools when the real bin/mnemosyne-mcp.mjs process is launched.
+// verification that persona_sync/persona_seed/persona_show/persona_create
+// work as real MCP tools when the real bin/mnemosyne-mcp.mjs process is
+// launched.
+//
+// persona_create coverage (pw-07-mcp-persona-create) extends this file --
+// persona_create is a thin wrapAction() wrap of pw-06's personaCreateAction
+// (bin/mnemosyne-skill-helper.mjs), itself a pass-through to pw-05's
+// `persona create --file <path> [--repo <path>] [--root <path>]` CLI verb.
+// No new logic here either -- just the same real-MCP-client-over-stdio
+// convention this file already uses for the other 3 persona tools, extended
+// with a candidate-YAML-fixture writer mirroring test/persona-cli.mjs's own
+// personaCandidateYaml/writeCandidateFile helpers.
 //
 // Real end-to-end, same posture as test/mcp-server.mjs and
 // test/mcp-server-graphify.mjs: a real MCP Client (StdioClientTransport)
@@ -65,9 +75,43 @@ async function makeFakeHome() {
   return home;
 }
 
+/**
+ * Serializes an arbitrary persona-shaped candidate object to the same YAML
+ * shape persona-store-{global,repo-local}.ts round-trip via `stringify` --
+ * used as `persona create --file <path>`'s input fixture. Mirrors
+ * test/persona-cli.mjs's own personaCandidateYaml() -- deliberately
+ * serializes WHATEVER keys the candidate object has, including a smuggled
+ * `mandateSections` key, so nothing gets silently dropped before the CLI
+ * (and, in turn, personaCreateAction/persona_create) even sees it.
+ */
+function personaCandidateYaml(candidate) {
+  const lines = [];
+  for (const key of ["tier", "scopeId", "displayName", "scope"]) {
+    if (candidate[key] !== undefined) lines.push(`${key}: ${JSON.stringify(candidate[key])}`);
+  }
+  for (const key of ["sections", "mandateSections"]) {
+    if (candidate[key] !== undefined) {
+      lines.push(`${key}:`);
+      for (const s of candidate[key]) {
+        lines.push(`  - heading: ${JSON.stringify(s.heading)}`, `    body: ${JSON.stringify(s.body)}`);
+      }
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+
+/** Writes a `persona create --file <path>` fixture under `dir`, returning the file path written. */
+async function writeCandidateFile(dir, filename, candidate) {
+  const filePath = path.join(dir, filename);
+  await writeFile(filePath, personaCandidateYaml(candidate), "utf8");
+  return filePath;
+}
+
 async function main() {
   const fakeHome = await makeFakeHome();
   const fakeRepo = await mkdtemp(path.join(os.tmpdir(), "mnemosyne-mcp-persona-repo-"));
+  const fakeContentDir = await mkdtemp(path.join(os.tmpdir(), "mnemosyne-mcp-persona-create-content-"));
+  const fakeCreateRepo = await mkdtemp(path.join(os.tmpdir(), "mnemosyne-mcp-persona-create-repo-"));
 
   const transport = new StdioClientTransport({
     command: process.execPath,
@@ -128,10 +172,112 @@ async function main() {
     ok(!missingResult.isError, "persona_show on an unseeded scope is not an MCP transport error");
     const missing = toolResultJson(missingResult);
     ok(missing?.ok === false, "persona_show on an unseeded scope returns ok:false in its own JSON payload");
+
+    // persona_create (pw-07) -- global tier, no repo -> writes into the fake
+    // $HOME's global store, matching pw-05/pw-06's own CLI/action behavior
+    // byte-for-byte (this tool is a thin wrapAction() wrap, no new logic).
+    const createGlobalFile = await writeCandidateFile(fakeContentDir, "create-global.yaml", {
+      tier: "top-orchestrator",
+      scopeId: "mcp-create-global-scope",
+      displayName: "Top Orchestrator",
+      scope: "MCP_CREATE_GLOBAL_SCOPE_MARKER — authored via persona_create.",
+      sections: [{ heading: "Authored section", body: "MCP_CREATE_GLOBAL_BODY_MARKER — real persona_create write." }],
+    });
+    const createGlobalResult = await client.callTool({
+      name: "persona_create",
+      arguments: { file: createGlobalFile },
+    });
+    ok(!createGlobalResult.isError, `persona_create (global tier) did not error (${JSON.stringify(createGlobalResult)})`);
+    const createGlobal = toolResultJson(createGlobalResult);
+    ok(createGlobal?.ok === true, `persona_create (global tier) returns ok:true (${JSON.stringify(createGlobal)})`);
+    const writtenGlobal = await readFile(
+      path.join(fakeHome, ".mnemosyne", "personas", "top-orchestrator", "mcp-create-global-scope.yaml"),
+      "utf8",
+    ).catch(() => null);
+    ok(writtenGlobal !== null, "persona_create (global tier) via MCP actually wrote a real global persona file under the fake $HOME");
+    ok(
+      writtenGlobal?.includes("MCP_CREATE_GLOBAL_SCOPE_MARKER") && writtenGlobal?.includes("MCP_CREATE_GLOBAL_BODY_MARKER"),
+      "persona_create (global tier) via MCP wrote the candidate's real content, unchanged",
+    );
+
+    // persona_create -- repo-local tier (code-architect), --repo given ->
+    // writes into the repo-local store, proving `repo`/`file`/`root` are all
+    // threaded through to personaCreateAction untouched.
+    const createRepoFile = await writeCandidateFile(fakeContentDir, "create-repo.yaml", {
+      tier: "code-architect",
+      scopeId: "mcp-create-repo-scope",
+      displayName: "Code/Area Architect",
+      scope: "MCP_CREATE_REPO_SCOPE_MARKER — authored via persona_create.",
+      sections: [{ heading: "Authored section", body: "MCP_CREATE_REPO_BODY_MARKER — real persona_create write." }],
+    });
+    const createRepoResult = await client.callTool({
+      name: "persona_create",
+      arguments: { file: createRepoFile, repo: fakeCreateRepo },
+    });
+    ok(!createRepoResult.isError, `persona_create (repo-local tier) did not error (${JSON.stringify(createRepoResult)})`);
+    const createRepo = toolResultJson(createRepoResult);
+    ok(createRepo?.ok === true, `persona_create (repo-local tier) returns ok:true (${JSON.stringify(createRepo)})`);
+    const writtenRepo = await readFile(
+      path.join(fakeCreateRepo, ".mnemosyne", "personas", "mcp-create-repo-scope.yaml"),
+      "utf8",
+    ).catch(() => null);
+    ok(writtenRepo !== null, "persona_create (repo-local tier) via MCP actually wrote a real persona file under --repo");
+    ok(
+      writtenRepo?.includes("MCP_CREATE_REPO_SCOPE_MARKER") && writtenRepo?.includes("MCP_CREATE_REPO_BODY_MARKER"),
+      "persona_create (repo-local tier) via MCP wrote the candidate's real content, unchanged",
+    );
+
+    // persona_create -- a candidate with a bad (unknown) tier value comes
+    // back as ok:false in the tool's own JSON payload, matching wrapAction's
+    // contract: a handled CLI failure (non-zero exit, not a thrown/rejected
+    // fetch) is never surfaced as an MCP transport error. `tier` lives inside
+    // --file's YAML content, not a schema-checked top-level MCP argument, so
+    // this exercises personaCliRun's own error path, same as
+    // AC-create-mandate-reject below.
+    const createBadTierFile = await writeCandidateFile(fakeContentDir, "create-bad-tier.yaml", {
+      tier: "not-a-real-tier",
+      scopeId: "mcp-create-bad-tier-scope",
+      displayName: "Not A Real Tier",
+      scope: "A candidate with an unknown tier.",
+      sections: [{ heading: "Section", body: "body" }],
+    });
+    const createBadTierResult = await client.callTool({
+      name: "persona_create",
+      arguments: { file: createBadTierFile },
+    });
+    ok(!createBadTierResult.isError, "persona_create with a bad tier is not an MCP transport error");
+    const createBadTier = toolResultJson(createBadTierResult);
+    ok(createBadTier?.ok === false, "persona_create with a bad tier returns ok:false in its own JSON payload");
+
+    // persona_create -- a candidate smuggling a `mandateSections` key is
+    // rejected by assertValidPersona's own guard (persona.ts), surfaced the
+    // same ok:false way, and never reaches disk.
+    const createMandateFile = await writeCandidateFile(fakeContentDir, "create-mandate-smuggle.yaml", {
+      tier: "company-director",
+      scopeId: "mcp-create-mandate-scope",
+      displayName: "Company Director",
+      scope: "Attempted mandateSections smuggling via persona_create.",
+      sections: [{ heading: "Section", body: "body" }],
+      mandateSections: [{ heading: "Fake mandate", body: "should never be author-storable" }],
+    });
+    const createMandateResult = await client.callTool({
+      name: "persona_create",
+      arguments: { file: createMandateFile },
+    });
+    ok(!createMandateResult.isError, "persona_create with a smuggled mandateSections is not an MCP transport error");
+    const createMandate = toolResultJson(createMandateResult);
+    ok(createMandate?.ok === false, "persona_create with a smuggled mandateSections returns ok:false in its own JSON payload");
+    const mandateWritten = await readFile(
+      path.join(fakeHome, ".mnemosyne", "personas", "company-director", "mcp-create-mandate-scope.yaml"),
+      "utf8",
+    ).catch(() => null);
+    ok(mandateWritten === null, "persona_create rejected the mandateSections smuggling BEFORE any disk write");
   } finally {
     await client.close().catch(() => {});
     await rm(fakeHome, { recursive: true, force: true });
     await rm(fakeRepo, { recursive: true, force: true });
+    await rm(fakeContentDir, { recursive: true, force: true });
+    await rm(fakeCreateRepo, { recursive: true, force: true });
   }
 
   console.log(`\n${fails === 0 ? "all mcp-server-persona checks passed" : `${fails} FAILURE(S)`}`);
