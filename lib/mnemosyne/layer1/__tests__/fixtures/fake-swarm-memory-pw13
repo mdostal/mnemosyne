@@ -1,0 +1,8 @@
+#!/bin/sh
+# Shell shim so the test double never relies on `env node` PATH resolution
+# (engine.mjs's CHILD_ENV prepends /opt/homebrew/bin, which can shadow the
+# Node actually running the test suite with an unrelated/broken install).
+# Mirrors test/fixtures/fake-swarm-memory's own shim exactly, pointed at
+# this story's own fixture. MNEMO_TEST_NODE is set by the spawning test to
+# process.execPath.
+exec "${MNEMO_TEST_NODE:-node}" "$(dirname "$0")/fake-swarm-memory-pw13.mjs" "$@"

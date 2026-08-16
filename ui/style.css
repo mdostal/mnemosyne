@@ -557,9 +557,111 @@ main {
   overflow-y: auto;
 }
 
+/* pw-17-personas-panel-write-form: create/edit form, styled to match
+   #add-lane-form/#reindex-form's existing convention exactly (scoped
+   #persona-form rules only -- no changes to existing rules above). */
+#persona-form h3 {
+  margin: 1.25rem 0 0.75rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+#persona-form .form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.6rem;
+  max-width: 480px;
+}
+
+#persona-form label {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+#persona-form input,
+#persona-form select,
+#persona-form textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.45rem 0.6rem;
+  color: var(--text);
+  font-size: 0.9rem;
+  font-family: inherit;
+}
+
+#persona-form textarea {
+  resize: vertical;
+}
+
+#persona-form button {
+  background: var(--accent);
+  color: #10131a;
+  border: none;
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+#persona-form button:hover { opacity: 0.9; }
+#persona-form button:disabled { opacity: 0.5; cursor: default; }
+
+#persona-form-status {
+  margin: 0.6rem 0 0;
+}
+
 footer {
   padding: 1rem 1.5rem;
   color: var(--muted);
   font-size: 0.8rem;
   text-align: center;
+}
+
+/* ====================================================================
+   pw-04-layer-stack-visibility: layer-stack visibility section.
+   ADDITIVE / SELF-CONTAINED -- scoped entirely to #persona-layer-stack
+   and its children, no changes to existing rules above.
+   ==================================================================== */
+#persona-layer-stack-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  margin-bottom: 1.25rem;
+}
+
+#persona-layer-stack-table th,
+#persona-layer-stack-table td {
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+
+#persona-layer-stack-table th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+#persona-layer-stack-table td:nth-child(2) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+#persona-level0-pointer {
+  border-top: 1px solid var(--border);
+  padding-top: 0.85rem;
+  margin-top: 0.25rem;
+}
+
+#persona-level0-pointer h3 {
+  margin: 0 0 0.4rem;
+  font-size: 0.9rem;
+}
+
+#persona-level0-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }

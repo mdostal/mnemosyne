@@ -18,6 +18,10 @@
  * source of truth for that split — both store backends and any future
  * caller should consult it rather than hardcoding the mapping again.
  *
+ * `resolveRememberScope` (pw-09, OQ2) additionally maps a persona's
+ * `{tier, scopeId}` to a real `remember()` call's `scope`/`tag` arguments —
+ * see that function's own doc comment for the full rationale.
+ *
  * Story: pf-01-persona-schema-repo-local-store (epic: mnemosyne-persona-foundation)
  */
 
@@ -77,6 +81,96 @@ export interface Persona {
    * by both which tier's store to look in and which scopeId within it.
    */
   parentRefs?: { tier: Tier; scopeId: string }[];
+}
+
+/**
+ * OQ2 resolver — persona `{tier, scopeId}` -> `remember()` scope mapping
+ * (pw-09-remember-scope-mapping; full rationale in a design-discussion.md
+ * addendum, "OQ2 Resolution (pw-09)"). Short version for readers who land
+ * directly on this code:
+ *
+ * TARGET: `src/engine.mjs`'s `remember(text, scope, opts)` — deliberately
+ * NOT `lib/mnemosyne/client.ts`'s `MnemosyneClient.remember()`. This is not
+ * a preference, it's a fact about which implementation the wizard's actual
+ * caller (pw-10's interview skill, a running Claude Code skill) can reach:
+ * a skill's two real transports for firing a `remember()` call —
+ * `bin/mnemosyne-mcp.mjs`'s MCP `"remember"` tool and
+ * `bin/mnemosyne-skill-helper.mjs`'s `rememberAction` — both default to
+ * `DEFAULT_PORT` 8477, `src/server.mjs`'s `POST /remember`, which calls
+ * `engine.mjs`'s `remember()`. `lib/mnemosyne/server.ts` (port 3141,
+ * `MnemosyneClient.remember()`) is a separate process a skill has no
+ * standard path to. Mapping into the closed `Scope` union would be correct
+ * for a library caller but dead code for this epic's actual caller.
+ *
+ * SHAPE: `tier` alone selects one of four FIXED, dedicated lane names
+ * (`PERSONA_REMEMBER_SCOPE_BY_TIER` below) — `scopeId` never gets folded
+ * into the scope string itself. Reason: `engine.mjs`'s "free-form"
+ * vocabulary is free-form only in the sense of "not a closed TS union" —
+ * every real scope name still has to be pre-provisioned as a `[scopes]`
+ * entry in swarm-memory's `config.toml` before `remember()` will accept it
+ * (`engine.mjs`'s `unknown scope` 400, `SCOPE_NAME_RE`), and that table is a
+ * small, hand-curated set in practice (confirmed against a real
+ * `~/.config/swarm-memory/config.toml`: `top`/`clients`/`personal`/`att`/...
+ * with a `[ladder]` fallback chain — never one entry per fine-grained
+ * entity). A scope name computed per-`scopeId` (e.g.
+ * `persona-code-architect-mnemosyne`) would need its own `addLane()` config
+ * mutation for every single persona ever authored — an unbounded, uncurated
+ * lane explosion nothing else in this codebase's config convention does.
+ * Four fixed tier lanes is a one-time, four-line setup cost instead, the
+ * same shape every other lane in `config.toml` already has.
+ *
+ * `scopeId` is NOT dropped — it still matters for recall-time precision, so
+ * this resolver returns it back as `tag`, pre-sanitized with the exact same
+ * rule `engine.mjs remember()` applies to `opts.tag` internally
+ * (`.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 40)`, `src/engine.mjs` near
+ * its `remember()` body) — so a caller can pass it straight through as
+ * `opts.tag` with zero further transformation and get the exact same
+ * result `remember()` would have computed itself. The caller (pw-10's
+ * interview skill) SHOULD also fold `scopeId` into the remembered `text`
+ * itself so it stays recall-searchable, not just present in the note's
+ * filename — this resolver only owns the `scope`-argument mapping, per this
+ * story's explicit boundary (it does not touch either `remember()`
+ * implementation).
+ */
+export const PERSONA_REMEMBER_SCOPE_BY_TIER: Record<Tier, string> = {
+  'top-orchestrator': 'persona-top-orchestrator',
+  'company-director': 'persona-company-director',
+  'project-orchestrator': 'persona-project-orchestrator',
+  'code-architect': 'persona-code-architect',
+};
+
+/** Result of {@link resolveRememberScope}. */
+export interface RememberScopeResolution {
+  /** `engine.mjs remember()`'s `scope` argument — one of `PERSONA_REMEMBER_SCOPE_BY_TIER`'s values. */
+  scope: string;
+  /** `engine.mjs remember()`'s `opts.tag` — `scopeId`, pre-sanitized to that function's own tag rule. */
+  tag: string;
+}
+
+/**
+ * Deterministically resolves a persona's `{tier, scopeId}` to the
+ * `remember()` call it should feed (see the block comment above for the
+ * full rationale). Same `{tier, scopeId}` in -> same `{scope, tag}` out,
+ * always -- no randomness, no ambient/config/filesystem state consulted.
+ */
+export function resolveRememberScope(persona: { tier: Tier; scopeId: string }): RememberScopeResolution {
+  if (typeof persona?.tier !== 'string' || !TIERS.includes(persona.tier as Tier)) {
+    throw new Error(
+      `resolveRememberScope: 'tier' must be one of ${TIERS.join(', ')}, got ${String(persona?.tier)}.`,
+    );
+  }
+  if (typeof persona.scopeId !== 'string' || persona.scopeId.trim() === '') {
+    throw new Error("resolveRememberScope: 'scopeId' must be a non-empty string.");
+  }
+
+  const scope = PERSONA_REMEMBER_SCOPE_BY_TIER[persona.tier];
+  // Mirrors engine.mjs remember()'s own tag sanitization exactly (src/engine.mjs,
+  // inside remember(), `const tag = (opts.tag || "note").replace(...).slice(0, 40)`)
+  // so this is guaranteed to be a valid, already-normalized opts.tag with no
+  // further transformation needed by the caller.
+  const tag = persona.scopeId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 40);
+
+  return { scope, tag };
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {

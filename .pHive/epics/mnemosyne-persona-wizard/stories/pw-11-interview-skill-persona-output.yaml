@@ -1,0 +1,87 @@
+id: pw-11-interview-skill-persona-output
+epic: mnemosyne-persona-wizard
+title: Interview skill - structured output -> Persona record -> write primitive
+status: complete
+complexity: medium
+methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 8c4fd2a, built directly on the branch).
+  Independently verified: read persona-writer.mjs in full -- confirmed
+  writePersonaViaCli() genuinely spawns a real `tsx bin/mnemosyne-persona.mjs
+  create --file <path>` subprocess (same TSX_BIN/execFile shape as
+  test/persona-cross-transport.mjs), and confirmed it does NOT import
+  writeGlobalPersona/writeRepoLocalPersona directly -- the only disk touch
+  is via the real CLI subprocess. Reran the new
+  persona-interview-output.test.ts myself (8/8, including a code-architect
+  persona with parentRefs written via --repo and read back via
+  readRepoLocalPersona, and 3 structural checks proving no parallel write
+  path). Reran tsc --noEmit (clean) and the full vitest suite (592/592, 43
+  files, no regressions) myself. Write-surface choice (CLI, over MCP/
+  skill-harness) is well-reasoned: an interview skill session always has a
+  direct shell-out primitive, unlike MCP (needs an open server connection)
+  -- consistent with resolveRememberScope's (pw-09) reasoning for the same
+  caller. All acceptance criteria met.
+depends_on: [pw-10-interview-skill-mechanics]
+
+description: |
+  Implements horizontal-plan.md H6.4: the interview's real structured
+  output is a Persona record (persona.ts's real shape), and the skill's
+  actual output action is a call into Slice 2's write primitive
+  (persona_create) -- not a new file format, not a bespoke output
+  convention.
+
+acceptance_criteria:
+  - "A completed interview (pw-10) produces a well-formed Persona record matching persona.ts's real shape"
+  - "The skill calls Slice 2's persona_create (via CLI, MCP, or skill-harness -- whichever fits the skill's own invocation context) to actually write the record -- not a new/parallel write path"
+  - "The written persona passes assertValidPersona -- confirmed by reading it back after the interview completes"
+  - "parentRefs, when the interview surfaces a parent tier/scopeId, are written correctly (already-validated field from Epic 1, no schema change needed)"
+
+steps:
+  - id: research
+    description: Confirm exactly which write surface (CLI/MCP/skill-harness) the interview skill should call, given it's itself agent-driven and likely running inside a Claude Code (or similar) session -- read pw-05/pw-06/pw-07's shipped interfaces to pick the most natural fit.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for a completed interview producing a Persona that round-trips through assertValidPersona and the real write primitive.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Wire pw-10's question-sequencing output into a real Persona record and a real call to Slice 2's write primitive.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm no new write path was introduced -- the interview's output action must be the same persona_create Slice 2 already shipped and tested.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/layer1/persona.ts
+      purpose: "Persona's real shape (tier, scopeId, displayName, scope, sections, parentRefs?) -- the interview's structured output target."
+    - path: bin/mnemosyne-persona.mjs
+      purpose: "pw-05's create subcommand -- the most likely real write surface for an agent-driven skill to invoke."
+
+files_to_modify:
+  - file: skills/mnemosyne-persona-interview/SKILL.md
+    change: "Extend pw-10's skill with the output-writing step, calling Slice 2's write primitive."
+
+design_decisions:
+  - decision: "The skill's structured output IS the Persona record itself -- no new intermediate file format."
+    rationale: "horizontal-plan.md H6.4: 'the reference shape is kickoff's north_star block... H6's equivalent is the Persona record itself -- the skill's real output is a call into H4's write primitive, not a new file format.'"
+
+cross_cutting: []
+
+risks: []
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-wizard/docs/horizontal-plan.md
+    relevant_excerpt: |
+      H6.4: Structured output schema... H6's equivalent is the Persona
+      record itself (persona.ts:60-80) -- the skill's real output is a call
+      into H4's write primitive (persona_create/persona_write), not a new
+      file format.

@@ -1,0 +1,99 @@
+id: pw-05-cli-persona-create
+epic: mnemosyne-persona-wizard
+title: "CLI: mnemosyne persona create"
+status: complete
+complexity: medium
+methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-15 (commit d553a09). Real TDD, independently verified:
+  reran persona-cli tests (128/128), vitest (150/150), tsc clean. Sound
+  interface design: --file <path> for the full structured candidate
+  (sections/parentRefs have no clean flat-flag encoding), --repo presence
+  (not a redundant --tier flag) as the store-routing signal. Confirmed
+  mandateSections smuggling and tier/store mismatches (both directions)
+  rejected before any disk write. All acceptance criteria met.
+depends_on: []
+
+description: |
+  Implements horizontal-plan.md H4's CLI component -- the canonical
+  implementation layer for the new write primitive. This is Epic 1's one
+  deliberately deferred gap: writeGlobalPersona/writeRepoLocalPersona are
+  real, tested, TS-only functions with zero CLI/MCP/skill-harness wrapper
+  anywhere. This story closes it at the CLI layer first -- nothing
+  downstream (skill-harness, MCP) can be built before this exists, since
+  they subprocess-exec/import this layer, not the other way around.
+
+  Independent of Slice 1 (the view-only UI) -- no shared files, no
+  dependency either direction, per vertical-plan.md's critical-path note.
+
+acceptance_criteria:
+  - "Given valid persona fields (--repo/--tier/--scope-id plus content), when `mnemosyne persona create` runs, then it writes a real, valid persona file via writeGlobalPersona/writeRepoLocalPersona (dispatched by PERSONA_STORE_BY_TIER, same as every other verb)"
+  - "Given an attempt to smuggle a mandateSections field into the candidate, when create runs, then it is rejected with a clear error (assertValidPersona's existing guard) -- not silently stripped, not silently accepted"
+  - "Given a tier/store mismatch (e.g. a code-architect candidate routed at the global store), then it is rejected before any disk write, matching writeGlobalPersona/writeRepoLocalPersona's existing tier guard"
+  - "The write goes through withLock -- same locking Epic 1 already built, no new locking code added by this story"
+
+steps:
+  - id: research
+    description: Read bin/mnemosyne-persona.mjs's existing sync/seed/show subcommands and run() dispatcher in full, plus writeGlobalPersona/writeRepoLocalPersona's exact signatures, to add the new subcommand consistently rather than inventing a new CLI pattern.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests extending test/persona-cli.mjs's existing AC-tagged
+      convention (real tsx subprocess spawn, fake $HOME): a new AC-create
+      block covering argument parsing, successful write, mandateSections
+      rejection, and tier-mismatch rejection surfaced as non-zero exit.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add the `create` subcommand to bin/mnemosyne-persona.mjs, importing writeGlobalPersona/writeRepoLocalPersona directly, added to run()'s dispatcher alongside seed/show/sync.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Review that this story invents no new business logic -- the write path must be a thin wrapper over Epic 1's existing, already-tested functions, matching the exact shape `show` already uses for readGlobalPersona.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: bin/mnemosyne-persona.mjs
+      purpose: "Existing sync/seed/show dispatcher (run(), lines 354-378) and show's exact import pattern for a store function (line 123) -- create follows the identical shape."
+    - path: lib/mnemosyne/layer1/persona-store-global.ts
+      purpose: "writeGlobalPersona (lines 78-92) -- validates, locks, dispatches by tier. Wrapped directly, not re-implemented."
+    - path: lib/mnemosyne/layer1/persona-store-repo-local.ts
+      purpose: "writeRepoLocalPersona (lines 59-74) -- same contract for code-architect."
+    - path: test/persona-cli.mjs
+      purpose: "Existing AC-tagged subprocess-test convention (doc comment, lines 1-20) this story's tests extend."
+
+files_to_modify:
+  - file: bin/mnemosyne-persona.mjs
+    change: "New `create` subcommand, imports writeGlobalPersona/writeRepoLocalPersona, added to run()'s dispatcher."
+  - file: test/persona-cli.mjs
+    change: "New AC-create test block."
+
+design_decisions:
+  - decision: "Verb name: `create` (CLI subcommand), `persona_create` (MCP tool name, later stories)."
+    rationale: "vertical-plan.md's Resolved Ambiguities #1 -- reads as the natural CRUD verb for authoring a NEW persona, distinct from `sync` (writes into a harness file)."
+  - decision: "This story is the canonical implementation layer -- skill-harness (pw-06) subprocess-execs it, MCP (pw-07) imports the skill-harness action. No parallel implementation anywhere."
+    rationale: "vertical-plan.md Decision 2: traced from the real import graph -- MCP's tools already import skill-harness actions directly, which already subprocess-exec this CLI. The new verb must follow the same real shape, not invent a different one."
+
+cross_cutting: []
+
+risks:
+  - severity: medium
+    description: "This story adds a transport wrapper Epic 1's unit tests don't cover (those exercised the TS functions directly, not through a CLI transport) -- a bug here wouldn't be caught by re-running Epic 1's existing suite."
+    mitigation: "New AC-create tests are real subprocess tests (tsx-launched, real fake-$HOME sandbox), not just calling the TS function in-process."
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-wizard/docs/horizontal-plan.md
+    relevant_excerpt: |
+      H4.1: CLI (bin/mnemosyne-persona.mjs) is the canonical implementation
+      layer. It already imports lib/mnemosyne/layer1/*.ts directly and is
+      tsx-launched -- the new subcommand imports writeGlobalPersona/
+      writeRepoLocalPersona the same way show already imports
+      readGlobalPersona.

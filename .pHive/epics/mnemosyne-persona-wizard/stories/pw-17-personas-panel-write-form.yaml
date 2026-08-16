@@ -1,0 +1,104 @@
+id: pw-17-personas-panel-write-form
+epic: mnemosyne-persona-wizard
+title: Create/edit form in the Personas panel
+status: complete
+complexity: medium
+methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit efe8cb9, builder work; plus a same-day
+  orchestrator follow-up commit adding a CORS preflight OPTIONS handler --
+  see below). Independently verified: read the form markup (ui/index.html)
+  and submit handler (ui/app.js) in full -- confirmed it follows
+  add-lane-form's exact convention (form-row divs, single submit button,
+  panel-status pass/fail), confirmed it reuses loadPersonas() (pw-03) for
+  the post-submit refresh (grep-confirmed personasTbodyEl.appendChild
+  occurs in exactly one place -- no second rendering path), confirmed it
+  POSTs the bare candidate shape pw-15's route expects via
+  personaServiceOrigin()'s existing cross-origin pattern. Reran
+  persona-write-form.mjs (34/34), persona-layer-stack.mjs, ui-shell.mjs,
+  tsc --noEmit, and vitest lib/mnemosyne/layer1 (196/196) myself.
+
+  REAL GAP FOUND AND FIXED before considering this ticket done: the builder
+  correctly flagged that POST /persona/:tier/:scopeId's JSON body makes it a
+  non-"simple" cross-origin request, so a real browser sends an OPTIONS
+  preflight first -- and lib/mnemosyne/server.ts had no OPTIONS handler
+  anywhere, so that preflight fell through to the 404 catch-all with no CORS
+  header, meaning the just-built write form would have been silently
+  blocked by every real browser despite every unit test (which calls
+  fetch() server-side, never enforcing preflight) passing. This was NOT
+  caught by pw-02/pw-04/pw-15/pw-16's own tests for the same reason. Fixed
+  by adding a scoped OPTIONS handler for /persona/* that reuses
+  applyPersonaCors() as-is (no second CORS implementation) plus
+  Access-Control-Allow-Methods/-Headers, returning 204. Added 5 new
+  assertions to test/http-api.mjs proving the preflight now succeeds for an
+  allowed origin and stays unwildcarded for a disallowed one. Reran the
+  full extended http-api.mjs, persona-write-form.mjs, and
+  persona-cross-transport.mjs after the fix -- all pass (only the 3
+  pre-existing/unrelated POST /remember failures remain). This closes the
+  epic (pw-01 through pw-17) with the write form genuinely, not just
+  nominally, functional from a real browser. All acceptance criteria met.
+depends_on: [pw-15-post-persona-routes, pw-03-personas-panel-view]
+
+description: |
+  Implements horizontal-plan.md H3's write-capable subset -- closes the
+  epic. A create/edit form in the Personas panel (pw-03), following the
+  exact `add-lane-form` convention already established in ui/app.js.
+  Operator-confirmed committed scope (design-discussion.md §6 OQ5), not
+  deferred.
+
+acceptance_criteria:
+  - "Given the Personas panel, when the operator fills in and submits the create/edit form, then a real persona is written via pw-15's POST route"
+  - "On successful submission, the panel calls loadPersonas() again (pw-03's function, not rebuilt) to reflect the new/edited persona immediately, without a manual page reload"
+  - "On a validation failure (e.g. mandateSections smuggling somehow reaching the form, or a tier mismatch), the form surfaces the error via setStatus(), matching every other form's pass/fail convention"
+  - "The form follows add-lane-form's exact structure (form-row divs, submit handler shape)"
+
+steps:
+  - id: research
+    description: Read ui/index.html's add-lane-form markup (lines 43-59) and ui/app.js's submit handler (lines 140-172) in full to mirror the exact convention.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for the form's submit handler POSTing to pw-15's route, calling loadPersonas() on success, and surfacing errors via setStatus() on failure.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add the create/edit form to the Personas panel (pw-03's markup) and its submit handler to ui/app.js.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the form reuses pw-03's loadPersonas() rather than duplicating a second rendering path, and matches add-lane-form's established convention exactly.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch. This closes Slice 4 and the epic -- confirm the full pw-01 through pw-17 story set is green together, then run the full test suite.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: ui/index.html
+      purpose: "add-lane-form markup (lines 43-59) -- this story's form mirrors this exactly."
+    - path: ui/app.js
+      purpose: "add-lane-form's submit handler (lines 140-172) -- same 'POST, setStatus, re-load on success' convention this story reuses."
+
+files_to_modify:
+  - file: ui/index.html
+    change: "Create/edit persona form within the Personas panel."
+  - file: ui/app.js
+    change: "Submit handler for the new form, POSTing to pw-15's route, calling loadPersonas() on success."
+
+design_decisions:
+  - decision: "Form reuses pw-03's loadPersonas() for the post-submit refresh, rather than a separate rendering path."
+    rationale: "horizontal-plan.md H3.6: 'same re-load after mutation convention add-lane-form's handler already uses.'"
+
+cross_cutting: []
+
+risks: []
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-wizard/docs/vertical-plan.md
+    relevant_excerpt: |
+      Sub-slice 4b: UI form. Why cut here: pure form/DOM work, depends only
+      on 4a's route existing; follows the add-lane-form convention already
+      established in this same file, so it's mechanical once 4a is proven.

@@ -1,0 +1,84 @@
+id: pw-12-interview-skill-skip-all-regression
+epic: mnemosyne-persona-wizard
+title: Interview skill - maximally-skipped regression test
+status: complete
+complexity: low
+methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit c9b5bfc, built directly on the branch).
+  Verification-only ticket, zero production-code changes needed --
+  confirmed by reading pw-10/pw-11 were already correct. Independently
+  verified: read the full test file, confirmed it genuinely exercises a
+  maximally-skipped case (all 5 questions given EXPLICIT varied skip
+  tokens across both cases -- 'skip'/'N/A'/'pass'/''/'NA' and
+  'SKIP'/'   '/'n/a'/'pass'/'skip' -- never omitted keys), confirmed
+  asked===ALL_QUESTION_IDS and skippedByContext=[] (proving genuine
+  explicit decline, not context bypass), for both a global tier
+  (top-orchestrator, via real CLI create+show subprocess) and
+  code-architect (--repo, via real CLI create + direct
+  readRepoLocalPersona, since code-architect has no CLI show surface).
+  Reran the new test (2/2), tsc --noEmit (clean), and the full
+  lib/mnemosyne/layer1 vitest suite (189/189, 12 files) myself. Closes
+  Slice 3's interview-mechanics work (pw-09 through pw-12). All acceptance
+  criteria met.
+depends_on: [pw-11-interview-skill-persona-output]
+
+description: |
+  Proves horizontal-plan.md H6.3's non-blocking hard-fail rule concretely:
+  the interview MUST continue and still produce a valid, writable Persona
+  record regardless of how many questions are skipped. This is a real,
+  automatable regression test, not an assumption -- closes Slice 3's
+  interview-mechanics work before crawl-and-feed (pw-13) builds on top of
+  it.
+
+acceptance_criteria:
+  - "Given every skippable question is skipped, when the interview completes, then it still produces a Persona record that passes assertValidPersona"
+  - "Skipped core fields carry the explicit placeholder convention (matching kickoff-protocol.md's pattern), never a missing/undefined field"
+  - "The skill does not halt, error, or require operator escalation when maximally skipped -- confirmed by the test actually completing successfully, not just not crashing"
+
+steps:
+  - id: research
+    description: Re-read pw-10/pw-11's shipped skill content to identify every skippable question and its exact placeholder convention.
+    agent: researcher
+  - id: test-spec
+    description: Write the failing maximally-skipped regression test itself -- this IS the story's primary deliverable, not a separate step.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: "Fix anything the regression test surfaces in pw-10/pw-11's implementation (expected result: minor, if those stories are correct) -- this story is primarily test-authoring, not new feature work."
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the test genuinely exercises "everything skipped," not a partial-skip case that happens to still pass.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch. Confirm pw-09 through pw-12 (everything except crawl-and-feed) is green together.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/layer1/persona.ts
+      purpose: "assertValidPersona's real required-field set -- the bar a maximally-skipped interview's output must still clear."
+
+files_to_modify:
+  - file: skills/mnemosyne-persona-interview/__tests__/skip-all-regression.mjs
+    change: "New file (or equivalent, matching whatever test harness pw-10 established). The maximally-skipped regression test."
+
+design_decisions:
+  - decision: "This story is deliberately low-complexity and expected to require minimal production-code changes if pw-10/pw-11 are correct -- it's a verification story, not a feature story."
+    rationale: "Matches Epic 1's own precedent for closing-a-slice regression stories (e.g. pf-10)."
+
+cross_cutting: []
+
+risks: []
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-wizard/docs/vertical-plan.md
+    relevant_excerpt: |
+      Slice 3, Story 4: Interview skill: skip-all / maximally-skipped-
+      still-valid regression test, non-blocking hard-fail proof --
+      complexity: low.

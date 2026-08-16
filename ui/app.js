@@ -12,6 +12,8 @@ const lanesStatusEl = document.getElementById("lanes-status");
 const lanesTbodyEl = document.getElementById("lanes-tbody");
 const addLaneForm = document.getElementById("add-lane-form");
 const addLaneStatusEl = document.getElementById("add-lane-status");
+const personasStatusEl = document.getElementById("personas-status");
+const personasTbodyEl = document.getElementById("personas-tbody");
 
 function setStatus(el, kind, text) {
   el.textContent = text;
@@ -1149,10 +1151,254 @@ refreshCacheBtn.addEventListener("click", async () => {
   }
 });
 
+// --- Personas panel (pw-03-personas-panel-view): renders GET /persona as a
+// table (tier, scopeId, displayName), following the exact Lanes-panel
+// table/tbody convention (laneCell/loadLanes above) and setStatus() for
+// pass/fail/loading states, same as every other panel.
+//
+// Cross-server fetch: the persona routes live on lib/mnemosyne/server.ts, a
+// DIFFERENT server/port (3141 default) than this UI's own server (8477,
+// src/server.mjs -- see that file's doc comment and server.ts's matching
+// one). A relative fetch("/persona") would hit THIS server, not the persona
+// service, and 404 -- every persona fetch below therefore uses an absolute
+// URL built from the page's own hostname (whichever of 127.0.0.1/localhost
+// this UI is actually being served from) plus the persona service's port,
+// matching one of the two origins server.ts's CORS allow-list (UI_ORIGINS)
+// actually grants: http://127.0.0.1:8477 / http://localhost:8477.
+const MNEMOSYNE_PERSONA_PORT = 3141;
+
+function personaServiceOrigin() {
+  return `${window.location.protocol}//${window.location.hostname}:${MNEMOSYNE_PERSONA_PORT}`;
+}
+
+function personaCell(text) {
+  const td = document.createElement("td");
+  td.textContent = text;
+  return td;
+}
+
+// ============================================================================
+// pw-04-layer-stack-visibility: layer-stack visibility section.
+// ADDITIVE / SELF-CONTAINED -- own DOM refs, own small loader function.
+// Fetches the ALREADY-SHIPPED GET /layers route on lib/mnemosyne/server.ts
+// -- no new backend route. That service runs on a different origin/port
+// (3141, MNEMOSYNE_PORT) than this UI's own server (src/server.mjs, port
+// 8477), so this is a genuine cross-origin fetch -- same pattern
+// pw-02-get-persona-routes-cors's CORS fix already covers for /persona/*,
+// extended by this story to /layers (see server.ts).
+//
+// The Level 0 pointer rendered alongside it is a STATIC path display only
+// (no fetch, no form) -- intentionally view-only, matching Epic 1's own
+// recommendation (design-discussion.md §3d/§6 OQ4). There is no edit
+// affordance for it anywhere in this file.
+// ============================================================================
+const MNEMOSYNE_CLIENT_API_LOOPBACK = "http://127.0.0.1:3141";
+const MNEMOSYNE_CLIENT_API_LOCALHOST = "http://localhost:3141";
+
+// Mirrors the hostname the page itself was loaded with (server.ts's
+// UI_ORIGINS allow-lists both 127.0.0.1:8477 and localhost:8477) so the
+// cross-origin request's Origin header matches one of the two origins
+// server.ts's applyPersonaCors() actually allow-lists.
+function mnemosyneClientApiBase() {
+  return location.hostname === "localhost" ? MNEMOSYNE_CLIENT_API_LOCALHOST : MNEMOSYNE_CLIENT_API_LOOPBACK;
+}
+
+const personaLayerStackStatusEl = document.getElementById("persona-layer-stack-status");
+const personaLayerStackTableEl = document.getElementById("persona-layer-stack-table");
+const personaLayerStackTbodyEl = document.getElementById("persona-layer-stack-tbody");
+const personaLayerStackEmptyEl = document.getElementById("persona-layer-stack-empty");
+
+function personaLayerStackCell(text) {
+  const td = document.createElement("td");
+  td.textContent = text;
+  return td;
+}
+
+// Renders a persona's parentRefs as pointer-only text ("tier: scopeId",
+// comma-separated), built entirely from fields already present on the
+// persona record itself -- this function never fetches anything. This is
+// the UI-layer half of the "query up, never copy down" guarantee
+// getPersonaContent's own buildParentContextSections (persona.ts) enforces
+// server-side: a parent's real sections content must NEVER be fetched or
+// inlined here, only named (research-brief.md §6).
+function parentRefsText(parentRefs) {
+  if (!Array.isArray(parentRefs) || parentRefs.length === 0) return "—";
+  return parentRefs.map((ref) => `${ref.tier}: ${ref.scopeId}`).join(", ");
+}
+
+async function loadPersonas() {
+  setStatus(personasStatusEl, "loading", "loading…");
+  personasTbodyEl.textContent = "";
+  try {
+    const origin = personaServiceOrigin();
+    const listRes = await fetch(`${origin}/persona`);
+    const listBody = await listRes.json();
+    if (!listRes.ok) {
+      setStatus(personasStatusEl, "fail", `FAIL — GET /persona returned ${listRes.status}`);
+      return;
+    }
+    const entries = Array.isArray(listBody.personas) ? listBody.personas : [];
+
+    // One fetch per LISTED persona's OWN record only (needed for
+    // displayName + parentRefs, which GET /persona's list response doesn't
+    // carry) -- this is each persona's own content, not any parent's, so it
+    // does not touch the copy-down guarantee above. CRITICAL: this never
+    // loops over a persona's parentRefs to fetch THOSE -- see
+    // parentRefsText, the only thing rendered for parentRefs.
+    const personas = await Promise.all(
+      entries.map(async (entry) => {
+        try {
+          const res = await fetch(
+            `${origin}/persona/${encodeURIComponent(entry.tier)}/${encodeURIComponent(entry.scopeId)}`
+          );
+          const body = await res.json();
+          if (!res.ok || !body.persona) {
+            return { tier: entry.tier, scopeId: entry.scopeId, displayName: null, parentRefs: [] };
+          }
+          return body.persona;
+        } catch {
+          return { tier: entry.tier, scopeId: entry.scopeId, displayName: null, parentRefs: [] };
+        }
+      })
+    );
+
+    for (const p of personas) {
+      const tr = document.createElement("tr");
+      tr.appendChild(personaCell(p.tier));
+      tr.appendChild(personaCell(p.scopeId));
+      tr.appendChild(personaCell(p.displayName == null || p.displayName === "" ? "—" : p.displayName));
+      tr.appendChild(personaCell(parentRefsText(p.parentRefs)));
+      personasTbodyEl.appendChild(tr);
+    }
+    setStatus(personasStatusEl, "pass", `${personas.length} persona(s)`);
+  } catch (err) {
+    setStatus(personasStatusEl, "fail", "FAIL — could not reach GET /persona");
+  }
+}
+
+// --- Personas panel write form (pw-17-personas-panel-write-form): closes
+// the epic. Same "form-row divs, POST, setStatus() pass/fail, re-load on
+// success" convention addLaneForm's handler above already established --
+// see that handler for the exact shape this mirrors. POSTs to pw-15's
+// POST /persona/:tier/:scopeId route on the persona service (same
+// cross-origin personaServiceOrigin() this file's loadPersonas() above
+// already uses -- the persona service runs on a different port, 3141, than
+// this UI's own server). The request body is the bare persona candidate
+// pw-15's route expects ({tier, scopeId, displayName, scope, sections,
+// repo?}) -- never mandateSections, which the server-side
+// assertValidPersona rejects on mere presence (persona.ts). A single
+// "knows" section (heading + body) is the v1 minimum viable write path,
+// not a full multi-section editor. On success, calls loadPersonas() again
+// (pw-03's existing function) so the panel reflects the new/edited persona
+// immediately -- no second rendering path is built here.
+const personaForm = document.getElementById("persona-form");
+const personaFormStatusEl = document.getElementById("persona-form-status");
+
+personaForm.addEventListener("submit", async (evt) => {
+  evt.preventDefault();
+  const submitBtn = personaForm.querySelector("button[type=submit]");
+  const formData = new FormData(personaForm);
+  const tier = String(formData.get("tier") || "").trim();
+  const scopeId = String(formData.get("scopeId") || "").trim();
+  const displayName = String(formData.get("displayName") || "").trim();
+  const scope = String(formData.get("scope") || "").trim();
+  const sectionHeading = String(formData.get("sectionHeading") || "").trim();
+  const sectionBody = String(formData.get("sectionBody") || "").trim();
+  const repo = String(formData.get("repo") || "").trim();
+
+  const candidate = {
+    tier,
+    scopeId,
+    displayName,
+    scope,
+    sections: [{ heading: sectionHeading, body: sectionBody }],
+  };
+  if (repo) candidate.repo = repo;
+
+  setStatus(personaFormStatusEl, "loading", "saving…");
+  submitBtn.disabled = true;
+  try {
+    const origin = personaServiceOrigin();
+    const res = await fetch(
+      `${origin}/persona/${encodeURIComponent(tier)}/${encodeURIComponent(scopeId)}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(candidate),
+      }
+    );
+    const body = await res.json();
+    if (!res.ok) {
+      const message = (body.error && (body.error.message || body.error)) || `HTTP ${res.status}`;
+      setStatus(personaFormStatusEl, "fail", `FAIL — ${message}`);
+      return;
+    }
+    setStatus(personaFormStatusEl, "pass", `saved persona '${body.scopeId}' (${body.tier})`);
+    personaForm.reset();
+    await loadPersonas();
+  } catch (err) {
+    setStatus(personaFormStatusEl, "fail", `FAIL — ${err && err.message ? err.message : err}`);
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+
+async function loadPersonaLayerStack() {
+  // Guards against running against an older served index.html that predates
+  // this section (e.g. a stale cached page) -- never throws either way.
+  if (!personaLayerStackStatusEl || !personaLayerStackTableEl || !personaLayerStackTbodyEl) return;
+
+  setStatus(personaLayerStackStatusEl, "loading", "loading…");
+  personaLayerStackTbodyEl.textContent = "";
+  personaLayerStackTableEl.hidden = true;
+  if (personaLayerStackEmptyEl) personaLayerStackEmptyEl.hidden = true;
+
+  try {
+    const res = await fetch(mnemosyneClientApiBase() + "/layers");
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      setStatus(
+        personaLayerStackStatusEl,
+        "fail",
+        `FAIL — GET /layers returned ${res.status}${body.error ? `: ${body.error.message || body.error}` : ""}`,
+      );
+      return;
+    }
+    const body = await res.json();
+    const layers = Array.isArray(body.layers) ? body.layers : [];
+    if (!layers.length) {
+      setStatus(personaLayerStackStatusEl, "pass", "no layers configured");
+      if (personaLayerStackEmptyEl) personaLayerStackEmptyEl.hidden = false;
+      return;
+    }
+    layers.forEach((l, i) => {
+      const tr = document.createElement("tr");
+      tr.appendChild(personaLayerStackCell(String(i + 1)));
+      tr.appendChild(personaLayerStackCell(l && l.layer != null ? String(l.layer) : "?"));
+      tr.appendChild(personaLayerStackCell(l && l.writable ? "yes" : "no"));
+      personaLayerStackTbodyEl.appendChild(tr);
+    });
+    personaLayerStackTableEl.hidden = false;
+    setStatus(personaLayerStackStatusEl, "pass", `${layers.length} layer(s), cascade order`);
+  } catch (err) {
+    setStatus(personaLayerStackStatusEl, "fail", "FAIL — could not reach GET /layers");
+  }
+}
+// ==================== end pw-04-layer-stack-visibility ====================
+
 async function refreshAll() {
   refreshBtn.disabled = true;
   try {
-    await Promise.all([loadLiveliness(), loadSettings(), loadLanes(), loadSearchScopes(), loadGraph(), loadReindexLanes()]);
+    await Promise.all([
+      loadLiveliness(),
+      loadSettings(),
+      loadLanes(),
+      loadSearchScopes(),
+      loadGraph(),
+      loadReindexLanes(),
+      loadPersonas(),
+      loadPersonaLayerStack(),
+    ]);
     lastRefreshedEl.textContent = `last refreshed ${new Date().toLocaleTimeString()}`;
   } finally {
     refreshBtn.disabled = false;
