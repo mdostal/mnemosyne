@@ -1,0 +1,46 @@
+id: puf-02-batch-approve-strip
+epic: mnemosyne-persona-panel-fidelity-followups
+title: "Build the design's \"central bet\": a reviewed-queue batch-approve strip"
+status: planned
+complexity: medium
+methodology: tdd
+depends_on: []
+
+description: |
+  Closes pu-14's FLAGGED finding D2 (fidelity-review.md): pu-01's chosen
+  synthesized option's own §6 calls a "reviewed, ready to commit"
+  batch-approve strip (checkboxes + a single "[Approve all]" action, one
+  reload at the end) "the synthesis's central bet" for answering
+  operator-efficiency.md/information-density.md's batch-latency complaint
+  without reopening Option 1's blind-approve failure mode. It was never
+  built -- today, clearing N drafts costs N independent full reloads
+  (approveDraft()/discardDraft() each call their own loadDrafts()/
+  loadPersonas()).
+
+  Must NOT weaken the trust gate this epic was explicitly commissioned to
+  get right: batch approval is only offered for drafts that have already
+  individually passed the read-before-edit gate this session
+  (readDraftIdentities) -- never a way to approve N drafts without ever
+  having opened any of them.
+
+acceptance_criteria:
+  - "Given 2+ drafts that have each already been individually read this session (in readDraftIdentities), when the panel renders, then a batch-approve strip appears offering to approve exactly that reviewed set -- never drafts that haven't been read"
+  - "Given the batch-approve strip's action fires, when it completes, then it issues the SAME real approveDraft()-equivalent HTTP calls the single-row Approve button already uses (pu-03's real approve route) for each selected draft -- never a new, second write path -- followed by exactly ONE combined loadDrafts()/loadPersonas() reload, not N reloads"
+  - "Given a draft that has NOT yet passed the read-before-edit gate this session, when the batch strip renders, then that draft is never selectable/includable in the batch action"
+  - "Given the batch-approve action, when exercised via keyboard only, then it is fully reachable and operable without a mouse"
+
+files_to_modify:
+  - file: ui/app.js
+    change: "New batch-approve UI + handler, reusing the existing approve route per-draft, single combined reload at the end."
+  - file: ui/index.html
+    change: "New batch-approve strip markup, following this shell's existing checkbox/button conventions."
+
+references:
+  - path: .pHive/design/mnemosyne-persona-ux/fidelity-review.md
+    relevant_excerpt: |
+      D2 | ... FLAGGED ... As shipped, clearing N drafts costs N independent
+      full reloads ... exactly the cost operator-efficiency.md flagged as
+      unaddressed in the rejected option 3, now also true of the shipped
+      option 2. Needs a follow-up ticket.
+  - path: .pHive/design/mnemosyne-persona-ux/synthesized/option-2.md
+    relevant_excerpt: "§6: the reviewed, ready to commit batch-approve strip -- the synthesis's own central bet."

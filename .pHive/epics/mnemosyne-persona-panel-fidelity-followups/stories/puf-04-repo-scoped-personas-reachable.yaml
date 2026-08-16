@@ -1,0 +1,43 @@
+id: puf-04-repo-scoped-personas-reachable
+epic: mnemosyne-persona-panel-fidelity-followups
+title: Wire a repo selector so code-architect (repo-scoped) personas/drafts are reachable in the Personas panel
+status: planned
+complexity: medium
+methodology: tdd
+depends_on: []
+
+description: |
+  Closes pu-14's FLAGGED finding D4 (fidelity-review.md), the most
+  consequential of the 4: the repo-hierarchy fix (3 separate global-tier
+  sub-groups when grouped by Repo; a Repo column/header for code-architect
+  rows) is correctly CODED (groupPersonaRows()'s repo branch, ui/app.js)
+  but structurally UNREACHABLE -- loadPersonas() and loadDrafts() never
+  pass ?repo=, and no UI control anywhere lets an operator select a repo,
+  so no code-architect row can ever render in this panel today.
+  selection.md's own "deciding factor" section names exactly this fix as
+  the reason pu-01's chosen design beat its alternative -- as shipped, that
+  reasoning is unverifiable, and the code-architect tier (the one that
+  "fans out across an open-ended number of repos" per
+  hierarchy-legibility.md) is invisible in this panel, identical to the
+  pre-epic state.
+
+acceptance_criteria:
+  - "Given the Personas panel, when it loads, then a real UI control (e.g. a repo-path input/selector, following an existing input convention in this file) lets an operator specify one or more repos to include code-architect personas/drafts from"
+  - "Given a repo is selected, when loadPersonas()/loadDrafts() next fetch, then they pass ?repo=<path> to GET /persona and GET /persona/draft respectively, and the resulting code-architect rows appear in the unified list"
+  - "Given Repo-grouping mode with at least one code-architect row present, when rendered, then groupPersonaRows()'s existing repo-column/sub-group logic (already coded, per pu-10/pu-11) is exercised for real -- verified by an actual DOM assertion, not just that the code path exists"
+  - "Given no repo is selected (the default, matching today's behavior), when the panel loads, then it behaves exactly as it does today -- this ticket is additive, never a behavior change for operators who don't use the new control"
+
+files_to_modify:
+  - file: ui/index.html
+    change: "New repo-selector control in the Personas panel toolbar."
+  - file: ui/app.js
+    change: "loadPersonas()/loadDrafts() pass ?repo= when a repo is selected; wire the new control's change handler to re-fetch."
+
+references:
+  - path: .pHive/design/mnemosyne-persona-ux/fidelity-review.md
+    relevant_excerpt: |
+      D4 | ... FLAGGED ... selection.md's own "deciding factor" section
+      names exactly this fix as the reason option 2 beat option 3 ... As
+      shipped, that fix cannot be exercised or verified by an operator at
+      all ... Needs a follow-up to wire a repo selector/filter (or
+      otherwise pass ?repo=) into loadPersonas()/loadDrafts().

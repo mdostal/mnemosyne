@@ -1,0 +1,43 @@
+name: mnemosyne-persona-panel-fidelity-followups
+title: Close the 4 FLAGGED design-fidelity gaps found by mnemosyne-persona-ux's pu-14
+target_codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+methodology: tdd
+version_bump: patch
+
+description: |
+  mnemosyne-persona-ux's closing design-fidelity review (pu-14,
+  .pHive/design/mnemosyne-persona-ux/fidelity-review.md) compared the
+  shipped Personas panel against pu-01's chosen synthesized option
+  ("Trust-Gated Unified Queue") and logged 8 deviations, 4 ACCEPTED (real,
+  defensible substitutions) and 4 FLAGGED (real gaps, not fixed by that
+  epic, carried forward here as a dedicated follow-up rather than silently
+  absorbed). Each ticket below maps 1:1 to one of pu-14's FLAGGED findings
+  (D1-D4 in fidelity-review.md's deviation log). status: planned across the
+  board -- this epic is filed to make the gap trackable, not built as part
+  of the mnemosyne-persona-ux / mnemosyne-memory-levels release this epic
+  was spun out of.
+
+stories:
+  - id: puf-01-status-filter-default-needs-review
+    title: Default the Personas panel's status filter to "Needs review" instead of "All"
+    complexity: low
+    depends_on: []
+  - id: puf-02-batch-approve-strip
+    title: "Build the design's \"central bet\": a reviewed-queue batch-approve strip"
+    complexity: medium
+    depends_on: []
+  - id: puf-03-post-approval-provenance-note
+    title: Persist a post-approval provenance note (Persona schema + render)
+    complexity: medium
+    depends_on: []
+  - id: puf-04-repo-scoped-personas-reachable
+    title: Wire a repo selector so code-architect (repo-scoped) personas/drafts are reachable in the Personas panel
+    complexity: medium
+    depends_on: []
+
+references:
+  - path: .pHive/design/mnemosyne-persona-ux/fidelity-review.md
+    relevant_excerpt: |
+      Deviation log, D1-D4 (all FLAGGED) -- the exact findings this epic's
+      4 tickets close out, one each, in the same order they're logged
+      there.
