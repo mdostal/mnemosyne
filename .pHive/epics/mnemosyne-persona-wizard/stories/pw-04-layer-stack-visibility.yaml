@@ -1,9 +1,20 @@
 id: pw-04-layer-stack-visibility
 epic: mnemosyne-persona-wizard
 title: Layer-stack visibility section (reuses GET /layers) + Level 0 pointer
-status: pending
+status: complete
 complexity: low
 methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-15 (commit 04d5069). Real TDD, independently verified:
+  reran the new persona-layer-stack test (16/16), http-api tests, tsc
+  clean. Real, sound related-gap fix: GET /layers needed the same CORS
+  treatment pw-02 shipped for /persona/* (pw-02 explicitly confirmed
+  /layers was untouched) -- extended the same reviewed applyPersonaCors()
+  helper rather than duplicating logic. Built isolated/additive per
+  instructions since pw-03 (touching the same files) wasn't merged yet;
+  applied cleanly with no conflict. Level 0 confirmed genuinely view-only
+  (no edit affordance anywhere). All acceptance criteria met.
 depends_on: [pw-02-get-persona-routes-cors]
 
 description: |
