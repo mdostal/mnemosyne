@@ -28,6 +28,38 @@ The operator's 3-layer simplification and the CBA's 5-layer research map onto ea
 | **Layer 2 — memory framework** (Letta/Graphiti/Cognee/Qdrant) | CBA layer 2 (hive-memory/KG) + layer 5 (semantic/Qdrant) merged | Queryable memory of decisions and facts — structured KG query and vector search are two retrieval mechanisms over conceptually one tier. |
 | **Layer 3 — graph tool** (Graphify) | CBA layer 3 (indexed docs) + layer 4 (code graph) merged | Confirmed by the Graphify PoC: `_origin: "ast"` doc nodes already give line-addressable doc indexing with no LLM required, so docs and code structure were never separate problems for Graphify specifically — one tool, one graph. |
 
+> **Correction note (2026-08-16, epic `mnemosyne-memory-levels`, story `ml-09`):** the table above is
+> **superseded** and preserved here only as a historical record of what was believed at the time — it is
+> not deleted or rewritten. It conflates two different axes under one "Layer N" vocabulary: it labels the
+> harness-sync mechanism (`lib/mnemosyne/layer1/`, which generates and splices content into
+> `CLAUDE.md`/`AGENTS.md`/`GEMINI.md` — see §2's "Trigger decision" below, and the "Made concrete in code
+> by `pf-12`" paragraph just below this note) "Layer 1"; it merges the hive-memory/KG store and the Qdrant
+> vector store into one "Layer 2" row; and it merges Graphify's doc-index output and code-graph output into
+> one "Layer 3" row — treating what are actually distinct memory-STORE-TYPES as if they were one thing per
+> row, while reusing the same "Layer N" words the codebase separately uses for the harness-sync module name
+> (`layer1/`) and for the unrelated 4-tier orchestration hierarchy (`top-orchestrator → company-director →
+> project-orchestrator → code-architect`, the very next paragraph below). Those two other uses are
+> legitimate and untouched by this note.
+>
+> This repo has had **three** independent, pre-existing "layer" vocabularies (full comparison:
+> `.pHive/epics/mnemosyne-memory-levels/docs/research-brief.md` §0):
+> 1. **This table** (`docs/layer-architecture-v2-plan.md` §1, above) — the conflated Layer 1/2/3 scheme
+>    corrected by this note.
+> 2. **`docs/cba-memory-layers.md`'s own 1-5 "target architecture" list** — ways-of-working (1),
+>    hive-memory/KG (2), indexed docs (3), code graph (4), semantic/vector (5). A different,
+>    self-consistent numbering at the time it was written — it does not conflate axes the way the table
+>    above does — but it is likewise superseded by the model below.
+> 3. **`lib/mnemosyne/layer1/`'s module name and `lib/mnemosyne/layers/`'s retrieval-cascade config
+>    surface** (`GET /layers`, `MNEMOSYNE_LAYERS`) — a real, still-current, unrelated axis (WHO generates
+>    harness files / WHICH adapters are active right now), not a memory-store-type taxonomy, and not
+>    changed by this note.
+>
+> **The corrected model:** each MEMORY STORE TYPE is its own level, 0-4, defined once as the single
+> canonical taxonomy in [`lib/mnemosyne/memory-levels/levels.ts`](../lib/mnemosyne/memory-levels/levels.ts)
+> and specified in full under [`.pHive/epics/mnemosyne-memory-levels/`](../.pHive/epics/mnemosyne-memory-levels/)
+> (epic `mnemosyne-memory-levels`). Read `levels.ts`'s own module doc comment for the operator's exact,
+> verbatim correction and the full disambiguation against the orchestration-tier and retrieval-cascade axes.
+
 **Orchestrator hierarchy — adopting the operator's 4-tier version over the CBA's 3-tier one.** The CBA doc collapsed "project" and "code area" into one "area architect" tier; the Flayr example shows these are genuinely different scopes with different change-frequency:
 
 `top (Auriga)` → `company director` → `project orchestrator` (repo-level way-of-working: integrations, 3rd-party, rough architecture — doesn't change per-task) → `code/area architect` (graph-scoped to the specific area being touched — changes per-task).

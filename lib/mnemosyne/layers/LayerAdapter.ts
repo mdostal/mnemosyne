@@ -4,6 +4,18 @@ export interface RecallOptions {
   scope?: Scope;
   intent?: Intent;
   limit?: number;
+  /**
+   * ml-07-file-store-index-query: optional area hint, matching
+   * `FileStoreIndex.ts`'s directory-based "area" convention (e.g. `"docs"`,
+   * `"docs/guides"`, or `""` for root-level files). A layer MAY use this to
+   * scope/narrow its search when it has a matching persisted index to
+   * consult. Purely additive and layer-specific: layers with no area-aware
+   * narrowing (every layer except `FileLayerAdapter`, as of ml-07) simply
+   * ignore it. Omitting it (the default for every existing caller) requests
+   * exactly today's unscoped behavior from every layer -- this field can
+   * never change behavior for a caller that doesn't pass it.
+   */
+  area?: string;
 }
 
 export interface RememberOptions {

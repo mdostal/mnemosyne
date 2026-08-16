@@ -1,15 +1,23 @@
 /**
  * Layer 1 — per-harness sync generator.
  *
- * Composes Level 0 (operator-global rules, read fresh every run) + one
- * tier's content into a single managed block, and idempotently writes that
- * block into a harness's native auto-load file (CLAUDE.md/AGENTS.md/
- * GEMINI.md), creating the file if it doesn't exist and never touching
- * human-authored content outside the block.
+ * Composes Level 0 (operator-global rules, read fresh every run) + Level 1
+ * (`mnemosyne.md`, repo-owned, OPTIONAL -- ml-03) + one tier's content into a
+ * single managed block, and idempotently writes that block into a harness's
+ * native auto-load file (CLAUDE.md/AGENTS.md/GEMINI.md), creating the file
+ * if it doesn't exist and never touching human-authored content outside the
+ * block.
  *
  * Ordering is a hard requirement (docs/layer-architecture-v2-plan.md §0):
  * Level 0 is ALWAYS first in the managed block, verbatim, ahead of any
- * tier-specific content -- never omitted, reordered, or paraphrased.
+ * tier-specific content -- never omitted, reordered, or paraphrased. Level 1
+ * (ml-03: docs/design-discussion.md §4c/§7.1) slots in SECOND, verbatim,
+ * ahead of tier content, but ONLY when `mnemosyne.md` exists at the target
+ * repo's root -- `buildManagedBody` composes a 2-part (Level 0 + tier) join
+ * when it is absent, byte-identical to the pre-ml-03 output, so every repo
+ * that has not yet adopted a `mnemosyne.md` sees zero regression. A repo
+ * "installs" Level 1 simply by adding the file and re-running the existing
+ * `sync` verb (bin/mnemosyne-persona.mjs) -- no new CLI surface.
  *
  * Content resolution is scoped-persona-aware (pf-02): `buildManagedBody`
  * resolves tier content via `getPersonaContent(tier, scopeId, ctx)`
@@ -19,10 +27,12 @@
  * given target file lives under (derived from `targetFilePath`'s directory)
  * doubles as the repo-local persona store's root, since every harness
  * target (CLAUDE.md/AGENTS.md/GEMINI.md) lives directly at repo root
- * (harness.ts).
+ * (harness.ts), and now also doubles as Level 1's own repo-root-relative
+ * `mnemosyne.md` lookup (level1Source.ts).
  *
  * Story: la-01-role-meta-file-sync (epic: mnemosyne-layer-architecture-v2)
  * Story: pf-02-getpersonacontent-signature-threading (epic: mnemosyne-persona-foundation)
+ * Story: ml-03-sync-three-source-composition (epic: mnemosyne-memory-levels)
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -30,6 +40,7 @@ import path from 'node:path';
 import { spliceManagedBlock } from './block.js';
 import { HARNESS_TARGETS, type HarnessId } from './harness.js';
 import { DEFAULT_LEVEL0_PATH, readLevel0Content } from './level0.js';
+import { readMnemosyneMdContent } from './level1Source.js';
 import { withLock } from './lock.js';
 import { getPersonaContent } from './persona.js';
 import { renderTierContentMarkdown, type Tier } from './tiers.js';
@@ -53,11 +64,30 @@ export interface SyncResult {
  * then feed it through `spliceManagedBlock` in memory -- without duplicating
  * this assembly logic (and risking silent drift between the real write path
  * and the dry-run preview if one changes and not the other).
+ *
+ * Signature is UNCHANGED by ml-03 on purpose: Level 1 (`mnemosyne.md`) is
+ * repo-owned, so it's resolved internally from `repoRoot` (the same
+ * parameter this function already took) via `readMnemosyneMdContent`,
+ * rather than threading a new parameter through every call site --
+ * `bin/mnemosyne-persona.mjs`'s existing `sync`/`--dry-run` call sites need
+ * zero changes as a result.
  */
 export function buildManagedBody(tier: Tier, scopeId: string, repoRoot: string, level0Content: string): string {
   const tierMarkdown = renderTierContentMarkdown(getPersonaContent(tier, scopeId, { repoRoot }));
-  // Level 0 first, verbatim, ahead of tier content -- never reordered.
-  return [level0Content.trim(), '', '---', '', tierMarkdown.trim()].join('\n');
+  // Read fresh every call -- no module-level caching, matching Level 0's own hard rule (level0.ts).
+  const level1Content = readMnemosyneMdContent(path.join(repoRoot, 'mnemosyne.md'));
+
+  // Level 0 first, verbatim; Level 1 (mnemosyne.md) second, verbatim, when present; tier content
+  // always last -- never reordered. `null` (file absent) yields the pre-ml-03 2-part join,
+  // byte-identical to the original code, so every repo without a mnemosyne.md sees zero
+  // regression (design-discussion.md §7.2).
+  const parts = [level0Content.trim()];
+  if (level1Content !== null) {
+    parts.push(level1Content.trim());
+  }
+  parts.push(tierMarkdown.trim());
+
+  return parts.flatMap((part, i) => (i === 0 ? [part] : ['', '---', '', part])).join('\n');
 }
 
 /**

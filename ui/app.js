@@ -1214,6 +1214,20 @@ function personaLayerStackCell(text) {
   return td;
 }
 
+// ml-05-memory-levels-ui (epic mnemosyne-memory-levels): element refs for
+// the new, structurally separate Memory Levels (0-4) section -- never
+// shared with persona-layer-stack's elements above.
+const memoryLevelsStatusEl = document.getElementById("memory-levels-status");
+const memoryLevelsTableEl = document.getElementById("memory-levels-table");
+const memoryLevelsTbodyEl = document.getElementById("memory-levels-tbody");
+const memoryLevelsEmptyEl = document.getElementById("memory-levels-empty");
+
+function memoryLevelsCell(text) {
+  const td = document.createElement("td");
+  td.textContent = text;
+  return td;
+}
+
 // Renders a persona's parentRefs as pointer-only text ("tier: scopeId",
 // comma-separated), built entirely from fields already present on the
 // persona record itself -- this function never fetches anything. This is
@@ -1386,6 +1400,59 @@ async function loadPersonaLayerStack() {
 }
 // ==================== end pw-04-layer-stack-visibility ====================
 
+// ==================== ml-05-memory-levels-ui (epic mnemosyne-memory-levels) ====================
+// Loads the 5 canonical memory-STORE-TYPE levels (ml-01's static taxonomy)
+// via ml-04's NEW GET /memory-levels route -- a structurally separate
+// question from loadPersonaLayerStack()'s "what's in the current recall()
+// cascade" above, so this is its own function against its own section's
+// elements, following the exact same setStatus()/hidden-table-toggling/
+// error-handling conventions as loadPersonaLayerStack() above.
+async function loadMemoryLevels() {
+  // Guards against running against an older served index.html that predates
+  // this section (e.g. a stale cached page) -- never throws either way.
+  if (!memoryLevelsStatusEl || !memoryLevelsTableEl || !memoryLevelsTbodyEl) return;
+
+  setStatus(memoryLevelsStatusEl, "loading", "loading…");
+  memoryLevelsTbodyEl.textContent = "";
+  memoryLevelsTableEl.hidden = true;
+  if (memoryLevelsEmptyEl) memoryLevelsEmptyEl.hidden = true;
+
+  try {
+    const res = await fetch(mnemosyneClientApiBase() + "/memory-levels");
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      setStatus(
+        memoryLevelsStatusEl,
+        "fail",
+        `FAIL — GET /memory-levels returned ${res.status}${body.error ? `: ${body.error.message || body.error}` : ""}`,
+      );
+      return;
+    }
+    const body = await res.json();
+    const levels = Array.isArray(body.levels) ? body.levels : [];
+    if (!levels.length) {
+      setStatus(memoryLevelsStatusEl, "pass", "no memory levels reported");
+      if (memoryLevelsEmptyEl) memoryLevelsEmptyEl.hidden = false;
+      return;
+    }
+    levels.forEach((l) => {
+      const tr = document.createElement("tr");
+      tr.appendChild(memoryLevelsCell(l && l.id != null ? String(l.id) : "?"));
+      tr.appendChild(memoryLevelsCell(l && l.label ? String(l.label) : "?"));
+      tr.appendChild(memoryLevelsCell(l && l.storeType ? String(l.storeType) : "?"));
+      const configured = l && l.configured ? "configured" : "not configured";
+      const active = l && typeof l.activeInCascade === "boolean" ? (l.activeInCascade ? ", active" : ", inactive") : "";
+      tr.appendChild(memoryLevelsCell(`${configured}${active}`));
+      memoryLevelsTbodyEl.appendChild(tr);
+    });
+    memoryLevelsTableEl.hidden = false;
+    setStatus(memoryLevelsStatusEl, "pass", `${levels.length} level(s), 0-4`);
+  } catch (err) {
+    setStatus(memoryLevelsStatusEl, "fail", "FAIL — could not reach GET /memory-levels");
+  }
+}
+// ==================== end ml-05-memory-levels-ui ====================
+
 async function refreshAll() {
   refreshBtn.disabled = true;
   try {
@@ -1398,6 +1465,7 @@ async function refreshAll() {
       loadReindexLanes(),
       loadPersonas(),
       loadPersonaLayerStack(),
+      loadMemoryLevels(),
     ]);
     lastRefreshedEl.textContent = `last refreshed ${new Date().toLocaleTimeString()}`;
   } finally {

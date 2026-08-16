@@ -57,6 +57,35 @@ async function jOrigin(method, pathname, origin) {
   return { status: res.status, headers: res.headers, body: await res.json() };
 }
 
+// ml-04-memory-levels-route: raw (unparsed) response text, for the
+// byte-for-byte GET /layers regression check below -- JSON.parse()/
+// re-stringify would silently normalize away exactly the kind of
+// whitespace/key-order drift a real regression could introduce.
+async function rawText(method, pathname) {
+  const res = await fetch(BASE + pathname, { method });
+  return { status: res.status, headers: res.headers, text: await res.text() };
+}
+
+// ml-04-memory-levels-route: GET /layers's real, full response body in
+// this test's environment (SWARM_MEMORY_BIN/GRAPHIFY_BIN both broken in
+// main()'s env below -> the default cascade resolves to
+// code-graph,vector,file) -- built with the exact same JSON.stringify(...,
+// null, 2) call server.ts's own sendJson() uses, so a raw-text match
+// against this is a genuine byte-for-byte proof that GET /layers's
+// response is unaffected by this story's changes, not merely "the
+// function wasn't edited."
+const EXPECTED_LAYERS_BODY = JSON.stringify(
+  {
+    layers: [
+      { layer: "code-graph", writable: false },
+      { layer: "vector", writable: true },
+      { layer: "file", writable: false },
+    ],
+  },
+  null,
+  2,
+);
+
 /**
  * Hand-writes a global persona YAML file directly at
  * `<home>/.mnemosyne/personas/<tier>/<scopeId>.yaml` (persona-store-global.ts's
@@ -245,6 +274,18 @@ async function main() {
       `GET /layers from an unknown origin -> Access-Control-Allow-Origin is NOT a wildcard and does NOT reflect the disallowed origin (got ${layersCorsDisallowed.headers.get("access-control-allow-origin")})`,
     );
 
+    // ml-04-memory-levels-route: GET /layers byte-for-byte-unchanged
+    // regression proof -- this story's single highest-leverage acceptance
+    // criterion. A raw-text comparison against EXPECTED_LAYERS_BODY (the
+    // exact response body captured directly off a real running server in
+    // this identical environment, before ml-04's route existed), not
+    // merely the shape/field checks above.
+    const layersRaw = await rawText("GET", "/layers");
+    ok(
+      layersRaw.text === EXPECTED_LAYERS_BODY,
+      `GET /layers response body is byte-for-byte identical to its pre-ml-04 baseline (got ${JSON.stringify(layersRaw.text)})`,
+    );
+
     // Runs its own separate server subprocess, so it's independent of this
     // block's child/root cleanup — positioned here (before POST /recall
     // below) for the same reason the GET /layers checks above are: POST
@@ -252,6 +293,13 @@ async function main() {
     // better-sqlite3/CodeGraphLayerAdapter native-binding issue), and
     // anything after that crash never runs.
     await testHiveMemoryLayerConfigurable();
+
+    // ml-04-memory-levels-route: GET /memory-levels -- a NEW, parallel
+    // route, its own dedicated subprocess for full isolation/determinism
+    // (controlled $HOME and root, controlled MNEMOSYNE_LAYERS). Positioned
+    // here for the same reason as the two calls above: POST /recall crashes
+    // this process on this machine, so anything after it never runs.
+    await testMemoryLevelsRoute();
 
     // pw-02-get-persona-routes-cors: GET /persona and GET /persona/:tier/:scopeId,
     // plus the CORS header the UI (a genuinely different origin, port 8477)
@@ -767,6 +815,181 @@ async function testHiveMemoryLayerConfigurable() {
     );
   } finally {
     child.kill();
+  }
+}
+
+// testMemoryLevelsRoute — ml-04-memory-levels-route (epic
+// mnemosyne-memory-levels). Its own dedicated subprocess (own $HOME, own
+// root, own MNEMOSYNE_LAYERS) for full determinism: level 0/1's `configured`
+// depends on real on-disk file state and level 2-4's `activeInCascade`
+// depends on which layers actually resolved, so this test controls both
+// exactly rather than depending on main()'s shared fixtures or the real
+// operator machine's actual ~/.mnemosyne state.
+async function testMemoryLevelsRoute() {
+  const port = PORT + 2;
+  const base = `http://127.0.0.1:${port}`;
+  const root = await mkdtemp(path.join(tmpdir(), "mnemosyne-memory-levels-"));
+  const fakeHome = await mkdtemp(path.join(tmpdir(), "mnemosyne-memory-levels-home-"));
+
+  // Only 'file' configured -> level 2 (graphify/code-graph) and level 3
+  // (vector/keyword) must resolve inactive; level 4 (file) must resolve
+  // active -- exercises BOTH the "contains" and "does not contain"
+  // permutations acceptance_criteria requires, from a single, controlled
+  // resolved cascade (never a second/independent resolution of our own).
+  const child = spawn(TSX, [SERVER], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      MNEMOSYNE_PORT: String(port),
+      MNEMOSYNE_ROOT_DIR: root,
+      HOME: fakeHome,
+      MNEMOSYNE_LAYERS: JSON.stringify({ layers: [{ name: "file" }] }),
+      SWARM_MEMORY_BIN: "/definitely/missing/swarm-memory",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  let serverOutput = "";
+  child.stdout.on("data", (c) => (serverOutput += c));
+  child.stderr.on("data", (c) => (serverOutput += c));
+
+  try {
+    const deadline = Date.now() + 15000;
+    let up = false;
+    while (Date.now() < deadline) {
+      try {
+        const res = await fetch(`${base}/health`);
+        if (res.status === 200 || res.status === 503) {
+          up = true;
+          break;
+        }
+      } catch {
+        // not up yet
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    ok(up, "GET /memory-levels test server started and is reachable");
+    if (!up) {
+      console.error(serverOutput);
+      throw new Error(`server never became reachable:\n${serverOutput}`);
+    }
+
+    // --- neither level0-rules.md nor mnemosyne.md exist yet -------------
+    const unconfigured = await fetch(`${base}/memory-levels`);
+    const unconfiguredBody = await unconfigured.json();
+    ok(unconfigured.status === 200, `GET /memory-levels -> 200 (got ${unconfigured.status})`);
+
+    const levels = unconfiguredBody.levels;
+    ok(
+      Array.isArray(levels) && levels.length === 5,
+      `GET /memory-levels -> {levels: [...]} with exactly 5 entries (got ${JSON.stringify(levels)})`,
+    );
+    ok(
+      Array.isArray(levels) && levels.map((l) => l.id).join(",") === "0,1,2,3,4",
+      `GET /memory-levels -> ids 0-4 in order (got ${levels && levels.map((l) => l.id).join(",")})`,
+    );
+    ok(
+      levels.every((l) => typeof l.id === "number" && typeof l.label === "string" && typeof l.storeType === "string" &&
+        typeof l.configured === "boolean" && typeof l.sourceRef === "string"),
+      "GET /memory-levels -> every entry carries {id, label, storeType, configured, sourceRef}",
+    );
+    ok(
+      levels.filter((l) => l.id >= 2).every((l) => typeof l.activeInCascade === "boolean") &&
+        levels.filter((l) => l.id < 2).every((l) => l.activeInCascade === undefined),
+      "GET /memory-levels -> levels 2-4 (and only 2-4) additionally carry a boolean activeInCascade",
+    );
+
+    // ml-01's exact taxonomy data (levels.ts), cross-checked against the
+    // real HTTP response -- not re-derived/duplicated into server.ts.
+    const [l0, l1, l2, l3, l4] = levels;
+    ok(
+      l0.label === "Mnemosyne operator rules" &&
+        l0.storeType === "operator-global rules file" &&
+        l0.sourceRef === "lib/mnemosyne/layer1/level0.ts",
+      `GET /memory-levels -> level 0 label/storeType/sourceRef match ml-01's taxonomy (got ${JSON.stringify(l0)})`,
+    );
+    ok(
+      l1.label === "Repo agent overlay" &&
+        l1.storeType === "repo-committed instruction files" &&
+        l1.sourceRef === "lib/mnemosyne/layer1/harness.ts, lib/mnemosyne/layer1/sync.ts",
+      `GET /memory-levels -> level 1 label/storeType/sourceRef match ml-01's taxonomy (got ${JSON.stringify(l1)})`,
+    );
+    ok(
+      l2.label === "Graph" && l2.storeType === "code/doc structure graph",
+      `GET /memory-levels -> level 2 label/storeType match ml-01's taxonomy (got ${JSON.stringify(l2)})`,
+    );
+    ok(
+      l3.label === "Vector" && l3.storeType === "semantic embedding store",
+      `GET /memory-levels -> level 3 label/storeType match ml-01's taxonomy (got ${JSON.stringify(l3)})`,
+    );
+    ok(
+      l4.label === "File doc store" && l4.storeType === "raw filesystem content",
+      `GET /memory-levels -> level 4 label/storeType match ml-01's taxonomy (got ${JSON.stringify(l4)})`,
+    );
+
+    // --- level 0/1 configured: real existsSync, both currently false ----
+    ok(l0.configured === false, `GET /memory-levels -> level 0 configured:false when level0-rules.md is absent (got ${l0.configured})`);
+    ok(l1.configured === false, `GET /memory-levels -> level 1 configured:false when this root's mnemosyne.md is absent (got ${l1.configured})`);
+
+    // --- levels 2/3 inactive, level 4 active -- only 'file' is configured ---
+    ok(
+      l2.configured === false && l2.activeInCascade === false,
+      `GET /memory-levels -> level 2 (graphify/code-graph) inactive when neither adapter is in the resolved cascade (got ${JSON.stringify(l2)})`,
+    );
+    ok(
+      l3.configured === false && l3.activeInCascade === false,
+      `GET /memory-levels -> level 3 (vector/keyword) inactive when neither adapter is in the resolved cascade (got ${JSON.stringify(l3)})`,
+    );
+    ok(
+      l4.configured === true && l4.activeInCascade === true,
+      `GET /memory-levels -> level 4 (file) active -- 'file' IS in the resolved cascade (got ${JSON.stringify(l4)})`,
+    );
+
+    // --- now create both real source files and re-check -- a fresh,
+    // real existsSync check every request, never cached/stale ------------
+    await mkdir(path.join(fakeHome, ".mnemosyne"), { recursive: true });
+    await writeFile(path.join(fakeHome, ".mnemosyne", "level0-rules.md"), "# operator rules\n", "utf8");
+    await writeFile(path.join(root, "mnemosyne.md"), "# mnemosyne.md\n", "utf8");
+
+    const configured = await fetch(`${base}/memory-levels`);
+    const configuredBody = await configured.json();
+    const [c0, c1] = configuredBody.levels;
+    ok(
+      c0.configured === true,
+      `GET /memory-levels -> level 0 configured:true once ~/.mnemosyne/level0-rules.md exists on disk (got ${c0.configured})`,
+    );
+    ok(
+      c1.configured === true,
+      `GET /memory-levels -> level 1 configured:true once this root's mnemosyne.md exists on disk (got ${c1.configured})`,
+    );
+
+    // --- CORS: Access-Control-Allow-Origin on GET /memory-levels, scoped,
+    // same applyPersonaCors treatment as every other browser-reachable route ---
+    const corsLoopback = await fetch(`${base}/memory-levels`, { headers: { origin: UI_ORIGIN_LOOPBACK } });
+    ok(
+      corsLoopback.headers.get("access-control-allow-origin") === UI_ORIGIN_LOOPBACK,
+      `GET /memory-levels from ${UI_ORIGIN_LOOPBACK} -> Access-Control-Allow-Origin: ${UI_ORIGIN_LOOPBACK} (got ${corsLoopback.headers.get("access-control-allow-origin")})`,
+    );
+    const corsLocalhost = await fetch(`${base}/memory-levels`, { headers: { origin: UI_ORIGIN_LOCALHOST } });
+    ok(
+      corsLocalhost.headers.get("access-control-allow-origin") === UI_ORIGIN_LOCALHOST,
+      `GET /memory-levels from ${UI_ORIGIN_LOCALHOST} -> Access-Control-Allow-Origin: ${UI_ORIGIN_LOCALHOST} (got ${corsLocalhost.headers.get("access-control-allow-origin")})`,
+    );
+    const corsDisallowed = await fetch(`${base}/memory-levels`, { headers: { origin: DISALLOWED_ORIGIN } });
+    ok(
+      corsDisallowed.headers.get("access-control-allow-origin") !== "*" &&
+        corsDisallowed.headers.get("access-control-allow-origin") !== DISALLOWED_ORIGIN,
+      `GET /memory-levels from an unknown origin -> Access-Control-Allow-Origin is NOT a wildcard and does NOT reflect the disallowed origin (got ${corsDisallowed.headers.get("access-control-allow-origin")})`,
+    );
+    const corsNoOrigin = await fetch(`${base}/memory-levels`);
+    ok(
+      corsNoOrigin.headers.get("access-control-allow-origin") !== "*",
+      `GET /memory-levels with no Origin header -> Access-Control-Allow-Origin is never a wildcard (got ${corsNoOrigin.headers.get("access-control-allow-origin")})`,
+    );
+  } finally {
+    child.kill();
+    await rm(root, { recursive: true, force: true });
+    await rm(fakeHome, { recursive: true, force: true });
   }
 }
 

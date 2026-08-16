@@ -1,0 +1,135 @@
+id: ml-10-full-suite-regression-release
+epic: mnemosyne-memory-levels
+title: Full-suite regression pass + version bump + release note
+status: complete
+complexity: low
+methodology: tdd
+depends_on: [ml-09-doc-reconciliation]
+
+note_on_completion: >
+  Merged 2026-08-16. This worktree had zero node_modules installed (matching
+  the same environmental gap ml-06's independent reviewer hit and resolved
+  the same way) -- ran `npm install` first (149 packages, package.json/
+  package-lock.json identical to the main repo's copy before this fix,
+  confirmed via diff), which also caught and fixed a real stale-lockfile gap
+  (package-lock.json was missing the `mnemosyne-file-index` bin entry ml-08
+  had already added to package.json). Full suite on this epic's final state
+  (commit c373eb7 + this story's own changes): all `.mjs` scripts pass
+  individually (single-layer-config/git-hooks/install-git-hooks/lifecycle-
+  compliance-audit/persona-cli all clean; bundle/inject/write-through/
+  health-drift/code-graph/reindex/vector/parallel-keyword/keyword-recall-
+  regression/recall-status-filtering/layer1-mandate-hook/review-auto-merge
+  all clean); test/http-api.mjs: 277 PASS, 3 FAIL, all 3 on POST /remember's
+  default-layer assertions (`ok:true`/`layer:file (default)`/`has
+  provenance`) -- confirmed via git blame + client.ts's own doc comment
+  ("'vector' remains the default target, matching pre-pl-01 behavior
+  exactly") that this predates mnemosyne-memory-levels entirely (it's a
+  pluggable-layers-implementation-epic decision) and was already
+  independently flagged as pre-existing/unrelated in ml-04's own completion
+  note ("only the 3 pre-existing/unrelated POST /remember failures remain").
+  vitest (lib/mnemosyne lib/minerva benchmarks src/planning src/config
+  src/runners): 663/663 passing (49/49 files) on a clean rerun --
+  CodeGraphLayerAdapter.test.ts's better-sqlite3 native-binding crash named
+  in this story's own acceptance criteria did NOT reproduce in this fresh
+  install (4/4 passing in isolation); a single vitest run under heavy
+  concurrent-agent system load produced one transient timing flake in
+  client-keyword-cascade.test.ts (expected <300ms, got 330ms), confirmed
+  non-reproducing (2/2 clean reruns in isolation, 12/12 tests each time,
+  then 663/663 clean on a full-suite rerun) -- a load artifact, not a code
+  regression. `npx tsc --noEmit`: clean, zero errors.
+
+  Real stash-and-reproduce proof (per this story's own acceptance criteria
+  and la-01's precedent): rather than a working-tree `git stash` (this
+  epic's full changeset is already committed across 25 commits, ml-01
+  through ml-09), created a temporary local branch at this branch's
+  merge-base with main (`git merge-base main HEAD` = commit `e079b17`,
+  the persona-wizard v0.8.0 release -- confirmed identical to origin/main),
+  checked it out (a real branch, not detached HEAD -- a first attempt at
+  detached HEAD broke write-through.mjs's git-branch flight-status
+  auto-detection, an artifact of the checkout method, not a real failure),
+  and reran the identical full suite + tsc --noEmit there. Result: byte-
+  identical failure set -- test/http-api.mjs: 254 PASS, 3 FAIL, the exact
+  same 3 POST /remember assertions and no others; all other .mjs scripts
+  clean; tsc --noEmit clean; vitest 601/601 passing (46/46 files -- 62 fewer
+  tests and 3 fewer files than the epic tree, exactly this epic's own new
+  test files, confirming no other test-count drift). Deleted the temporary
+  branch and switched back to feat/mnemosyne-memory-levels afterward.
+
+  Version bumped 0.8.0 -> 0.9.0 (minor, per epic.yaml's version_bump field
+  and both prior epics' convention) in package.json + package-lock.json.
+  Release note written in CHANGELOG.md (this repo's existing convention,
+  matching the format of the 0.6.0/0.7.0/0.8.0 entries) covering all three
+  real deliverables: the taxonomy+mnemosyne.md+route+UI work (ml-01-ml-05),
+  the Level 4 file-store sub-index (ml-06-ml-08), and the doc reconciliation
+  (ml-09). All acceptance criteria met.
+
+description: |
+  The epic's closing, integrative story — gated on every other story
+  (ml-02 through ml-09) being complete. Proves the whole epic, taken
+  together, introduces zero regression anywhere in the existing suite,
+  exactly per this repo's own established verification bar (la-01's
+  completion note is the direct template: full `npm test` run, the two
+  known-unrelated pre-existing failures independently reproduced on a clean
+  stash to prove they predate and are unaffected by this epic's changes,
+  not just asserted as pre-existing from memory).
+
+  Version bump per epic.yaml's `minor` designation, matching both prior
+  epics' (mnemosyne-persona-foundation, mnemosyne-persona-wizard) convention
+  for a real, backward-compatible feature addition (new route, new file,
+  new module — nothing this epic does changes any existing route's
+  contract or removes any existing capability).
+
+acceptance_criteria:
+  - "Given the full npm test script (vitest suite + the .mjs subprocess suite), when run on this epic's final state, then it completes with only the two pre-existing, already-documented-as-unrelated failures (CodeGraphLayerAdapter.test.ts's better-sqlite3 native-binding crash; test/http-api.mjs's socket-close flake) — no NEW failures anywhere"
+  - "Given those two pre-existing failures, when this epic's changes are stashed out (git stash) and the suite is re-run against the clean tree, then the same two failures reproduce identically — proving they predate this epic and are not caused by it, not merely asserted from a prior story's note"
+  - "Given tsc --noEmit, when run, then it completes clean with zero new type errors"
+  - "Given package.json's version field, when this story completes, then it reflects a minor version bump from the version at epic start"
+  - "Given this story's completion note, when read, then it includes the actual full test-run output summary (pass/fail counts) and the actual stashed-tree comparison result, matching la-01's own completion-note verification detail level, not a bare 'tests pass' assertion"
+
+steps:
+  - id: research
+    description: Confirm the current version in package.json and the exact current pre-existing-failure set by running the full suite once before this epic's final story lands, to have a real baseline to compare against.
+    agent: researcher
+  - id: implement
+    description: Run the full npm test + tsc --noEmit against this epic's final state; if any NEW failure appears, fix it (this is a regression-fixing step, not a new-feature step) before proceeding.
+    agent: developer
+    depends_on: [research]
+  - id: review
+    description: git stash this epic's full changeset, re-run the suite, confirm the two known failures reproduce identically and nothing else fails on the clean tree; un-stash.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Bump version (minor), write the release note summarizing the epic's three deliverables, commit and push to feat/mnemosyne-memory-levels.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: package.json
+      purpose: "test script (full suite composition) and version field this story runs/bumps."
+    - path: .pHive/epics/mnemosyne-layer-architecture-v2/stories/la-01-role-meta-file-sync.yaml
+      purpose: "Direct template for this story's expected verification rigor and completion-note detail level (the exact 'stash out this story's changes, reproduce failures identically on the clean tree' pattern)."
+
+files_to_modify:
+  - file: package.json
+    change: "Version bump (minor)."
+
+design_decisions:
+  - decision: "Minor version bump"
+    rationale: "epic.yaml's version_bump field, matching both prior epics' convention for a real, backward-compatible feature addition — no existing route/module contract changes or is removed by this epic."
+
+risks:
+  - severity: low
+    description: "A regression could be masked if the stashed-tree comparison isn't actually performed (just assumed the two known failures are 'the usual ones')."
+    mitigation: "Acceptance criteria explicitly require the stash-and-reproduce step to be performed for real, with its actual output recorded in the completion note, matching la-01's own precedent."
+
+references:
+  - path: .pHive/epics/mnemosyne-layer-architecture-v2/stories/la-01-role-meta-file-sync.yaml
+    relevant_excerpt: |
+      Full suite: npm test -- all vitest suites pass ... the 2 failures ...
+      are a pre-existing native better-sqlite3 binding crash on this
+      machine ... reproduced identically with this story's changes stashed
+      out, confirming zero regression caused by this story.
+
+cross_cutting: []

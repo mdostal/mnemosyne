@@ -16,6 +16,14 @@
  *   GET  /health            -> layer availability status
  *   GET  /layers            -> the resolved layer stack (pl-03-layer-ab-testing):
  *                               names in cascade order + write-capability per layer
+ *   GET  /memory-levels     -> the 5 canonical memory-STORE-TYPE levels
+ *                               (ml-04-memory-levels-route, epic mnemosyne-
+ *                               memory-levels): ml-01's static taxonomy plus
+ *                               live configured/activeInCascade checks -- a
+ *                               NEW, parallel route, never an extension of
+ *                               GET /layers above (different data model;
+ *                               levels 0/1 don't participate in a recall()
+ *                               cascade at all)
  *   GET  /persona           -> list personas (pw-02-get-persona-routes-cors):
  *                               global tiers by default, or ?repo=<path>'s
  *                               code-architect personas -- wraps pw-01's
@@ -41,9 +49,10 @@
  *
  * No authentication — localhost-only for this slice; auth is future work.
  *
- * CORS: /persona/* and /layers responses carry an Access-Control-Allow-Origin
- * header (pw-02-get-persona-routes-cors; extended to /layers by
- * pw-04-layer-stack-visibility) -- the standalone UI is served from
+ * CORS: /persona/*, /layers, and /memory-levels responses carry an
+ * Access-Control-Allow-Origin header (pw-02-get-persona-routes-cors;
+ * extended to /layers by pw-04-layer-stack-visibility; extended to
+ * /memory-levels by ml-04-memory-levels-route) -- the standalone UI is served from
  * src/server.mjs on a DIFFERENT port (8477 by default) than this service
  * (3141 by default), so a browser fetch from the UI to either is a real
  * cross-origin request that gets silently blocked without it. Scoped to the
@@ -52,9 +61,12 @@
  */
 
 import http from 'node:http';
+import { existsSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
+import path from 'node:path';
 import { MnemosyneClient } from './client.js';
 import type { Layer, Scope } from './interfaces.js';
+import { DEFAULT_LEVEL0_PATH } from './layer1/level0.js';
 import { PERSONA_STORE_BY_TIER } from './layer1/persona.js';
 import { listGlobalPersonas, readGlobalPersona, writeGlobalPersona } from './layer1/persona-store-global.js';
 import {
@@ -64,6 +76,7 @@ import {
   writeRepoLocalPersona,
 } from './layer1/persona-store-repo-local.js';
 import { TIERS, type Tier } from './layer1/tiers.js';
+import { MEMORY_LEVELS } from './memory-levels/levels.js';
 
 const PORT = Number(process.env.MNEMOSYNE_PORT || 3141);
 const ROOT_DIRECTORY = process.env.MNEMOSYNE_ROOT_DIR || process.cwd();
@@ -244,6 +257,73 @@ const server = http.createServer(async (req, res) => {
       // than duplicating its logic.
       applyPersonaCors(req, res);
       return sendJson(res, 200, { layers: client.getConfiguredLayers() });
+    }
+
+    if (route === 'GET /memory-levels') {
+      // ml-04-memory-levels-route (epic mnemosyne-memory-levels): a NEW,
+      // parallel introspection route -- never an extension or repurposing of
+      // GET /layers directly above, which stays byte-for-byte unchanged (see
+      // that route's own comment plus test/http-api.mjs's dedicated
+      // regression check). GET /layers answers "what's in the CURRENT
+      // recall() retrieval cascade"; this route answers a structurally
+      // different question -- "what are this system's 5 canonical memory
+      // STORE TYPES, and is each one configured right now" -- levels 0/1
+      // never participate in a recall() cascade at all, so they are
+      // structurally unrepresentable inside GET /layers's shape
+      // (design-discussion.md §5/§7.3; levels.ts's own module doc).
+      //
+      // Data sources, per ml-01's MEMORY_LEVELS (levels.ts) plus exactly two
+      // kinds of live, read-only check -- never a second, independent
+      // cascade resolution:
+      //   - levels 0/1: a real existsSync check against that level's real
+      //     source file on disk right now (~/.mnemosyne/level0-rules.md via
+      //     layer1/level0.ts's DEFAULT_LEVEL0_PATH; this root's mnemosyne.md).
+      //   - levels 2-4: is at least one of that level's mapped adapter names
+      //     (levels.ts's own adapterNames -- the one place this mapping
+      //     lives, never duplicated here) present in
+      //     client.getConfiguredLayers()'s CURRENT resolved cascade -- a
+      //     READ of that already-computed output only, so this route can
+      //     never disagree with what GET /layers itself would report.
+      applyPersonaCors(req, res);
+      const activeAdapterNames = new Set<string>(client.getConfiguredLayers().map((l) => l.layer));
+      const level0Configured = existsSync(DEFAULT_LEVEL0_PATH);
+      const level1Configured = existsSync(path.join(ROOT_DIRECTORY, 'mnemosyne.md'));
+      const levels = MEMORY_LEVELS.map((level) => {
+        // levels 0/1: real on-disk existence. levels 2-4: real presence in
+        // the already-resolved cascade -- both are "is this level configured
+        // right now", just checked two different ways depending on whether
+        // the level participates in a recall() cascade at all.
+        const configured =
+          level.id === 0
+            ? level0Configured
+            : level.id === 1
+              ? level1Configured
+              : level.adapterNames.some((name) => activeAdapterNames.has(name));
+        const entry: {
+          id: number;
+          label: string;
+          storeType: string;
+          configured: boolean;
+          sourceRef: string;
+          activeInCascade?: boolean;
+        } = {
+          id: level.id,
+          label: level.label,
+          storeType: level.storeType,
+          configured,
+          sourceRef: level.sourceRef,
+        };
+        if (level.id >= 2) {
+          // Same underlying value as `configured` for these levels --
+          // exposed under its own, self-documenting name because "active in
+          // the resolved cascade" is exactly what it measures for a
+          // cascade-participating level, matching this story's acceptance
+          // criteria ("levels 2-4 additionally carrying activeInCascade").
+          entry.activeInCascade = configured;
+        }
+        return entry;
+      });
+      return sendJson(res, 200, { levels });
     }
 
     if (route === 'GET /persona') {

@@ -1,0 +1,124 @@
+id: ml-07-file-store-index-query
+epic: mnemosyne-memory-levels
+title: "Query-time area-scoped narrowing + full-walk fallback + staleness-handling proof"
+status: complete
+complexity: high
+methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 0a7a23c). Given this ticket's flagged high risk,
+  gave it the deepest verification of any ticket in this epic: read
+  FileLayerAdapter.ts's full implementation, independently traced
+  walkArea's area-truncation logic by hand and confirmed it correctly
+  mirrors FileStoreIndex.ts's computeArea inverse mapping (>=2 segments ->
+  recursive walk of that subdirectory; 0/1 segments -> direct children
+  only). Then wrote and ran TWO of my own independent adversarial scripts
+  (not the builder's tests) directly against the real implementation: (1)
+  added a file to an indexed area AFTER building the index, confirmed an
+  area-scoped query still found it -- proving false negatives are
+  structurally impossible, not just untested; (2) modified an indexed
+  file's content after indexing, confirmed the query returns the NEW
+  content and never the stale pre-modification content -- proving the
+  no-cache/always-live-read design genuinely eliminates staleness. Both of
+  my own adversarial checks passed. Confirmed via diff that the ORIGINAL
+  FileLayerAdapter.test.ts suite has zero deletions (purely additive).
+  Confirmed the area===undefined path makes zero extra filesystem calls
+  (byte-for-byte pre-ticket behavior). Reran vitest lib/mnemosyne/layers
+  (128/128) and tsc --noEmit (clean) myself after a fresh npm install
+  (worktree had no node_modules). All acceptance criteria met, verified
+  beyond the builder's own claims.
+depends_on: [ml-06-file-store-index-build]
+
+description: |
+  Wires ml-06's persisted index into query-time behavior: an area-matching
+  query consults the manifest first and narrows the walk to that area's
+  file set, instead of walking the entire tree on every call. This is the
+  genuine correctness risk of the Level 4 sub-index (design-discussion.md
+  §9's risk table) — the highest-complexity story in this epic, because the
+  bar is strict in both directions:
+
+  1. NEVER a false negative — an area-scoped query must return the SAME
+     hits a full walk restricted to that area would have found. Narrowing
+     that silently drops a real match is worse than no index at all.
+  2. NEVER silently stale — if a file changed after being indexed (its live
+     content hash no longer matches the manifest's recorded hash), the
+     query must either exclude/flag that file explicitly or transparently
+     re-read it live, never silently serve the old, now-wrong cached
+     content as if it were current.
+  3. NEVER a regression for the no-index case — a repo with no manifest
+     built yet must behave EXACTLY as FileLayerAdapter does today, byte-for-
+     byte, full walk every time. The sub-index is additive, never a
+     required dependency for level 4 to keep working.
+
+  The exact wiring point (extending FileLayerAdapter.recall() directly, vs.
+  a thin sibling/wrapper adapter that consults the index then delegates to
+  FileLayerAdapter for the fallback) is this story's own implementation
+  call — design-discussion.md does not mandate one shape, only the
+  behavioral guarantees above.
+
+acceptance_criteria:
+  - "Given a repo with a built index (ml-06) and a query matching a known area, when recall() runs, then the search is scoped to that area's file set (verified by proving fewer files are read/scanned than a full walk of the whole target directory would touch)"
+  - "Given the same area-scoped query, when its results are compared against a full walk manually restricted to that same area, then the two produce IDENTICAL hit sets — no false negative introduced by narrowing"
+  - "Given a repo with NO index built, when recall() runs any query, then behavior (hits returned, files scanned, provenance shape) is byte-for-byte identical to pre-epic FileLayerAdapter behavior — a regression test proves this directly against the existing FileLayerAdapter.test.ts suite, unmodified"
+  - "Given a file indexed by ml-06's manifest is modified on disk after indexing (its live sha256 no longer matches the recorded hash), when a query touching that file's area runs, then the stale entry is either (a) excluded from the index-narrowed result set and the query falls through to a live read for that file, or (b) transparently re-read live and its current content used — but NEVER served as the old, now-incorrect cached content silently presented as a fresh hit"
+  - "Given a query that matches no known area (or the index doesn't exist at all), when recall() runs, then it falls through to today's exact full-walk behavior for the unmatched portion — never a partial, silently-narrower-than-intended result with no indication anything was skipped"
+  - "Given the implementation's chosen wiring shape (extended FileLayerAdapter vs. sibling adapter), when reviewed, then FileLayerAdapter's existing, already-tested recall() contract (RecallResult shape, layers_queried/layers_skipped/degraded/escalated semantics) is preserved exactly for both the indexed and non-indexed paths"
+
+steps:
+  - id: research
+    description: Re-read FileLayerAdapter.ts's recall()/RecallResult contract in full, plus ml-06's manifest shape, and decide the wiring shape (extend vs. sibling adapter) before writing tests, documenting the reasoning as this story's own design decision.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for all six acceptance criteria above, INCLUDING a deliberately-staged staleness scenario (index built, then a fixture file modified before the next query) and a deliberately-staged no-index-present regression scenario reusing FileLayerAdapter.test.ts's existing fixtures where possible.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement area-scoped narrowing + staleness handling + full-walk fallback, per the chosen wiring shape.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Adversarially attempt to construct a false-negative case (an area-scoped query that should have found a hit a full walk would find) and a silently-stale case — confirm both are impossible given the implementation, not just untested by the happy-path suite.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-memory-levels.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/layers/FileLayerAdapter.ts
+      purpose: "recall()'s existing RecallResult contract (lines 30-116) — this story's changes must preserve it exactly for both indexed and non-indexed paths."
+    - path: lib/mnemosyne/layers/FileStoreIndex.ts
+      purpose: "ml-06's manifest format and sha256-based staleness-detection data this story consumes."
+    - path: lib/mnemosyne/layers/__tests__/FileLayerAdapter.test.ts
+      purpose: "The existing test suite this story's no-index-present regression criterion must pass unmodified."
+
+files_to_modify:
+  - file: lib/mnemosyne/layers/FileLayerAdapter.ts
+    change: "Area-scoped narrowing + staleness-aware fallback wired into recall() (or a thin wrapper, per this story's own chosen wiring shape)."
+  - file: lib/mnemosyne/layers/__tests__/FileLayerAdapter.test.ts
+    change: "New tests: area-scoped narrowing correctness (no false negatives), staleness handling, no-index-present regression."
+
+design_decisions:
+  - decision: "Never a false negative from narrowing, never a silently stale hit — both are hard, non-negotiable acceptance criteria, not best-effort goals"
+    rationale: "design-discussion.md §9's risk table names both explicitly as the sub-index's real correctness risk — a sub-index that's fast but occasionally wrong is strictly worse than the current, always-correct-but-slow full walk it's meant to complement, not replace."
+
+risks:
+  - severity: high
+    description: "This is the highest-complexity story in the epic precisely because 'narrower AND never wrong' is a genuinely hard correctness bar, not a routine feature addition."
+    mitigation: "Adversarial review step explicitly tasked with trying to break the false-negative and staleness guarantees before this story can be considered done, per the review step's own description above."
+  - severity: medium
+    description: "Wiring the index into FileLayerAdapter.recall() directly risks accidentally changing its existing, already-tested RecallResult contract for callers that never use area-scoped queries."
+    mitigation: "Explicit acceptance criterion requiring the no-index-present case to pass FileLayerAdapter.test.ts's existing suite unmodified — the strongest possible proof of contract preservation."
+
+references:
+  - path: .pHive/epics/mnemosyne-memory-levels/docs/vertical-plan.md
+    relevant_excerpt: |
+      Sub-slice 4b: Query-time narrowing + rebuild trigger. Why cut here:
+      this is where the real correctness risk lives (never returning a
+      false negative vs. a full walk, never silently serving stale
+      content) — worth isolating as its own proof.
+
+cross_cutting: []

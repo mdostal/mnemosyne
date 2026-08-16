@@ -1,0 +1,125 @@
+id: ml-04-memory-levels-route
+epic: mnemosyne-memory-levels
+title: "GET /memory-levels route + GET /layers byte-for-byte-unchanged regression proof"
+status: complete
+complexity: medium
+methodology: tdd
+
+note_on_completion: >
+  Merged 2026-08-16 (commit abe1272). Independently verified: read the
+  actual route in lib/mnemosyne/server.ts -- confirmed GET /layers's diff is
+  purely additive (zero lines removed from the existing route), confirmed
+  GET /memory-levels reads MEMORY_LEVELS + performs exactly two live checks
+  (existsSync for levels 0/1, a read of getConfiguredLayers()'s already-
+  resolved output for levels 2-4, never a second resolution). Reran
+  node test/http-api.mjs myself -- confirmed the byte-for-byte GET /layers
+  regression check (raw-text comparison against a pre-captured baseline) and
+  every GET /memory-levels shape/configured/activeInCascade/CORS check pass;
+  only the 3 pre-existing/unrelated POST /remember failures remain. Reran
+  tsc --noEmit (clean) and vitest lib/mnemosyne/layer1 (196/196) myself. All
+  acceptance criteria met.
+depends_on: [ml-01-memory-level-taxonomy]
+
+description: |
+  Implements this epic's single highest-leverage architectural decision
+  (design-discussion.md §5/§7.3): a NEW, parallel `GET /memory-levels` route
+  on lib/mnemosyne/server.ts — never an extension or repurposing of the
+  existing `GET /layers` route.
+
+  `GET /layers`'s response shape (`{layers: [{layer, writable}]}`) IS
+  `client.getConfiguredLayers()`'s runtime retrieval-cascade output — a
+  fundamentally different data model from the operator's 5-level taxonomy
+  (research-brief.md §3/§7): levels 0/1 never participate in a recall()
+  cascade at all, so they are structurally unrepresentable inside
+  GET /layers's existing shape without either fabricating fake cascade
+  entries or ad-hoc-discriminating two shapes inside one array. This
+  matches a standing convention this repo's own prior epics already
+  established and got operator sign-off on: never merge two different data
+  models into one list (mnemosyne-persona-foundation's design-discussion.md
+  Risks table; pw-04's own acceptance criteria for the persona-list vs.
+  layer-stack split).
+
+  GET /layers itself must be provably, not just assertedly, unchanged: it
+  was shipped and tested by pw-04-layer-stack-visibility
+  (epic mnemosyne-persona-wizard) and the existing Personas panel's
+  layer-stack section already depends on its exact current behavior.
+
+  GET /memory-levels's own data: ml-01's static MEMORY_LEVELS entries, plus
+  two live, read-only checks per entry — for levels 0/1, does the real
+  source file exist on disk right now (~/.mnemosyne/level0-rules.md,
+  repo-root mnemosyne.md); for levels 2/3/4, is at least one of that
+  level's mapped adapter names (ml-01's own data) present in
+  client.getConfiguredLayers()'s CURRENT resolved cascade (a read of
+  already-computed data, never a new resolution/recomputation).
+
+acceptance_criteria:
+  - "Given a request to GET /memory-levels, when it completes, then the response is {levels: [...]} with exactly 5 entries, ids 0-4, in order, each carrying {id, label, storeType, configured, sourceRef} and levels 2-4 additionally carrying activeInCascade"
+  - "Given ~/.mnemosyne/level0-rules.md exists on disk, when GET /memory-levels is called, then level 0's `configured` field is true; given it does not exist, then false — a real existsSync check, never a hardcoded value"
+  - "Given a repo's mnemosyne.md is present or absent, when GET /memory-levels is called with that repo as root, then level 1's `configured` field reflects the real, current file-existence state"
+  - "Given the current resolved retrieval cascade (client.getConfiguredLayers()) contains (or does not contain) an adapter name mapped to a given level 2/3/4 entry, when GET /memory-levels is called, then that entry's `activeInCascade` field reflects it exactly — a read of the already-resolved cascade, never a second, independent resolution that could disagree with what GET /layers itself would report"
+  - "Given GET /layers's route handler and response shape (lib/mnemosyne/server.ts:228-247) before and after this story's changes, when diffed, then they are byte-for-byte identical — a regression test proves this directly (e.g. asserting the exact response body for a fixed getConfiguredLayers() mock is unchanged), not merely 'the function wasn't edited'"
+  - "Given the Personas panel's existing layer-stack section (pw-04, which calls GET /layers), when this story's changes are deployed, then that section's existing tests still pass unmodified"
+  - "Given a request to GET /memory-levels from the standalone UI's known origin, when it completes, then the response carries the same Access-Control-Allow-Origin treatment (applyPersonaCors, scoped allow-list, never a wildcard) every other browser-reachable route on this server already uses"
+
+steps:
+  - id: research
+    description: Re-read server.ts's existing route table (GET /layers, GET /persona/*) and applyPersonaCors/sendJson conventions in full, plus ml-01's MEMORY_LEVELS shape, immediately before writing the new route.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for GET /memory-levels's response shape/correctness (both configured/unconfigured and active/inactive-in-cascade permutations) AND, critically, the GET /layers byte-for-byte-unchanged regression test — extending test/http-api.mjs's real-subprocess-HTTP convention.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement GET /memory-levels on lib/mnemosyne/server.ts, reusing applyPersonaCors/sendJson, reading ml-01's taxonomy plus live existsSync/getConfiguredLayers() checks. Zero edits to the GET /layers route handler itself.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm GET /layers's route handler has zero diff (line-by-line review, not just test-pass), confirm GET /memory-levels never re-resolves the cascade (only reads getConfiguredLayers()'s existing output), confirm CORS treatment matches every other route.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-memory-levels.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/server.ts
+      purpose: "GET /layers (lines 228-247) is the exact template for structure/CORS convention, and the route this story must prove is byte-for-byte unaffected."
+    - path: lib/mnemosyne/client.ts
+      purpose: "getConfiguredLayers() (lines 263-265) — the already-computed cascade data GET /memory-levels reads from, never recomputes."
+    - path: lib/mnemosyne/memory-levels/levels.ts
+      purpose: "ml-01's static taxonomy + level-to-adapter-name mapping — this route's primary data source."
+    - path: test/http-api.mjs
+      purpose: "The existing real-subprocess, real-HTTP test convention this story's regression test should extend, matching this repo's established rigor for server.ts changes."
+
+files_to_modify:
+  - file: lib/mnemosyne/server.ts
+    change: "New: GET /memory-levels route. Zero changes to the existing GET /layers route handler."
+  - file: test/http-api.mjs
+    change: "New tests: GET /memory-levels shape/correctness; GET /layers byte-for-byte-unchanged regression."
+
+design_decisions:
+  - decision: "New parallel route (GET /memory-levels), never extending or repurposing GET /layers"
+    rationale: "design-discussion.md §5/§7.3: the retrieval cascade and the 5-level taxonomy are different data models answering different questions (runtime resolution vs. largely-static taxonomy); levels 0/1 are structurally unrepresentable inside GET /layers's existing shape; this repo's own prior epics already established 'never merge two data models into one list' as a standing convention this decision applies rather than reinvents."
+  - decision: "activeInCascade is a READ of getConfiguredLayers()'s already-resolved output, never a second resolution"
+    rationale: "Prevents GET /memory-levels and GET /layers from ever being able to disagree about what's currently active — a single source of resolution truth, two honestly-different views over it."
+
+risks:
+  - severity: high
+    description: "Overloading or subtly changing GET /layers's behavior while adding the new route would regress pw-04's already-shipped, already-tested, operator-signed-off UI feature."
+    mitigation: "A dedicated byte-for-byte regression test is a first-class acceptance criterion for this story, not an afterthought — see acceptance_criteria's explicit diff-based requirement."
+  - severity: low
+    description: "The level-to-adapter-name mapping (ml-01's data) could go stale if a future story adds a new adapter without updating it."
+    mitigation: "ml-01's own acceptance criteria require the mapping to live as data in the taxonomy module itself, not duplicated inline in this route — one place to update."
+
+references:
+  - path: .pHive/epics/mnemosyne-memory-levels/docs/design-discussion.md
+    relevant_excerpt: |
+      Decision: add a new, parallel GET /memory-levels route and a new,
+      adjacent UI section — do not extend or repurpose GET /layers ...
+      GET /layers itself is explicitly not to be touched by this epic in
+      behavior or shape.
+
+cross_cutting: []

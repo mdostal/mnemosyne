@@ -1,0 +1,99 @@
+id: ml-08-file-store-index-rebuild
+epic: mnemosyne-memory-levels
+title: "Level 4 sub-index rebuild trigger (CLI verb) + regression test"
+status: complete
+complexity: low
+methodology: tdd
+depends_on: [ml-07-file-store-index-query]
+
+note_on_completion: >
+  Merged 2026-08-16 (commit 437725c). Independently verified: read the full
+  diff (bin/mnemosyne-file-index.mjs, fileWalk.ts, package.json) -- confirmed
+  it calls ml-06's writeFileStoreIndex directly with zero reimplementation,
+  confirmed writeFileStoreIndex always does a full from-scratch walk +
+  overwrite (no merge path, no first-build-vs-rebuild branching). Confirmed
+  and independently re-derived the real bug the builder found and fixed:
+  `.mnemosyne` was missing from DEFAULT_IGNORED_DIRECTORIES, causing a
+  second build to self-index its own manifest. Ran my own manual smoke test
+  against a real temp fixture directory (build, delete a file, add a new
+  file, rebuild) confirming the deleted file's entry is gone, the new file's
+  entry is present, and the manifest never contains a self-referential
+  .mnemosyne entry. Reran tsc --noEmit (clean) and vitest
+  lib/mnemosyne/layers (136/136) myself. All acceptance criteria met.
+
+description: |
+  Closes the last gap in the Level 4 sub-index: an operator-triggered
+  rebuild mechanism. ml-07 already handles a single stale file gracefully
+  (fall through to a live read), but a rebuild is still needed to bring the
+  persisted manifest itself back into a fully fresh state after a batch of
+  changes, so subsequent queries get the full narrowing benefit again
+  rather than repeatedly falling through file-by-file.
+
+  Resolved here (vertical-plan.md's "Ambiguities Not Resolved" #3,
+  explicitly deferred by horizontal-plan.md H4 Components #4 to this
+  story): CLI-only, not also a new HTTP route — the lower-risk default
+  absent a stated operator need for a UI-triggered rebuild, mirroring this
+  repo's existing bin/mnemosyne-* verb conventions (bin/mnemosyne-reindex.mjs,
+  bin/mnemosyne-install-hooks) rather than adding a new server route with no
+  named consumer.
+
+acceptance_criteria:
+  - "Given a repo with an existing (possibly stale) file-store index, when the new rebuild CLI verb is run, then it fully regenerates the manifest via ml-06's build logic, overwriting the prior manifest rather than merging into it"
+  - "Given a file was modified after the last index build (a staleness scenario ml-07 already handles gracefully at query time), when the rebuild verb runs and a query is repeated afterward, then the query now reflects the fresh content via the index directly (no fallback needed), proving the rebuild actually refreshed the stale entry"
+  - "Given the rebuild verb, when invoked against a target with no prior index at all, then it behaves identically to a first-time build (ml-06's build logic, exact same code path — no special-cased 'first build' vs. 'rebuild' branching)"
+  - "Given the rebuild verb's naming/flag conventions, when compared to this repo's existing bin/mnemosyne-* scripts, then it follows the same shape (idempotent, safe to re-run, clear success/failure output) rather than inventing a new convention"
+
+steps:
+  - id: research
+    description: Re-read bin/mnemosyne-reindex.mjs and one other existing bin/mnemosyne-* verb (e.g. install-hooks) for the exact CLI-arg/output conventions this story should match.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for the rebuild verb's overwrite-not-merge behavior, the staleness-resolved-after-rebuild scenario, and the no-special-casing-for-first-build requirement.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement the rebuild CLI verb, calling ml-06's build function directly (no reimplementation).
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the rebuild verb produces byte-identical output to ml-06's own build tests when run against the same fixture, confirm it overwrites rather than merges.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-memory-levels.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: bin/mnemosyne-reindex.mjs
+      purpose: "An existing, real precedent for an operator-triggered '(re)build an index' CLI verb in this exact repo — the closest shape to mirror, even though it targets a different store (vector, not the file layer)."
+    - path: lib/mnemosyne/layers/FileStoreIndex.ts
+      purpose: "ml-06's build function this story's CLI verb calls directly."
+
+files_to_modify:
+  - file: bin/mnemosyne-file-index.mjs
+    change: "New: CLI verb wrapping FileStoreIndex.ts's build function for on-demand rebuild."
+  - file: package.json
+    change: "Register the new bin entry, matching the existing bin field's convention (research-brief.md §8)."
+  - file: lib/mnemosyne/layers/__tests__/FileStoreIndex.test.ts
+    change: "New tests: rebuild overwrite behavior, staleness-resolved-after-rebuild."
+
+design_decisions:
+  - decision: "CLI-only rebuild trigger, no new HTTP route"
+    rationale: "vertical-plan.md's deferred ambiguity #3, resolved here: the lower-risk default absent a stated operator need for a UI-triggered rebuild — mirrors this repo's existing bin/mnemosyne-* verb conventions rather than adding server surface area with no named consumer."
+
+risks:
+  - severity: low
+    description: "A rebuild verb that merges rather than overwrites could leave orphaned entries for files that were deleted since the last build."
+    mitigation: "Explicit acceptance criterion requiring full regeneration (overwrite), not an incremental merge."
+
+references:
+  - path: .pHive/epics/mnemosyne-memory-levels/docs/horizontal-plan.md
+    relevant_excerpt: |
+      Rebuild trigger — a CLI verb or route ... exact surface (CLI-only vs.
+      also a route) is this plan's call for the vertical plan to place, not
+      pre-decided here. Resolved by this story as CLI-only.
+
+cross_cutting: []

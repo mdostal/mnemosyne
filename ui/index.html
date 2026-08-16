@@ -268,17 +268,29 @@
     <!-- ================================================================
          pw-04-layer-stack-visibility: layer-stack visibility section.
          Deliberately its OWN <section>, never folded into the persona list
-         above: it shows the currently configured memory LAYER STACK (a
-         different data model from personas — research-brief.md §6) via the
-         ALREADY-SHIPPED GET /layers route, plus a static, view-only Level 0
-         pointer.
+         above: it shows the CURRENTLY CONFIGURED, RUNTIME recall()/
+         remember() retrieval cascade order (a different data model from
+         personas — research-brief.md §6) via the ALREADY-SHIPPED GET
+         /layers route, plus a static, view-only Level 0 pointer.
+
+         ml-05-memory-levels-ui (epic mnemosyne-memory-levels) renames this
+         section's heading/hint copy only, to "Retrieval Layer Stack" (its
+         former heading is gone), to disambiguate it from the NEW, separate
+         "Memory Levels (0-4)" section below (the canonical 5-level
+         memory-STORE-TYPE taxonomy). GET /layers and this section's markup
+         are otherwise byte-for-byte unchanged; see ui/app.js's
+         loadPersonaLayerStack(), also unchanged.
          ================================================================ -->
     <section id="persona-layer-stack" class="panel panel-wide">
-      <h2>Memory Layer Stack</h2>
+      <h2>Retrieval Layer Stack</h2>
       <p class="panel-hint">
-        The currently configured memory layer stack — not a persona list.
-        Read-only introspection via the existing <code>GET /layers</code>
-        route, shown in cascade order.
+        The current runtime <code>recall()</code>/<code>remember()</code>
+        cascade order — not the canonical 5-level memory-store-type model
+        (see the separate "Memory Levels (0-4)" section below), and not a
+        persona list. Read-only introspection via the existing
+        <code>GET /layers</code> route, shown in cascade order. This is also
+        NOT the team/orchestration tier hierarchy
+        (top-orchestrator/company-director/project-orchestrator/code-architect).
       </p>
       <p class="panel-status" id="persona-layer-stack-status">loading…</p>
       <table id="persona-layer-stack-table" hidden>
@@ -306,6 +318,44 @@
       </div>
     </section>
     <!-- ==================== end pw-04 section ======================= -->
+
+    <!-- ================================================================
+         ml-05-memory-levels-ui (epic mnemosyne-memory-levels): Memory
+         Levels (0-4) section. Deliberately its OWN <section>, never merged
+         into the Retrieval Layer Stack section above: it shows the 5
+         canonical memory-STORE-TYPE levels (ml-01's static taxonomy,
+         levels.ts) via the NEW GET /memory-levels route (ml-04), a
+         structurally different question from "what's currently in the
+         recall() cascade right now" above. Level 0 is rendered view-only,
+         same as the pw-04 pointer above -- no edit form/affordance anywhere
+         in this section either.
+         ================================================================ -->
+    <section id="memory-levels" class="panel panel-wide">
+      <h2>Memory Levels (0-4)</h2>
+      <p class="panel-hint">
+        The 5 canonical memory-STORE-TYPE levels (0 = operator rules, 1 =
+        repo agent overlay, 2 = graph, 3 = vector, 4 = file doc store) —
+        read-only introspection via the new <code>GET /memory-levels</code>
+        route. This is a static taxonomy, not the runtime retrieval cascade
+        shown in the Retrieval Layer Stack section above, and it is NOT the
+        team/orchestration tier hierarchy
+        (top-orchestrator/company-director/project-orchestrator/code-architect).
+      </p>
+      <p class="panel-status" id="memory-levels-status">loading…</p>
+      <table id="memory-levels-table" hidden>
+        <thead>
+          <tr>
+            <th>Level</th>
+            <th>Label</th>
+            <th>Store type</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="memory-levels-tbody"></tbody>
+      </table>
+      <p class="panel-status" id="memory-levels-empty" hidden>No memory levels reported.</p>
+    </section>
+    <!-- ================== end ml-05-memory-levels-ui section ============= -->
   </main>
 
   <footer>
