@@ -19,7 +19,7 @@ below).
 
 ### Added
 
-- **`crawlExplicitFiles()`** (`lib/mnemosyne/layer1/crawl-context.mjs`,
+- **`crawlExplicitFiles()`** (`skills/mnemosyne-persona-interview/crawl-context.mjs`,
   pf-01) — a sibling to the existing `crawlBoundedContext()`, for a fixed,
   operator/agent-chosen file list rather than a directory walk. Reuses the
   same per-file cap/excerpt and `assembleSourceSummary()` machinery
