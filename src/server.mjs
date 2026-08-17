@@ -95,6 +95,8 @@ const STATIC_CONTENT_TYPES = {
   ".js": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  ".png": "image/png",
 };
 
 // Serves a file from ui/ by request pathname (which is prefixed with /ui).
