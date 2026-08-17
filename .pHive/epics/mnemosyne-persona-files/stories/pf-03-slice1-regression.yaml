@@ -1,10 +1,25 @@
 id: pf-03-slice1-regression
 epic: mnemosyne-persona-files
 title: "Slice 1 regression: explicit-file propose -> review -> approve -> real commit"
-status: planned
+status: complete
 complexity: low
 methodology: tdd
 depends_on: [pf-02-cli-propose-from-files]
+
+note_on_completion: >
+  Merged 2026-08-17 (commit b37255f). This is Slice 1's closing gate --
+  pf-01/pf-02/pf-03 are now all complete. Independently verified: confirmed
+  the diff is purely additive (one new test file, 309 lines). Reran the new
+  test myself in both the builder's worktree and the merged integration
+  worktree -- 20/20 real checks passing both times, including the
+  pending-review-window-adjacent proof (draft visible with real
+  sourceSummary before approval) and the post-approval proof (three
+  independent reads: HTTP response, direct filesystem read of the real
+  persona store, GET /persona list), plus the final archived-from-active-
+  list check. Confirmed a stray package.json allowScripts change from the
+  builder's own npm install was genuinely left uncommitted (not part of the
+  merged commit). tsc --noEmit clean both times. All acceptance criteria
+  met.
 
 description: |
   Closes vertical-plan.md Slice 1 with a real, continuous end-to-end proof
