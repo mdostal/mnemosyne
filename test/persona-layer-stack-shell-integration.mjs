@@ -92,8 +92,14 @@ try {
 
   // --- still a clearly-labeled, visually distinct section -- never merged
   // into #personas-table/#personas-tbody's unified queue list --------------
-  ok(/<h[2-6]>Memory Layer Stack<\/h[2-6]>/.test(layerStackSection),
-    "the re-homed section keeps its own distinct heading, \"Memory Layer Stack\" -- not folded into the Personas heading/list");
+  // Heading text: ml-05-memory-levels-ui (reconciled during the combined
+  // v0.10.0 release merge) renamed this section from "Memory Layer Stack"
+  // to "Retrieval Layer Stack", to disambiguate it from the new sibling
+  // "Memory Levels (0-4)" section -- this ticket's own actual concern was
+  // the section staying structurally distinct (checked below), not the
+  // specific wording, so this assertion tracks the real, reconciled text.
+  ok(/<h[2-6]>Retrieval Layer Stack<\/h[2-6]>/.test(layerStackSection),
+    "the re-homed section keeps its own distinct heading, \"Retrieval Layer Stack\" (renamed post-merge from \"Memory Layer Stack\") -- not folded into the Personas heading/list");
   ok(
     /id="persona-layer-stack-table"/.test(layerStackSection) && /id="persona-layer-stack-tbody"/.test(layerStackSection),
     "the re-homed section renders into its own table/tbody (#persona-layer-stack-table/#persona-layer-stack-tbody)",
@@ -110,15 +116,27 @@ try {
   // --- no hard-coded 0/1/2/3/4 level-number reference tied to layer
   // semantics anywhere in this ticket's copy/labels (design-discussion.md
   // OQ1) -- "Level 0" is the one carried-forward, explicitly-allowed
-  // exception (Epic 1's original recommendation, not relitigated here) -----
-  const scannedForNumbering = layerStackSection.replace(/Level 0/g, "");
+  // exception (Epic 1's original recommendation, not relitigated here).
+  // Reconciled during the combined v0.10.0 release merge: the sibling
+  // mnemosyne-memory-levels epic's "Memory Levels (0-4)" section DID ship
+  // for real (ml-05), and this section's own hint text now honestly
+  // cross-references it BY NAME ("see the separate 'Memory Levels (0-4)'
+  // section below") -- that specific, real cross-reference is intentional
+  // and correct, not the "implying not-yet-shipped numbering as already
+  // live" problem OQ1 originally guarded against. Stripped out here before
+  // scanning so the remaining checks still catch any OTHER, unscoped 0-4
+  // claim (e.g. this section's own rows mislabeling themselves as the
+  // canonical levels) -----------------------------------------------------
+  const scannedForNumbering = layerStackSection
+    .replace(/Level 0/g, "")
+    .replace(/Memory Levels \(0-4\)/g, "");
   ok(
     !/\bLevel\s*[1234]\b/i.test(scannedForNumbering) && !/\bLayer\s*[1234]\b/i.test(scannedForNumbering),
-    "no hard-coded \"Level 1-4\" / \"Layer 1-4\" copy anywhere in the re-homed section -- the sibling mnemosyne-memory-levels epic's 0-4 numbering is not implied as already live",
+    "no hard-coded \"Level 1-4\" / \"Layer 1-4\" copy anywhere in the re-homed section outside the honest \"Memory Levels (0-4)\" cross-reference",
   );
   ok(
     !/0[\s-]*(to|-)[\s-]*4/i.test(scannedForNumbering),
-    "no \"0-4\" / \"0 to 4\" numbering-range copy anywhere in the re-homed section",
+    "no \"0-4\" / \"0 to 4\" numbering-range copy anywhere in the re-homed section OTHER than the honest \"Memory Levels (0-4)\" cross-reference to the real, shipped sibling section",
   );
   ok(/<th>#<\/th>/.test(layerStackSection),
     "the cascade-position column stays labeled plain \"#\" (an ordinal, not a semantic level claim) -- never relabeled \"Level\"");

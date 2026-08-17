@@ -82,12 +82,17 @@ try {
 
   // ml-05-memory-levels-ui: renamed heading + revised hint copy -- the
   // section's id/data-source/fetch logic are otherwise untouched (checked
-  // further below).
+  // further below). pu-11-layer-stack-integration-redesign (reconciled
+  // during the combined v0.10.0 release merge) later re-homed this section
+  // inside #personas, demoting its heading from <h2> to <h3> to keep a
+  // correct heading hierarchy as a subsection -- the heading TEXT is
+  // unchanged, only its level, so this assertion tracks that real, intended
+  // shape rather than the pre-merge standalone-section markup.
   const layerStackSectionMatch = indexBody.match(/<section id="persona-layer-stack"[\s\S]*?<\/section>/);
   const layerStackSection = layerStackSectionMatch ? layerStackSectionMatch[0] : "";
   ok(
-    /<h2>Retrieval Layer Stack<\/h2>/.test(layerStackSection),
-    "GET /ui body's layer-stack section heading is 'Retrieval Layer Stack' (renamed from 'Memory Layer Stack')",
+    /<h3>Retrieval Layer Stack<\/h3>/.test(layerStackSection),
+    "GET /ui body's layer-stack section heading is 'Retrieval Layer Stack' (renamed from 'Memory Layer Stack', now an <h3> since pu-11 re-homed it inside #personas)",
   );
   ok(
     !/Memory Layer Stack/.test(indexBody),
