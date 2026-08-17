@@ -1,10 +1,59 @@
 id: pf-08-full-suite-regression-release
 epic: mnemosyne-persona-files
 title: Full-suite regression pass + version bump + release note
-status: planned
+status: complete
 complexity: low
 methodology: tdd
 depends_on: [pf-03-slice1-regression, pf-07-slice2-regression]
+
+note_on_completion: >
+  Closes the mnemosyne-persona-files epic (pf-01..pf-08). Ran the full
+  npm test composition file-by-file (test/http-api.mjs intentionally
+  exits non-zero on its own known failures, which would otherwise halt
+  the && chain) plus npx tsc --noEmit against this branch's long-lived,
+  already-verified worktree: all .mjs suites clean except the 3
+  pre-existing, already-documented POST /remember default-layer
+  assertions first flagged in ml-04's completion note (159/162 checks in
+  test/http-api.mjs); vitest lib/mnemosyne lib/minerva benchmarks
+  src/planning src/config src/runners -- 727/727 passing (54/54 files);
+  tsc --noEmit clean. Reconfirmed after the version bump with an
+  identical second run -- same result.
+
+  Stash-and-reproduce proof: found the real merge-base with main
+  (commit d203115, confirmed to already carry main's own
+  stale-test-assertion fix as the task expected), checked it out into a
+  FRESH git worktree with its own fresh npm install. This surfaced 15
+  additional .mjs failures (write-through.mjs, further
+  test/http-api.mjs remember()-chain assertions, single-layer-config.mjs,
+  persona-cli.mjs) plus 13 vitest failures (VectorLayerAdapter.test.ts's
+  remember suite, persona-interview-crawl-and-feed.test.ts's pw-13
+  proofs, persona-interview-draft-output.test.ts's pu-08 proof,
+  persona-interview-global-full-answers-e2e.test.ts's pw-14 proof) not
+  present in the long-lived worktree. Investigated rather than dismissed,
+  per pu-15's own precedent: every failure traces to one root cause --
+  `flight-status auto-detection failed: cwd is in a detached-HEAD (or
+  otherwise branch-less) git state` (git worktree add <commit> checks
+  out detached HEAD by default), which rejects remember()'s
+  write-through and cascades into every test exercising a real
+  remember() call. Cross-checked with a second fresh worktree at this
+  epic's own tip (commit 987164e), same detached-HEAD setup, same fresh
+  npm install: byte-for-byte IDENTICAL 15 .mjs + 13 vitest failures
+  (confirmed via a scripted diff of both worktrees' full check-by-check
+  output -- zero differences), proving this is a fresh-worktree/
+  detached-HEAD artifact affecting the pre-epic baseline and this
+  epic's own tip identically, not a regression this epic introduced.
+  Both throwaway comparison worktrees removed after the proof.
+
+  Version bumped 0.10.0 -> 0.11.0 (minor, per epic.yaml) in package.json
+  and package-lock.json (an incidental allowScripts block npm added to
+  package.json during a fresh `npm install` in this worktree was
+  stripped before committing, per the pu-05 precedent for the same
+  noise). Release note added to CHANGELOG.md covering both real
+  deliverables -- crawlExplicitFiles()/`persona draft propose-from-files`
+  (agent-side) and the UI file-attachment surface with its client-side
+  cap-twin and third "human-attached" provenance label (UI-side) -- both
+  reusing pu-15's draft store/routes/review-UI completely unchanged. All
+  acceptance criteria met.
 
 description: |
   Closes the epic (pf-01 through pf-08), mirroring pu-15's own precedent
