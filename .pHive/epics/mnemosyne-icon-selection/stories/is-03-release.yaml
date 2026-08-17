@@ -1,10 +1,31 @@
 id: is-03-release
 epic: mnemosyne-icon-selection
 title: Full-suite regression pass + version bump + release note
-status: planned
+status: complete
 complexity: low
 methodology: classic
 depends_on: [is-02-operator-pick-and-assets]
+
+note_on_completion: >
+  Carried out directly in the main working tree (not dispatched -- low
+  complexity, proportionate per this ticket's own scaling note). Ran the
+  full .mjs subprocess suite (18 files, individually, since npm test's own
+  chain stops at first failure) + `npx vitest run` (53 files/713 tests) +
+  `tsc --noEmit` against the epic's final merged state (post is-02 merge,
+  commit 27c90dc): tsc clean, vitest 53/53 files and 713/713 tests passing,
+  .mjs suite clean except the same 3 pre-existing POST /remember
+  default-layer assertions already documented as acceptable baseline in
+  this epic's own design-discussion.md -- byte-identical to the counts the
+  is-02 builder agent independently reported from its own worktree run, no
+  new failures found, nothing to fix. package.json/package-lock.json
+  bumped 0.10.0 -> 0.10.1 (patch, matching epic.yaml's version_bump and
+  this ticket's own scoping note -- one new UI element + a static asset
+  addition). CHANGELOG.md 0.10.1 entry added covering the real deliverable
+  (the shipped favicon) plus the swarm-review process and verification
+  summary. This closes the mnemosyne-icon-selection epic (is-01/is-02/is-03
+  all complete) on its own feature branch -- NOT yet merged to dev/main;
+  that release ritual is a separate step pending operator go-ahead, same
+  as mnemosyne-persona-files (0.11.0) is still awaiting on its own branch.
 
 description: |
   Closes the mnemosyne-icon-selection epic (is-01 through is-03), mirroring

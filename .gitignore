@@ -2,6 +2,10 @@ node_modules/
 .DS_Store
 *.log
 
+# Playwright MCP tool session output (console logs, page snapshots) --
+# tooling byproduct from browser-based verification checks, never repo content.
+.playwright-mcp/
+
 # Ephemeral git worktrees created for isolated agent work sessions — never
 # part of the repo itself, see vitest.config.ts for why this also matters
 # for test discovery, not just git status noise.
