@@ -195,6 +195,15 @@ import { run as runPersonaSeed } from "./mnemosyne-persona-seed.mjs";
 // own rememberInterviewSource() rigor (pw-13) and this ticket's own doc
 // comment on why (`draft approve`'s remember() paragraph below).
 import { fireRememberCall } from "../skills/mnemosyne-persona-interview/persona-remember.mjs";
+// pf-02-cli-propose-from-files: `draft propose-from-files` builds its
+// persona record via the SAME minimal-shape builder the interactive
+// interview skill itself uses (runPersonaInterview with zero responses ->
+// every core question resolves to its own skip placeholder) rather than a
+// second, hand-rolled "build a bare persona record" implementation, and
+// folds in pf-01's crawlExplicitFiles() sourceSummary -- also plain ESM, no
+// tsx-boundary issue (same reasoning as persona-remember.mjs above).
+import { runPersonaInterview } from "../skills/mnemosyne-persona-interview/interview-engine.mjs";
+import { crawlExplicitFiles } from "../skills/mnemosyne-persona-interview/crawl-context.mjs";
 
 const USAGE_SYNC = [
   "usage: mnemosyne persona sync --repo <path> --tier <tier> --scope-id <id> [--dry-run]",
@@ -243,6 +252,8 @@ const USAGE_RESOLVE_REMEMBER_SCOPE = [
 
 const USAGE_DRAFT = [
   "usage: mnemosyne persona draft propose --file <path-to-yaml> [--repo <repo>]",
+  "       mnemosyne persona draft propose-from-files --tier <tier> --scope-id <id> [--repo <repo>]",
+  "                                                   --file <path> [--file <path> ...] [--max-files <n>]",
   "       mnemosyne persona draft show <tier> <scope-id> [--repo <repo>]",
   "       mnemosyne persona draft approve <tier> <scope-id> [--repo <repo>]",
   "       mnemosyne persona draft discard <tier> <scope-id> [--repo <repo>]",
@@ -250,9 +261,19 @@ const USAGE_DRAFT = [
   "  (~/.mnemosyne/persona-drafts, persona-draft-store.ts) -- never reachable by sync/show",
   "  until a human runs `draft approve`. `draft show`'s output is always, visibly labeled",
   "  DRAFT -- never rendered indistinguishably from real `persona show` output.",
-  "  propose  writes/overwrites the active draft for {tier, scope-id} via writeDraftPersona",
-  "           (structural sanity only -- a valid tier, a non-empty scopeId -- full",
-  "           assertValidPersona-strength validation happens only at approve time).",
+  "  propose             writes/overwrites the active draft for {tier, scope-id} via",
+  "                       writeDraftPersona (structural sanity only -- a valid tier, a",
+  "                       non-empty scopeId -- full assertValidPersona-strength validation",
+  "                       happens only at approve time).",
+  "  propose-from-files  a SEPARATE subcommand from `propose` (its own --file is repeatable,",
+  "                       meaning 'a source file to crawl' -- a different meaning from",
+  "                       `propose --file <candidate.yaml>`'s single whole-candidate file).",
+  "                       Builds the persona record the same minimal way the interview skill",
+  "                       does, crawls every --file via crawlExplicitFiles() into a",
+  "                       sourceSummary, and writes the draft via the SAME writeDraftPersona",
+  "                       primitive `propose` uses. --max-files overrides the crawl's default",
+  "                       file-count ceiling; supplying more --file flags than the ceiling",
+  "                       exits non-zero, naming the limit -- never a silent subset.",
   "  show     prints the active draft's content, clearly labeled DRAFT, including",
   "           proposedBy/proposedAt/sourceSummary metadata when present.",
   "  approve  commits the draft via the SAME unchanged write primitive `create` uses",
@@ -262,6 +283,8 @@ const USAGE_DRAFT = [
   "           with no sourceSummary never fires remember() (no real source material to index).",
   "  discard  archives the active draft to the discarded/ subtree (never deletes it).",
   "  --repo   required for a code-architect draft (repo-local); omit for the 3 global tiers.",
+  "           For `propose-from-files`, --repo also resolves relative --file paths (defaults",
+  "           to the CLI's own working directory when --repo is omitted).",
 ].join("\n");
 
 const USAGE = `${USAGE_SYNC}\n${USAGE_SEED}\n${USAGE_SHOW}\n${USAGE_CREATE}\n${USAGE_RESOLVE_REMEMBER_SCOPE}\n${USAGE_DRAFT}`;
@@ -560,6 +583,126 @@ function runDraftPropose(argv, { log, warn }) {
 }
 
 /**
+ * Parses `propose-from-files`'s own flags: `--tier`, `--scope-id`, `--repo`
+ * (all single-value, same convention as the top-level `parseArgs`), and
+ * `--file` -- REPEATABLE, collected into an array, one entry per flag
+ * occurrence -- plus `--max-files` (single-value). This is a locally-scoped
+ * parser, not a reuse of `parseDraftRepoArg`/top-level `parseArgs`, because
+ * neither of those handles a repeatable flag.
+ */
+function parseDraftProposeFromFilesArgs(argv) {
+  const args = { tier: undefined, scopeId: undefined, repo: undefined, files: [], maxFiles: undefined };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--tier") args.tier = argv[++i];
+    else if (a === "--scope-id") args.scopeId = argv[++i];
+    else if (a === "--repo") args.repo = argv[++i];
+    else if (a === "--file") args.files.push(argv[++i]);
+    else if (a === "--max-files") args.maxFiles = argv[++i];
+  }
+  return args;
+}
+
+/**
+ * `persona draft propose-from-files --tier <t> --scope-id <id> [--repo <r>]
+ * --file <path> [--file <path> ...] [--max-files <n>]` -- pf-02. A genuinely
+ * SEPARATE subcommand from `draft propose` (design-discussion.md OQ1), not a
+ * flag variant of it: its own `--file` is repeatable and means "a source
+ * file to crawl" -- a different, locally-scoped meaning from `draft propose
+ * --file <candidate.yaml>`'s single-file "the whole candidate" meaning.
+ *
+ * Builds the persona record via interview-engine.mjs's own
+ * `runPersonaInterview({tier, scopeId})` (zero `responses`/`context`
+ * supplied -> every core question resolves to its own skip placeholder,
+ * `displayName`/`scope` fall back to their own placeholders) -- deliberately
+ * the SAME minimal-shape builder the interactive interview skill itself
+ * uses, not a second, hand-rolled "build a bare persona record" path -- then
+ * folds in pf-01's `crawlExplicitFiles()` `sourceSummary` onto that record,
+ * then writes the result via the SAME `writeDraftPersona` primitive `draft
+ * propose` already calls above -- no new write path, no reimplemented
+ * draft-store call.
+ *
+ * `--repo`, when given, both (a) is the `repoRoot` `crawlExplicitFiles()`
+ * resolves relative `--file` paths against, and (b) threads `ctx.repoRoot`
+ * through to `writeDraftPersona` so a code-architect draft resolves to the
+ * repo-local draft subtree -- matching `draft propose`'s own `--repo`
+ * handling exactly (same `ctx = repo ? { repoRoot } : {}` shape). Without
+ * `--repo`, relative `--file` paths resolve against the CLI process's own
+ * current working directory -- there is no repo root to resolve against for
+ * a global-tier draft.
+ *
+ * `--max-files`, when given, overrides `crawlExplicitFiles()`'s own default
+ * ceiling (`MAX_EXPLICIT_FILES`). More `--file` flags than the effective
+ * ceiling makes `crawlExplicitFiles()` throw `TooManyExplicitFilesError` --
+ * surfaced here as a non-zero exit carrying that error's own clear,
+ * limit-naming message, never a silent first-N truncation and never silent
+ * unbounded processing.
+ */
+async function runDraftProposeFromFiles(argv, { log, warn }) {
+  const args = parseDraftProposeFromFilesArgs(argv);
+
+  if (!args.tier || !args.scopeId) {
+    warn("mnemosyne persona draft propose-from-files: --tier and --scope-id are both required");
+    warn(USAGE_DRAFT);
+    return { ok: false };
+  }
+  if (!TIERS.includes(args.tier)) {
+    warn(
+      `mnemosyne persona draft propose-from-files: invalid --tier '${args.tier}'. Valid tiers: ${TIERS.join(", ")}.`,
+    );
+    return { ok: false };
+  }
+  if (args.files.length === 0) {
+    warn("mnemosyne persona draft propose-from-files: at least one --file <path> is required");
+    warn(USAGE_DRAFT);
+    return { ok: false };
+  }
+
+  let maxFiles;
+  if (args.maxFiles !== undefined) {
+    maxFiles = Number(args.maxFiles);
+    if (!Number.isInteger(maxFiles) || maxFiles <= 0) {
+      warn(
+        `mnemosyne persona draft propose-from-files: --max-files must be a positive integer, got '${args.maxFiles}'`,
+      );
+      return { ok: false };
+    }
+  }
+
+  const repoRoot = args.repo ? path.resolve(args.repo) : process.cwd();
+
+  let crawl;
+  try {
+    crawl = await crawlExplicitFiles({
+      filePaths: args.files,
+      repoRoot,
+      ...(maxFiles !== undefined ? { maxFiles } : {}),
+    });
+  } catch (e) {
+    warn(`mnemosyne persona draft propose-from-files: ${e.message}`);
+    return { ok: false };
+  }
+
+  const { persona } = runPersonaInterview({ tier: args.tier, scopeId: args.scopeId });
+  const candidate = { ...persona, sourceSummary: crawl.sourceSummary };
+
+  const ctx = args.repo ? { repoRoot } : {};
+  let writtenPath;
+  try {
+    writtenPath = writeDraftPersona(candidate, ctx);
+  } catch (e) {
+    warn(`mnemosyne persona draft propose-from-files: ${e.message}`);
+    return { ok: false };
+  }
+
+  log(
+    `proposed draft ${candidate.tier}/${candidate.scopeId} -> ${writtenPath} ` +
+      `(crawled ${crawl.sourcesRead.length} source(s): ${crawl.sourcesRead.join(", ") || "(none)"})`,
+  );
+  return { ok: true, filePath: writtenPath, sourcesRead: crawl.sourcesRead };
+}
+
+/**
  * Shared `<tier> <scope-id> [--repo <repo>]` positional parsing for
  * `draft show`/`draft approve`/`draft discard` -- validates both are
  * present and `tier` is a real tier BEFORE any draft-store call, mirroring
@@ -721,6 +864,7 @@ function runDraftDiscard(argv, { log, warn }) {
 async function runDraft(argv, { log, warn }) {
   const verb = argv[0];
   if (verb === "propose") return runDraftPropose(argv.slice(1), { log, warn });
+  if (verb === "propose-from-files") return runDraftProposeFromFiles(argv.slice(1), { log, warn });
   if (verb === "show") return runDraftShow(argv.slice(1), { log, warn });
   if (verb === "approve") return runDraftApprove(argv.slice(1), { log, warn });
   if (verb === "discard") return runDraftDiscard(argv.slice(1), { log, warn });
