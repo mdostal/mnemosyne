@@ -1,10 +1,18 @@
 id: is-02-operator-pick-and-assets
 epic: mnemosyne-icon-selection
 title: "Operator's real final pick, then production-ready favicon assets from that pick"
-status: planned
+status: in_progress
 complexity: medium
 methodology: classic
 depends_on: [is-01-icon-swarm-review]
+
+operator_pick:
+  answer: >
+    "lol, jar it is, go for it" -- operator confirmed the swarm's unanimous
+    pick, Ancient Urn (icon-08), refined with thicker/wider-aperture
+    handles per all 3 synthesized/finalist-*.md write-ups. Recorded
+    2026-08-17. Fulfills the operator-touchpoint step below -- proceeding
+    to implement/review/integrate.
 
 description: |
   Implements design-discussion.md's Ticket 2 -- the one structural
