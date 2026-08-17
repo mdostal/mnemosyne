@@ -1,10 +1,23 @@
 id: pf-01-crawl-explicit-files
 epic: mnemosyne-persona-files
 title: "crawlExplicitFiles(): sibling to crawlBoundedContext() for operator/agent-chosen files"
-status: planned
+status: complete
 complexity: medium
 methodology: tdd
 depends_on: []
+
+note_on_completion: >
+  Merged 2026-08-17 (commit 5fbef80). Independently verified: read the full
+  diff -- confirmed crawlBoundedContext() itself has zero changes (its own
+  test file, persona-interview-crawl.test.ts, is not in the diff at all),
+  confirmed crawlExplicitFiles() genuinely imports/calls capExcerpt(),
+  assembleSourceSummary(), and readParentPersonaSummary() directly rather
+  than reimplementing them, confirmed TooManyExplicitFilesError is a real,
+  named throw (not a silent truncation). Reran the new test file plus the
+  existing crawl test file myself (27/27), plus the full contract suite
+  (727/727 in the builder's worktree, 691/691 -- a different scope subset --
+  in the merged integration worktree) and tsc --noEmit (clean) in both
+  worktrees. All acceptance criteria met.
 
 description: |
   Implements horizontal-plan.md H1: a new export in
