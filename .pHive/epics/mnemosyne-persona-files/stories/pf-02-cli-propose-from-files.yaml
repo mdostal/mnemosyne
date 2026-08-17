@@ -1,10 +1,28 @@
 id: pf-02-cli-propose-from-files
 epic: mnemosyne-persona-files
 title: "CLI: mnemosyne persona draft propose-from-files"
-status: planned
+status: complete
 complexity: medium
 methodology: tdd
 depends_on: [pf-01-crawl-explicit-files]
+
+note_on_completion: >
+  Merged 2026-08-17 (commit 1f71d2c). Independently verified: read the full
+  implementation -- confirmed writeDraftPersona( appears at exactly 2 call
+  sites in bin/mnemosyne-persona.mjs (one for propose, one for
+  propose-from-files) via grep, no reimplemented write path. Confirmed the
+  new subcommand is genuinely separate from draft propose (its own --file
+  flag has a locally-scoped, different meaning, matching design-discussion.md
+  OQ1's resolution). Confirmed it reuses runPersonaInterview() (the same
+  minimal-shape builder the interactive skill uses) and pf-01's
+  crawlExplicitFiles() rather than a second hand-rolled record builder.
+  Reran node test/persona-cli.mjs myself in both the builder's worktree and
+  the merged integration worktree (247/247 real passes both times -- the
+  one grep "FAIL" hit is a passing test whose own message text contains the
+  word "FAILED", a known false-positive pattern from earlier in this
+  session, confirmed by reading the actual line). tsc --noEmit clean both
+  times. Reran pf-01's and pf-04's own test files too as a broader
+  regression check -- all clean. All acceptance criteria met.
 
 description: |
   Implements horizontal-plan.md H2: a new subcommand on bin/mnemosyne-persona.mjs,
