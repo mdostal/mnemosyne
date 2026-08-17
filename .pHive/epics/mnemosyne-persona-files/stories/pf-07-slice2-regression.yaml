@@ -1,10 +1,30 @@
 id: pf-07-slice2-regression
 epic: mnemosyne-persona-files
 title: "Slice 2 regression: UI file attachment -> propose -> review -> approve -> real commit"
-status: planned
+status: complete
 complexity: low
 methodology: tdd
 depends_on: [pf-06-provenance-label-extension]
+
+note_on_completion: >
+  Merged 2026-08-17 (commit 8dcff64). This is Slice 2's closing gate --
+  pf-04/pf-05/pf-06/pf-07 are now all complete, mirroring Slice 1's own
+  pf-01/pf-02/pf-03. Independently verified: confirmed the diff is purely
+  additive (one new test file, 402 lines). Reran the new test myself in
+  both the builder's worktree and the merged integration worktree -- 42/42
+  real checks passing both times, including genuine truncation proof (an
+  80-line fixture actually truncated via the real, extracted ui/app.js
+  capExcerpt(), not simulated), the real draftProvenanceLabel() resolving
+  this exact draft shape to "human-attached" (pf-06's third state,
+  genuinely exercised end-to-end for the first time), and the post-approval
+  proof (persona store file + GET /persona list, draft-only metadata
+  stripped, draft archived from the active list). remember() gracefully
+  no-ops (fetch failed) since this ticket intentionally spins up only
+  lib/mnemosyne/server.ts, not the swarm-memory-backed service -- not
+  asserted as a failure, an intentional, correctly-scoped omission (the
+  sibling epic's pu-13 already covers the full remember()-landing proof
+  exhaustively). tsc --noEmit and vitest lib/mnemosyne (691/691) clean in
+  both worktrees. All acceptance criteria met.
 
 description: |
   Closes vertical-plan.md Slice 2 with a real, continuous end-to-end proof:
