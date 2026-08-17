@@ -54,8 +54,24 @@ topics:
 
   - topic: mnemosyne-icon-set
     output_dir: .pHive/design/mnemosyne-icon-set/
-    process: 10-option-generation -> 7-lens-review-panel -> 3-finalist-synthesis -> operator final pick (pending)
+    process: 10-option-generation -> 7-lens-review-panel -> 3-finalist-synthesis -> operator final pick -> production assets
     artifacts:
+      final_assets:
+        - path: ui/favicon.png
+          note: >
+            Real RGBA PNG (1024x1024), genuine alpha channel (verified via
+            PIL: transparent corners, real opaque/transparent pixel
+            populations, not just mode metadata). Regenerated via Gemini 3
+            Pro Image (gemini-3-pro-image) with the operator-picked
+            refinement (thick, wide-aperture positive-space handles),
+            background made transparent via PIL background removal since
+            two regeneration attempts both came back as checkerboard JPEG
+            despite explicit real-alpha prompting (per design-discussion.md
+            OQ1's fallback).
+        - path: ui/favicon.ico
+          note: >
+            Multi-resolution ICO, verified via PIL to contain real embedded
+            RGBA frames at 16x16, 32x32, 48x48, 64x64, 128x128, 256x256.
       initial_options:
         - .pHive/design/mnemosyne-icon-set/options/icon-01-memory-spiral-brain.jpg
         - .pHive/design/mnemosyne-icon-set/options/icon-02-laurel-profile.jpg
@@ -80,7 +96,8 @@ topics:
         - .pHive/design/mnemosyne-icon-set/synthesized/finalist-2.md
         - .pHive/design/mnemosyne-icon-set/synthesized/finalist-3.md
     generator: "Gemini 3 Pro Image (\"Nano Banana Pro\", gemini-3-pro-image), via portunus resolve --exec -- key never read into this session's context"
-    status: review-complete-awaiting-operator-pick
+    status: shipped
+    operator_pick: "Ancient Urn (icon-08), refined -- see is-02-operator-pick-and-assets.yaml's operator_pick field for the verbatim operator answer"
     review_note: >
       All 3 independent synthesis agents converged unanimously on the same
       refinement: Ancient Urn (icon-08), with thickened/wider-aperture

@@ -1,7 +1,7 @@
 id: is-02-operator-pick-and-assets
 epic: mnemosyne-icon-selection
 title: "Operator's real final pick, then production-ready favicon assets from that pick"
-status: in_progress
+status: complete
 complexity: medium
 methodology: classic
 depends_on: [is-01-icon-swarm-review]
@@ -13,6 +13,81 @@ operator_pick:
     handles per all 3 synthesized/finalist-*.md write-ups. Recorded
     2026-08-17. Fulfills the operator-touchpoint step below -- proceeding
     to implement/review/integrate.
+
+note_on_completion: >
+  Asset production (Part B) carried out after the real operator pick above.
+  Regeneration was attempted first, per design-discussion.md OQ1: two
+  independent calls to Gemini 3 Pro Image (gemini-3-pro-image) via
+  `portunus resolve --exec` (key reference
+  personalsites-487021-google_generative_ai_api_key, boundary-only
+  injection -- substituted straight into the curl subprocess's URL,
+  never read into this session), each explicitly instructed to redraw
+  icon-08 with thick, wide-aperture positive-space handles and a real
+  PNG alpha channel (not a drawn checkerboard). Both attempts reproduced
+  the requested handle refinement faithfully (thicker strokes, wide open
+  apertures, tapered neck/swelling body/flared foot/single amber fill/no
+  ornamentation all otherwise untouched) but both came back as mimeType
+  image/jpeg -- RGB, no alpha, checkerboard background -- confirming this
+  model genuinely cannot emit real alpha via this API path, matching the
+  behavior already documented for the original 10-option batch.
+
+  Per OQ1's own fallback logic ("falls back to background removal ...
+  so the shipped icon matches what was actually chosen"), background
+  removal was performed via PIL (saturation-based classification --
+  the checkerboard is strictly achromatic, the urn fill is saturated
+  amber-gold, cleanly separable; median-filtered first and small
+  disconnected components dropped to remove JPEG-ringing speckle noise
+  from the high-frequency checker pattern) on the second regenerated
+  image rather than on the original unrefined icon-08-ancient-urn-vessel.jpg.
+  This is a deliberate, documented deviation from the step text's literal
+  "background removal on the original" wording: the regenerated image IS
+  the operator's actual pick (the refined handles), while the original
+  file has the old thin hairline handles the operator explicitly did NOT
+  pick -- background-removing the original would have shipped a mark
+  that contradicts operator_pick above. Chosen as the closer match to
+  "what was actually chosen," consistent with OQ1's stated rationale.
+
+  Verification (direct inspection, not assumed):
+  - ui/favicon.png: PIL confirms mode=RGBA, 1024x1024; corner pixels
+    alpha=0 (fully transparent) at all 4 corners; interior alpha
+    histogram shows real opaque (255) and real transparent (0) pixel
+    populations, not just alpha=255 everywhere.
+  - ui/favicon.ico: PIL confirms format=ICO with embedded frames at
+    (16,16), (32,32), (48,48), (64,64), (128,128), (256,256), each
+    itself mode=RGBA -- inspected via Image.open(...).ico.sizes() and
+    per-size .ico.getimage(), not inferred from the save() call's exit
+    status. 16x16 spot-check: silhouette still reads correctly as an
+    urn (handle apertures partially fill in at that size, exactly the
+    graceful-degradation failure mode all 3 finalist write-ups predicted
+    for this concept).
+  - Server: added .ico/.png entries to src/server.mjs's
+    STATIC_CONTENT_TYPES (previously had no icon/image mappings at all,
+    would have served application/octet-stream). Started the real
+    standalone server (PORT=8478, node src/server.mjs) and did a real
+    HTTP fetch of /ui/favicon.ico -> 200, content-type: image/x-icon.
+  - Browser: Playwright (Chromium) navigated to /ui/, confirmed the live
+    DOM's <link rel="icon"> resolves to /ui/favicon.ico, then ran an
+    in-page fetch() + createImageBitmap() against that URL from inside
+    the real browser -- succeeded, decoding to a genuine 256x256 bitmap
+    (the same decode pathway a browser uses to actually render a
+    favicon), i.e. a real rendering-level check, not an HTML-source-only
+    assertion. (The MCP screenshot tool itself hit an unrelated 5s
+    timeout in this sandbox on a font-wait step even though
+    document.fonts.status was already 'loaded' -- a harness quirk, not a
+    favicon defect; the fetch+decode check above stands in as the visual
+    confirmation.)
+  - Full suite: `npm install` was required first (node_modules was
+    absent in this worktree). `tsc --noEmit` clean. Full test chain run
+    to completion (npm test's own script stops early at the first `&&`
+    failure, so the remaining chain entries plus the vitest run were
+    executed individually to get real completion signal): the only
+    failures anywhere are the 3 already-documented pre-existing
+    `POST /remember` assertions in test/http-api.mjs (design-discussion.md
+    §1 Ticket 3 calls these out by name as an acceptable pre-existing
+    baseline) -- confirmed genuinely pre-existing, not a regression, by
+    stashing this ticket's diff and re-running: identical 3 failures on
+    the untouched 00581ab tree. Every other test file passes, including
+    all 53 vitest files / 713 tests.
 
 description: |
   Implements design-discussion.md's Ticket 2 -- the one structural
