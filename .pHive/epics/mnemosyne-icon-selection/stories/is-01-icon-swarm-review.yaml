@@ -1,10 +1,46 @@
 id: is-01-icon-swarm-review
 epic: mnemosyne-icon-selection
 title: "7-lens critique + 3-finalist synthesis over the 10 existing icon options"
-status: planned
+status: complete
 complexity: medium
 methodology: classic
 depends_on: []
+
+note_on_completion: >
+  Carried out via the Workflow tool in a dedicated worktree
+  (icon-review-worktree, since feat/mnemosyne-icon-selection was already
+  checked out in the main working directory), mirroring pu-01's mechanics:
+  7 lens-critique agents in parallel (legibility-16px, mythological-brand-
+  fit, dark-ui-context-fit, tab-bar-distinctiveness, accessibility-
+  contrast, multi-resolution-scalability, visual-language-cohesion), then
+  3 independent synthesis agents. All 10 output files (7 critiques + 3
+  finalists, 531 lines total) were independently verified present with
+  real, substantive content -- not placeholder text -- by reading them in
+  full, not just checking file existence/size. All 7 critiques
+  independently evaluated all 10 options (confirmed by spot-reading
+  legibility-16px.md and mythological-brand-fit.md end-to-end -- each has
+  a per-concept section for all 10 icons plus a full ranking). All 3
+  finalists cite specific critique text with direct quotes and per-lens
+  rankings, not asserted conclusions, matching pu-01's own selection.md
+  rigor.
+
+  Finding worth surfacing: all 3 synthesis agents, working independently
+  from the same 7 critiques, converged on the identical pick (Ancient Urn,
+  icon-08, refined) rather than 3 genuinely different directions. This
+  reads as a real, non-collusive consensus signal (3 separate agents
+  reasoning independently over the same evidence and landing in the same
+  place), not a synthesis-stage bug -- each of the 3 write-ups uses
+  different structure/emphasis and independently re-derives the same
+  conclusion from the same source critiques. No autonomous final pick was
+  made; the 3 write-ups (plus the operator's own freedom to override
+  entirely) are handed to is-02's real, blocking operator touchpoint.
+
+  .pHive/design/index.yaml's mnemosyne-icon-set entry updated: status ->
+  review-complete-awaiting-operator-pick, critique/finalist artifact paths
+  registered, review_note added summarizing the convergence finding
+  (including the honest note that the operator's own early favorite,
+  icon-01, scored worst on legibility-16px and near-bottom on
+  mythological-brand-fit).
 
 description: |
   Implements design-discussion.md's Ticket 1: a Workflow-tool-driven design
