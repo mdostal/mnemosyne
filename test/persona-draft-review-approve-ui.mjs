@@ -151,6 +151,68 @@ try {
   ok(/if\s*\(agentProposed\)\s*\{/.test(detailRowBody),
     "source-summary block is gated behind the SAME isAgentProposedDraft() check, not rendered unconditionally");
 
+  // --- pf-06 (design-discussion.md OQ3): a THIRD, honest label state for a
+  // draft with a real, non-empty sourceSummary but proposedBy absent/not
+  // 'agent' (a human attached files via pf-05, already merged) -- never
+  // mislabeled as agent-proposed, never silently falling back to the
+  // no-sourceSummary "Manually created" label either. isAgentProposedDraft()
+  // itself must stay unchanged (asserted above, unmodified), so this is
+  // asserted via a new sibling function. -------------------------------------
+  const provenanceLabelMatch = appJs.match(/function draftProvenanceLabel\([\s\S]*?\n\}\n/);
+  const provenanceLabelBody = provenanceLabelMatch ? provenanceLabelMatch[0] : "";
+  ok(provenanceLabelBody.length > 0, "draftProvenanceLabel() function body was extracted for inspection");
+  ok(/isAgentProposedDraft\(draft\)/.test(provenanceLabelBody),
+    "draftProvenanceLabel() reuses isAgentProposedDraft()'s existing sourceSummary signal for whether real source material is present at all, rather than re-deriving it");
+  ok(/proposedBy\s*===\s*["'`]agent["'`]/.test(provenanceLabelBody),
+    "draftProvenanceLabel() checks proposedBy === 'agent' to distinguish an agent-authored draft from a human-attached one");
+  ok(/return\s*["'`]manual["'`]/.test(provenanceLabelBody),
+    "draftProvenanceLabel() returns 'manual' when there is no real sourceSummary");
+  ok(/return[\s\S]*?["'`]agent-proposed["'`]/.test(provenanceLabelBody),
+    "draftProvenanceLabel() returns 'agent-proposed' only when sourceSummary is real AND proposedBy === 'agent'");
+  ok(/["'`]human-attached["'`]/.test(provenanceLabelBody),
+    "draftProvenanceLabel() has a distinct 'human-attached' state for a real sourceSummary whose proposedBy is absent/not 'agent'");
+
+  // buildPersonaDraftDetailRow() must derive its agentProposed gate THROUGH
+  // the 3-way decision, not directly from isAgentProposedDraft()'s raw
+  // sourceSummary-only signal -- otherwise a human who attached files would
+  // still be mislabeled "agent-proposed" just because a real sourceSummary
+  // happens to exist.
+  ok(/const provenance = draftProvenanceLabel\(draft\);/.test(detailRowBody),
+    "buildPersonaDraftDetailRow() computes the 3-way provenance label via draftProvenanceLabel(draft)");
+  ok(/const agentProposed = provenance === ["'`]agent-proposed["'`];/.test(detailRowBody),
+    "agentProposed is derived FROM the 3-way provenance decision (true only when proposedBy === 'agent'), not directly from isAgentProposedDraft()'s raw sourceSummary-only check");
+
+  // The third state's own distinct, honest label, in its own additive
+  // branch -- never a rewrite of the existing if (agentProposed) branch.
+  ok(/Includes attached source material/.test(detailRowBody),
+    "detail panel's provenance line says \"Includes attached source material\" for a real sourceSummary whose proposedBy is absent/not 'agent'");
+  ok(
+    /else if\s*\(\s*provenance\s*===\s*["'`]human-attached["'`]\s*\)\s*\{/.test(detailRowBody),
+    "the third label state's DOM branch is its own additive else-if branch, gated on provenance === 'human-attached' -- structurally additive, not a rewrite of the existing if (agentProposed) branch",
+  );
+  ok(/badge\.textContent = ["'`]human-attached["'`]/.test(detailRowBody),
+    "the human-attached state gets its own distinct badge text, never the \"agent-proposed\" badge text");
+  ok((detailRowBody.match(/badge\.textContent = ["'`]agent-proposed["'`]/g) || []).length === 1,
+    "the \"agent-proposed\" badge text is still assigned exactly once -- never applied to the new human-attached state");
+
+  // --- Re-assert the two PRE-EXISTING states are genuinely unchanged: the
+  // actual literal runtime OUTPUT strings (not comment mentions, which are
+  // free to reword) still appear exactly once each, so a rewrite that
+  // duplicates or shuffles the existing runtime text would be caught here --
+  ok((detailRowBody.match(/: `Manually created · \$\{proposedAt\}`;/g) || []).length === 1,
+    "the actual \"Manually created\" ternary branch/output string still appears exactly once, unmodified");
+  ok((detailRowBody.match(/\? `Proposed by agent · \$\{proposedAt\}`/g) || []).length === 1,
+    "the actual \"Proposed by agent\" ternary branch/output string still appears exactly once, unmodified");
+  ok((detailRowBody.match(/h4\.textContent = "Why the agent proposed this";/g) || []).length === 1,
+    "the actual \"Why the agent proposed this\" heading-assignment line still appears exactly once -- the agent-proposed state's summary block is unmodified");
+
+  // --- call site 1 (list-row snippet, in renderPersonas()/mergedPersonaRows
+  // territory): also uses the SAME shared draftProvenanceLabel() decision,
+  // so the same 3-way provenance signal is used everywhere it's surfaced,
+  // never a second, divergent definition of "agent-proposed" ---------------
+  ok(/draftProvenanceLabel\(row\.draft\)/.test(renderBody),
+    "renderPersonas()'s list-row snippet call site also derives provenance via the shared draftProvenanceLabel() helper");
+
   // --- Approve/Discard call the REAL pu-03 routes, never a client-side
   // simulation -------------------------------------------------------------
   const approveDefMatch = appJs.match(/async function approveDraft\([\s\S]*?\n\}\n/);
