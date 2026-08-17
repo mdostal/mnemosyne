@@ -1,10 +1,25 @@
 id: pf-04-client-cap-twin
 epic: mnemosyne-persona-files
 title: "Client-side cap-twin: port capExcerpt()/assembleSourceSummary() to ui/app.js, with a parity test"
-status: planned
+status: complete
 complexity: medium
 methodology: tdd
 depends_on: []
+
+note_on_completion: >
+  Merged 2026-08-17 (commit 5db4cea). Independently verified: reran the
+  parity test myself (44/44 checks, byte-for-byte identical output across
+  8 capExcerpt fixtures and 4 assembleSourceSummary fixtures) in both the
+  builder's worktree and the merged integration worktree. Confirmed
+  crawl-context.mjs has zero diff (git diff --stat empty). Confirmed via
+  grep the ported functions are not yet called from anywhere else in
+  ui/app.js (purely additive, matches the spec's own scope boundary).
+  tsc --noEmit clean in both worktrees. Along the way, independently found
+  and fixed an unrelated real regression already live on main (two stale
+  test assertions in persona-layer-stack.mjs/persona-layer-stack-shell-
+  integration.mjs left over from my own v0.10.0 merge-conflict resolution)
+  -- fixed directly on main+dev (commit d203115), out of band from this
+  ticket. All acceptance criteria met.
 
 description: |
   Implements horizontal-plan.md H3's cap-parity requirement: a client-side
