@@ -1,0 +1,95 @@
+id: is-01-icon-swarm-review
+epic: mnemosyne-icon-selection
+title: "7-lens critique + 3-finalist synthesis over the 10 existing icon options"
+status: planned
+complexity: medium
+methodology: classic
+depends_on: []
+
+description: |
+  Implements design-discussion.md's Ticket 1: a Workflow-tool-driven design
+  review over the 10 already-generated icon options
+  (.pHive/design/mnemosyne-icon-set/options/), mirroring
+  mnemosyne-persona-ux's pu-01 structurally -- 7 independently-dispatched
+  named-lens critique agents, each reviewing all 10 options, synthesized
+  into exactly 3 refined finalists. No option-generation phase (the 10
+  options already exist) -- this is the critique+synthesis half of pu-01's
+  pattern only.
+
+  The 7 lenses are icon-appropriate (legibility-at-16px,
+  mythological/brand-fit, dark-UI-context-fit, tab-bar-distinctiveness,
+  accessibility/contrast, multi-resolution-scalability,
+  visual-language-cohesion) -- NOT a copy of pu-01's UI-panel-shaped lenses
+  (design-discussion.md §1).
+
+acceptance_criteria:
+  - "Given all 10 existing options, when each of the 7 lens critiques runs, then it independently evaluates all 10 (not a subset) against its own named concern, producing a real critique file per lens under .pHive/design/mnemosyne-icon-set/critiques/"
+  - "Given the 7 completed critiques, when synthesis runs, then it produces exactly 3 refined finalists under .pHive/design/mnemosyne-icon-set/synthesized/ -- genuinely informed by the critique feedback, not a bare re-pick of 3 of the original 10 unchanged"
+  - "Given the synthesis output, when written, then each of the 3 finalists documents which of the 10 original concepts (or combination) it derives from and why, cross-referencing specific critique findings -- matching pu-01's own selection.md rigor of citing real critique text, not asserting conclusions"
+  - "Given .pHive/design/index.yaml's existing mnemosyne-icon-set topic entry, when this ticket completes, then its status field is updated to reflect the review having run (from options-generated-review-not-yet-run to something accurate), and the critique/synthesized artifact paths are registered"
+  - "Given this ticket's own completion, when done, then it does NOT make an autonomous final pick -- the 3 finalists are the deliverable; the operator's own real pick is is-02's job, a genuine blocking touchpoint, never assumed or auto-advanced here"
+
+steps:
+  - id: research
+    description: >
+      Read pu-01's own committed artifacts in full
+      (.pHive/design/mnemosyne-persona-ux/critiques/*.md and
+      synthesized/*.md) as the concrete structural/rigor template. Read all
+      10 existing icon options and design-discussion.md's own 7 named
+      lenses before dispatching.
+    agent: researcher
+  - id: implement
+    description: >
+      Carry out the review via the Workflow tool in a dedicated worktree
+      (mirroring pu-01's own mechanics exactly): 7 lens-critique agents in
+      parallel, each independently reviewing all 10 options against its own
+      named concern; then a synthesis stage combining all 7 critiques into 3
+      refined finalists, each citing specific critique findings. Commit all
+      artifacts to .pHive/design/mnemosyne-icon-set/{critiques,synthesized}/.
+    agent: developer
+  - id: review
+    description: >
+      Confirm each of the 7 critiques genuinely evaluated all 10 options
+      (not a subset). Confirm the 3 synthesized finalists cite real critique
+      text, not asserted conclusions. Confirm no autonomous final pick was
+      made -- only 3 finalists presented, no "selection.md"-style single
+      winner declared (that only happens after the operator's own pick in
+      is-02).
+    agent: reviewer
+  - id: integrate
+    description: Commit and push to feature branch. Update .pHive/design/index.yaml.
+    agent: developer
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: .pHive/design/mnemosyne-persona-ux/critiques/accessibility.md
+      purpose: "One concrete example of pu-01's own critique rigor/format -- the template this ticket's 7 critiques match in depth and citation discipline, adapted to icon-appropriate lenses."
+    - path: .pHive/design/mnemosyne-persona-ux/selection.md
+      purpose: "pu-01's own synthesis/selection rigor -- cross-checking claims against the underlying critique text rather than trusting a synthesis's own self-description, the exact discipline this ticket's synthesis stage must match."
+    - path: .pHive/design/index.yaml
+      purpose: "Already has a mnemosyne-icon-set topic entry (status: options-generated-review-not-yet-run) -- this ticket updates it, doesn't create a duplicate."
+
+files_to_modify:
+  - file: .pHive/design/mnemosyne-icon-set/critiques/
+    change: "New: 7 lens critique files."
+  - file: .pHive/design/mnemosyne-icon-set/synthesized/
+    change: "New: 3 synthesized finalist files."
+  - file: .pHive/design/index.yaml
+    change: "Update the mnemosyne-icon-set topic entry's status and register new artifact paths."
+
+design_decisions:
+  - decision: "7 icon-appropriate lenses, not a verbatim copy of pu-01's UI-panel lenses."
+    rationale: "design-discussion.md §1: an icon/favicon has fundamentally different failure modes (legibility at 16px, tab-bar distinctiveness) than an interactive UI panel -- reusing pu-01's lenses unchanged would leave real icon-specific concerns uncritiqued."
+  - decision: "This ticket produces 3 finalists only -- it does not make the final pick."
+    rationale: "design-discussion.md's one structural departure from pu-01: the operator explicitly said the icon choice is theirs ('the icon usually is mine to choose'), unlike pu-01's own autonomous pick (made when no interactive operator was available). is-02 is the ticket with the real, blocking human touchpoint."
+
+cross_cutting: []
+
+references:
+  - path: .pHive/epics/mnemosyne-icon-selection/docs/design-discussion.md
+    relevant_excerpt: |
+      §1 Ticket 1: "A Workflow-tool-driven pass, structurally mirroring
+      pu-01 ... producing exactly 3 refined finalists ... genuinely
+      informed refinement/selection, matching pu-01's own 'synthesized,
+      not just chosen' precedent."

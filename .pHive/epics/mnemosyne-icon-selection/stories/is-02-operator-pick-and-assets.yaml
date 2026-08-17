@@ -1,0 +1,107 @@
+id: is-02-operator-pick-and-assets
+epic: mnemosyne-icon-selection
+title: "Operator's real final pick, then production-ready favicon assets from that pick"
+status: planned
+complexity: medium
+methodology: classic
+depends_on: [is-01-icon-swarm-review]
+
+description: |
+  Implements design-discussion.md's Ticket 2 -- the one structural
+  departure from pu-01's own precedent: a REAL, blocking operator
+  touchpoint for the final icon pick (never an autonomous selection),
+  followed by production-asset generation from whichever option the
+  operator actually picks.
+
+  Part A (human-in-the-loop, not agent-executable): present is-01's 3
+  synthesized finalists to the operator -- including honoring their
+  already-stated freedom to override entirely with a different concept
+  (e.g. a plain brain) rather than being constrained to the 3 finalists --
+  and wait for their real, explicit pick. This part of the ticket cannot be
+  "completed" by an agent alone; it requires the coordinating session to
+  actually ask and wait.
+
+  Part B (agent-executable once the pick is known): produce real,
+  production-ready assets from the chosen concept -- a genuine
+  transparent-background PNG (regenerating with an explicit real-alpha
+  request preferred over background-removing the existing checkerboard
+  JPEG, per design-discussion.md OQ1), a proper multi-resolution favicon.ico,
+  and a new <link rel="icon"> wired into ui/index.html (confirmed via
+  research-brief.md: no such tag exists today -- this is additive, not a
+  replacement of anything).
+
+acceptance_criteria:
+  - "Given is-01's 3 synthesized finalists, when presented, then the operator is asked for a real, explicit final pick -- never an assumed/auto-advanced selection, and never constrained only to the 3 finalists if the operator wants something else"
+  - "Given the operator's actual pick, when production assets are generated, then the resulting PNG has a genuine alpha channel (verified directly, e.g. via PIL mode==RGBA with real transparency, not a drawn checkerboard) -- confirmed by inspection, not assumed from the generation prompt alone"
+  - "Given the transparent PNG, when the favicon.ico is produced, then it contains multiple real resolutions (at minimum 16x16, 32x32, 48x48) -- verified by inspecting the actual .ico file's embedded image list, not assumed from the conversion command's exit code"
+  - "Given ui/index.html, when this ticket ships, then it has exactly one new <link rel=\"icon\" ...> tag pointing at a real, committed asset path -- confirmed via a real HTTP fetch of that path returning 200 once the standalone UI server is running, not just a static file-exists check"
+  - "Given the shipped icon, when the standalone UI is loaded in a real browser, then the browser tab genuinely shows the new icon -- a real, visual confirmation (e.g. via a screenshot or an accessibility-snapshot-adjacent check), not only an HTML-source-level assertion"
+
+steps:
+  - id: operator-touchpoint
+    description: >
+      Present is-01's 3 synthesized finalists (with their reasoning) to the
+      operator, explicitly noting they may pick any of the 3, their
+      already-stated favorite (icon-01, memory-spiral-brain) even if it
+      isn't among the 3, or something else entirely. Wait for their real
+      answer -- this step cannot be carried out autonomously.
+    agent: developer
+  - id: implement
+    description: >
+      Once the pick is known, generate/derive a real transparent PNG for
+      that concept (regeneration preferred over background removal, per
+      design-discussion.md OQ1), convert to a proper multi-resolution
+      favicon.ico, add the <link rel="icon"> tag to ui/index.html, and
+      commit the real asset files to the repo (e.g. under a new assets/ or
+      ui/ subdirectory -- confirm this repo's own convention, if any,
+      before picking a location).
+    agent: developer
+    depends_on: [operator-touchpoint]
+  - id: review
+    description: >
+      Directly inspect the produced PNG's alpha channel and the .ico file's
+      embedded resolutions (not just trust the generation/conversion
+      command's exit code). Start the real standalone UI server and confirm
+      via a real HTTP fetch that the new <link rel="icon"> path resolves,
+      and via a real browser check (e.g. Playwright) that the tab icon
+      genuinely renders.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: ui/index.html
+      purpose: "Confirmed via research-brief.md to have zero existing icon-related <link> tags -- this ticket's addition is purely additive."
+    - path: .pHive/design/mnemosyne-icon-set/synthesized/
+      purpose: "is-01's own 3 finalist files -- the source of truth this ticket's operator-touchpoint step presents."
+
+files_to_modify:
+  - file: ui/index.html
+    change: "New <link rel=\"icon\"> tag."
+  - file: (new asset location, TBD by implementer)
+    change: "Real transparent PNG + multi-resolution favicon.ico for the operator's chosen concept."
+
+design_decisions:
+  - decision: "Regenerate with an explicit real-alpha request, preferred over background-removing the existing checkerboard JPEG."
+    rationale: "design-discussion.md OQ1: closer to the source of truth than reverse-engineering transparency out of a drawn checkerboard; falls back to background removal only if regeneration produces a materially different result from what was actually reviewed/chosen."
+  - decision: "The operator's pick is a real, blocking touchpoint -- never autonomous."
+    rationale: "Direct operator instruction, this session: 'the icon usually is mine to choose.' The one deliberate structural departure from pu-01's own precedent (which made an autonomous pick under different circumstances -- no interactive operator available at that time)."
+
+cross_cutting: []
+
+risks:
+  - severity: low
+    description: "The operator-touchpoint step cannot be dispatched to an autonomous background builder the way every other ticket this session has been -- it requires the coordinating session itself to ask and wait for a real answer before implement/review/integrate can proceed."
+    mitigation: "Explicitly split into its own step (operator-touchpoint) rather than folded into implement, so the dependency chain makes the blocking nature structurally visible, not just a note in prose."
+
+references:
+  - path: .pHive/epics/mnemosyne-icon-selection/docs/design-discussion.md
+    relevant_excerpt: |
+      §1 Ticket 2: "This is the one structural departure from pu-01's own
+      precedent ... Ticket 1's output (3 finalists) is presented to the
+      operator as a real, blocking gate -- not assumed, not auto-advanced."
