@@ -2052,6 +2052,15 @@ async function loadPersonas() {
 // loadDrafts() (pu-12's new function, NOT loadPersonas() -- proposing or
 // editing a draft never touches the real persona store; only an explicit
 // Approve, wired below, does that).
+//
+// pf-05-ui-file-attachment: personaFileInputEl (#persona-file-input) is this
+// same form's new, real <input type="file" multiple> field. The handler
+// below reads each attached file's text via File.text(), caps it via
+// pf-04's ported capExcerpt()/assembleSourceSummary() (see the
+// pf-04-client-cap-twin section further down this file), and folds the
+// result into the SAME candidate object as candidate.sourceSummary --
+// additive only. Zero files attached -> candidate is untouched -> the
+// request body is byte-for-byte identical to pu-12's own shipped behavior.
 const personaForm = document.getElementById("persona-form");
 const personaFormStatusEl = document.getElementById("persona-form-status");
 const personaTierFieldEl = document.getElementById("persona-tier");
@@ -2061,6 +2070,7 @@ const personaScopeFieldEl = document.getElementById("persona-scope");
 const personaSectionHeadingFieldEl = document.getElementById("persona-section-heading");
 const personaSectionBodyFieldEl = document.getElementById("persona-section-body");
 const personaRepoFieldEl = document.getElementById("persona-repo");
+const personaFileInputEl = document.getElementById("persona-file-input");
 
 personaForm.addEventListener("submit", async (evt) => {
   evt.preventDefault();
@@ -2082,6 +2092,24 @@ personaForm.addEventListener("submit", async (evt) => {
     sections: [{ heading: sectionHeading, body: sectionBody }],
   };
   if (repo) candidate.repo = repo;
+
+  // pf-05-ui-file-attachment: fold any attached files' capped content into
+  // THIS SAME candidate object, before the single fetch() below -- never a
+  // second request. Reads real file content via File.text() (no files
+  // attached -> attachedFiles is empty -> candidate is left untouched, so
+  // the request body stays byte-for-byte identical to pu-12's own shipped
+  // behavior). capExcerpt()/assembleSourceSummary() are pf-04's ported
+  // cap-twin functions, defined further down this file (function
+  // declarations are hoisted, so calling them here is safe).
+  const attachedFiles = personaFileInputEl && personaFileInputEl.files ? Array.from(personaFileInputEl.files) : [];
+  if (attachedFiles.length > 0) {
+    const sourcesRead = [];
+    for (const file of attachedFiles) {
+      const raw = await file.text();
+      sourcesRead.push({ name: file.name, ...capExcerpt(raw) });
+    }
+    candidate.sourceSummary = assembleSourceSummary(sourcesRead, []);
+  }
 
   setStatus(personaFormStatusEl, "loading", "saving draft…");
   submitBtn.disabled = true;
@@ -2210,17 +2238,19 @@ async function loadMemoryLevels() {
 // ==================== pf-04-client-cap-twin (epic mnemosyne-persona-files) ====================
 // Client-side twin of skills/mnemosyne-persona-interview/crawl-context.mjs's
 // capExcerpt()/assembleSourceSummary() -- ported verbatim (same constants,
-// same truncation logic, same TRUNCATION_MARKER text) so a future browser-side
-// file attachment (pf-05) can enforce the identical truncation behavior
-// before content ever leaves the browser, rather than trusting a
-// server-side re-check alone (the existing 4MB readJsonBody() cap on
-// lib/mnemosyne/server.ts remains the hard backstop regardless).
-// See test/persona-files-cap-twin-parity.mjs for the running,
-// byte-for-byte proof that this twin matches the Node original exactly.
+// same truncation logic, same TRUNCATION_MARKER text) so the browser-side
+// file attachment (pf-05, personaForm's submit handler above) enforces the
+// identical truncation behavior before content ever leaves the browser,
+// rather than trusting a server-side re-check alone (the existing 4MB
+// readJsonBody() cap on lib/mnemosyne/server.ts remains the hard backstop
+// regardless).
+// See test/persona-files-cap-twin-parity.mjs for the running, byte-for-byte
+// proof that this twin matches the Node original exactly, and
+// test/persona-write-form.mjs for pf-05's proof that personaForm's submit
+// handler actually calls these on attached files.
 //
-// ADDITIVE ONLY: this story (pf-04) does not wire these into any existing UI
-// code path -- nothing below is called from anywhere else in this file yet.
-// That wiring is pf-05's explicit, later job.
+// pf-05-ui-file-attachment wired these in (personaForm's submit handler,
+// above) -- no longer additive-only/uncalled.
 
 /** Cap 1/3 -- at most this many lines are read from the top of any one file source. */
 const MAX_LINES_PER_SOURCE = 40;
