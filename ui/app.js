@@ -2207,6 +2207,72 @@ async function loadMemoryLevels() {
 }
 // ==================== end ml-05-memory-levels-ui ====================
 
+// ==================== pf-04-client-cap-twin (epic mnemosyne-persona-files) ====================
+// Client-side twin of skills/mnemosyne-persona-interview/crawl-context.mjs's
+// capExcerpt()/assembleSourceSummary() -- ported verbatim (same constants,
+// same truncation logic, same TRUNCATION_MARKER text) so a future browser-side
+// file attachment (pf-05) can enforce the identical truncation behavior
+// before content ever leaves the browser, rather than trusting a
+// server-side re-check alone (the existing 4MB readJsonBody() cap on
+// lib/mnemosyne/server.ts remains the hard backstop regardless).
+// See test/persona-files-cap-twin-parity.mjs for the running,
+// byte-for-byte proof that this twin matches the Node original exactly.
+//
+// ADDITIVE ONLY: this story (pf-04) does not wire these into any existing UI
+// code path -- nothing below is called from anywhere else in this file yet.
+// That wiring is pf-05's explicit, later job.
+
+/** Cap 1/3 -- at most this many lines are read from the top of any one file source. */
+const MAX_LINES_PER_SOURCE = 40;
+/** Cap 2/3 -- a hard character ceiling per source's excerpt, applied after the line cap. */
+const MAX_CHARS_PER_SOURCE = 1200;
+/** Cap 3/3 -- a hard ceiling on the assembled sourceSummary string as a whole. */
+const MAX_SOURCE_SUMMARY_CHARS = 4000;
+
+const TRUNCATION_MARKER = " …[capped]";
+
+/**
+ * Applies both file-level caps (MAX_LINES_PER_SOURCE, then
+ * MAX_CHARS_PER_SOURCE) to one source's raw text. Deterministic, no I/O --
+ * ported verbatim from crawl-context.mjs's own capExcerpt().
+ */
+function capExcerpt(raw) {
+  const lines = String(raw).split(/\r?\n/);
+  const truncatedByLines = lines.length > MAX_LINES_PER_SOURCE;
+  let excerpt = lines.slice(0, MAX_LINES_PER_SOURCE).join("\n");
+
+  const truncatedByChars = excerpt.length > MAX_CHARS_PER_SOURCE;
+  if (truncatedByChars) {
+    excerpt = excerpt.slice(0, MAX_CHARS_PER_SOURCE);
+  }
+
+  const truncated = truncatedByLines || truncatedByChars;
+  return { excerpt: truncated ? excerpt + TRUNCATION_MARKER : excerpt, truncated };
+}
+
+/**
+ * Assembles a final sourceSummary string from whatever sources were read,
+ * applying MAX_SOURCE_SUMMARY_CHARS as a last, whole-string cap. Ported
+ * verbatim from crawl-context.mjs's own (module-private) assembleSourceSummary().
+ */
+function assembleSourceSummary(sourcesRead, sourcesMissing) {
+  if (sourcesRead.length === 0) {
+    return (
+      "Bounded crawl found none of the named sources present " +
+      `(checked: ${sourcesMissing.join(", ")}). No repo/manifest/agent-file/parent-persona context available ` +
+      "for this interview — proceeding with questions alone."
+    );
+  }
+
+  const parts = sourcesRead.map((s) => `## ${s.name}\n${s.excerpt}`);
+  let summary = parts.join("\n\n");
+  if (summary.length > MAX_SOURCE_SUMMARY_CHARS) {
+    summary = summary.slice(0, MAX_SOURCE_SUMMARY_CHARS) + TRUNCATION_MARKER;
+  }
+  return summary;
+}
+// ==================== end pf-04-client-cap-twin ====================
+
 async function refreshAll() {
   refreshBtn.disabled = true;
   try {
