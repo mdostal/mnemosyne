@@ -1488,6 +1488,22 @@ function isAgentProposedDraft(draft) {
   return typeof draft.sourceSummary === "string" && draft.sourceSummary.trim() !== "";
 }
 
+// pf-06 (design-discussion.md OQ3): once pf-05 shipped, a human-typed draft
+// can carry a real sourceSummary too (from attached files), which
+// isAgentProposedDraft()'s binary "real sourceSummary => agent-proposed"
+// signal alone would mislabel -- a human who attached files is not an
+// agent. This sibling function makes the full 3-way label decision
+// explicit, reusing isAgentProposedDraft()'s existing "real, non-empty
+// sourceSummary" signal for whether ANY source material is present at all,
+// then layering proposedBy on top to decide WHO attached it.
+// isAgentProposedDraft() itself stays unchanged -- so its own callers (the
+// list-row snippet gate below, and any other consumer of that raw boolean)
+// are untouched by this addition.
+function draftProvenanceLabel(draft) {
+  if (!isAgentProposedDraft(draft)) return "manual";
+  return draft.proposedBy === "agent" ? "agent-proposed" : "human-attached";
+}
+
 // One-line snippet rendered directly under a collapsed agent-proposed row
 // (selection.md/synthesized option-2.md §1: "a one-line sourceSummary
 // snippet renders directly under any agent-proposed row, truncated to
@@ -1603,14 +1619,20 @@ function renderPersonas() {
       tr.tabIndex = -1;
 
       const displayNameTd = personaCell(row.displayName == null || row.displayName === "" ? "—" : row.displayName);
-      // pu-12: one-line sourceSummary snippet under any agent-proposed row,
-      // visible without expanding anything (selection.md/synthesized
-      // option-2.md §1) -- NEVER rendered for a human-typed draft (no
-      // sourceSummary), so no fabricated provenance signal appears where
-      // none exists.
+      // pu-12: one-line sourceSummary snippet under any row with a real
+      // sourceSummary, visible without expanding anything (selection.md/
+      // synthesized option-2.md §1) -- NEVER rendered for a draft with no
+      // sourceSummary, so no fabricated provenance signal appears where
+      // none exists. pf-06: the snippet itself still renders for EITHER an
+      // agent-proposed OR a human-attached draft (real material is real
+      // material either way) -- draftProvenanceLabel() only decides the CSS
+      // hook used to style it, never whether it renders.
       if (row.draft && isAgentProposedDraft(row.draft)) {
         const snippet = document.createElement("div");
-        snippet.className = "persona-source-snippet";
+        const snippetProvenance = draftProvenanceLabel(row.draft);
+        snippet.className = snippetProvenance === "agent-proposed"
+          ? "persona-source-snippet"
+          : "persona-source-snippet persona-source-snippet--human-attached";
         snippet.textContent = sourceSummarySnippet(row.draft.sourceSummary);
         displayNameTd.appendChild(snippet);
       }
@@ -1688,7 +1710,13 @@ function personaCompareBlock(label, record) {
 function buildPersonaDraftDetailRow(row) {
   const { tier, scopeId, draft, live } = row;
   const identityKey = personaRowKey(tier, scopeId);
-  const agentProposed = isAgentProposedDraft(draft);
+  // pf-06: the 3-way provenance decision (agent-proposed / human-attached /
+  // manual). agentProposed below is derived FROM this, not directly from
+  // isAgentProposedDraft()'s raw sourceSummary-only signal -- so a human who
+  // attached files via pf-05 is never mislabeled "agent-proposed" just
+  // because a real sourceSummary happens to exist.
+  const provenance = draftProvenanceLabel(draft);
+  const agentProposed = provenance === "agent-proposed";
 
   const tr = document.createElement("tr");
   tr.id = draftDetailRowId(tier, scopeId);
@@ -1703,8 +1731,10 @@ function buildPersonaDraftDetailRow(row) {
   let focusTarget = null;
 
   // Source summary -- ONLY rendered, and ONLY labeled agent-proposed, when
-  // draft.sourceSummary is a real, non-empty string (design_decisions:
-  // "never fabricated or implied for a human-typed draft").
+  // draft.sourceSummary is a real, non-empty string AND proposedBy ===
+  // 'agent' (design_decisions: "never fabricated or implied for a
+  // human-typed draft"; pf-06: never conflated with a human-attached one
+  // either).
   if (agentProposed) {
     const h4 = document.createElement("h4");
     h4.tabIndex = -1;
@@ -1720,17 +1750,40 @@ function buildPersonaDraftDetailRow(row) {
     summaryP.className = "persona-draft-source-summary";
     summaryP.textContent = draft.sourceSummary;
     panel.appendChild(summaryP);
+  } else if (provenance === "human-attached") {
+    // pf-06 (design-discussion.md OQ3): real source material attached by a
+    // human via pf-05 -- honestly surfaced (never silently dropped down to
+    // the no-sourceSummary "Manually created" label), but never labeled
+    // "agent-proposed" either.
+    const h4 = document.createElement("h4");
+    h4.tabIndex = -1;
+    h4.textContent = "Attached source material";
+    const badge = document.createElement("span");
+    badge.className = "persona-draft-source-label";
+    badge.textContent = "human-attached";
+    h4.appendChild(badge);
+    panel.appendChild(h4);
+    focusTarget = h4;
+
+    const summaryP = document.createElement("p");
+    summaryP.className = "persona-draft-source-summary";
+    summaryP.textContent = draft.sourceSummary;
+    panel.appendChild(summaryP);
   }
 
   // Provenance line -- always visible text, never inferred/tooltip-only
-  // (§4.3.2). "Manually created" for a human-typed draft -- never "Proposed
-  // by agent" when there is no real sourceSummary behind it.
+  // (§4.3.2). "Manually created" for a draft with no sourceSummary at all;
+  // "Includes attached source material" (pf-06) for a real sourceSummary
+  // attached by a human; "Proposed by agent" only when proposedBy ===
+  // 'agent'.
   const provenanceP = document.createElement("p");
   provenanceP.className = "persona-draft-provenance";
   const proposedAt = typeof draft.proposedAt === "string" && draft.proposedAt ? draft.proposedAt : "unknown time";
   provenanceP.textContent = agentProposed
     ? `Proposed by agent · ${proposedAt}`
-    : `Manually created · ${proposedAt}`;
+    : provenance === "human-attached"
+      ? `Includes attached source material · ${proposedAt}`
+      : `Manually created · ${proposedAt}`;
   panel.appendChild(provenanceP);
   if (!focusTarget) {
     provenanceP.tabIndex = -1;
