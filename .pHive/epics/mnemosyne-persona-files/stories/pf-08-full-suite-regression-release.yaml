@@ -55,6 +55,20 @@ note_on_completion: >
   reusing pu-15's draft store/routes/review-UI completely unchanged. All
   acceptance criteria met.
 
+  Independently re-verified by the coordinating session before merging:
+  reran tsc --noEmit (clean), the full contract vitest suite (727/727,
+  54/54 files), and all 6 of the epic's own new/extended test files
+  (persona-cli.mjs, persona-files-cap-twin-parity.mjs, persona-write-
+  form.mjs, persona-draft-review-approve-ui.mjs, persona-files-slice1-
+  e2e.mjs, persona-files-slice2-e2e.mjs) directly -- all clean. Confirmed
+  test/http-api.mjs's 3 failures are exactly the known-benign POST
+  /remember default-layer assertions, nothing else. Also found and fixed
+  one real factual error in the CHANGELOG.md entry this ticket wrote:
+  crawlExplicitFiles() was cited at the wrong path
+  (lib/mnemosyne/layer1/crawl-context.mjs, which does not exist) --
+  corrected to its real location, skills/mnemosyne-persona-interview/
+  crawl-context.mjs, in a small fixup commit merged alongside this one.
+
 description: |
   Closes the epic (pf-01 through pf-08), mirroring pu-15's own precedent
   (mnemosyne-persona-ux's closing ticket): a real full-suite regression
