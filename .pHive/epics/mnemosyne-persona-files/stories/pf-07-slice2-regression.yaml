@@ -1,0 +1,52 @@
+id: pf-07-slice2-regression
+epic: mnemosyne-persona-files
+title: "Slice 2 regression: UI file attachment -> propose -> review -> approve -> real commit"
+status: planned
+complexity: low
+methodology: tdd
+depends_on: [pf-06-provenance-label-extension]
+
+description: |
+  Closes vertical-plan.md Slice 2 with a real, continuous end-to-end proof:
+  a real HTTP POST simulating pf-05's UI file-attachment path (real
+  subprocess-spawned server, real request body carrying capped file content)
+  -> GET /persona/draft shows the draft labeled per pf-06's third state ->
+  approve -> real filesystem commit proof. No mocked transport boundary.
+
+acceptance_criteria:
+  - "Given a real HTTP POST to POST /persona/draft/:tier/:scopeId carrying a sourceSummary shaped like pf-05's file-attachment path would produce (real capped content, no proposedBy: 'agent'), when GET /persona/draft/:tier/:scopeId is checked, then the draft's shape is exactly what pf-06's third label state keys on"
+  - "Given that draft, when approved via the real approve route, then a direct filesystem read confirms the real persona store has the committed content matching the attached-file-derived sourceSummary's real text"
+  - "Given the full test suite for this slice (pf-04's parity test, pf-05's UI tests, pf-06's label tests, this story's own e2e test) run together with the epic's full suite from Slice 1 and the inherited mnemosyne-persona-ux suite, then all pass -- zero regressions"
+
+steps:
+  - id: research
+    description: Read pu-13's test/persona-full-loop-e2e.mjs and pf-03's own slice-1 e2e test as the exact conventions this story's proof extends.
+    agent: researcher
+  - id: test-spec
+    description: Write the end-to-end test scenario for the UI-attachment path.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Write test/persona-files-slice2-e2e.mjs implementing the above.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm every step is a real process/HTTP call, no simulation shortcuts.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch. Run the full suite (pf-01 through pf-07 plus the inherited mnemosyne-persona-ux suite) together, confirm zero regressions.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: test/persona-full-loop-e2e.mjs
+      purpose: "pu-13's own real-subprocess, real-HTTP, three-independent-reads verification convention this story's proof extends."
+
+files_to_modify:
+  - file: test/persona-files-slice2-e2e.mjs
+    change: "New file. The complete UI-file-attachment -> review -> approve -> real-commit loop."
+
+cross_cutting: []

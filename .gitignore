@@ -56,3 +56,5 @@ config/minerva.local.yaml
 !.pHive/epics/mnemosyne-persona-ux/**
 !.pHive/epics/mnemosyne-persona-panel-fidelity-followups/
 !.pHive/epics/mnemosyne-persona-panel-fidelity-followups/**
+!.pHive/epics/mnemosyne-persona-files/
+!.pHive/epics/mnemosyne-persona-files/**

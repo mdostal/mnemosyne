@@ -1,0 +1,53 @@
+id: pf-08-full-suite-regression-release
+epic: mnemosyne-persona-files
+title: Full-suite regression pass + version bump + release note
+status: planned
+complexity: low
+methodology: tdd
+depends_on: [pf-03-slice1-regression, pf-07-slice2-regression]
+
+description: |
+  Closes the epic (pf-01 through pf-08), mirroring pu-15's own precedent
+  (mnemosyne-persona-ux's closing ticket): a real full-suite regression
+  proof, a version bump per epic.yaml's version_bump designation, and a
+  release note.
+
+acceptance_criteria:
+  - "Given the full npm test script (vitest suite + the .mjs subprocess suite) plus this epic's own new test files, when run on this epic's final state, then it completes with only pre-existing, already-documented-as-unrelated failures (the generic POST /remember default-layer assertions first documented in ml-04's completion note) -- no NEW failures anywhere"
+  - "Given those pre-existing failures, when this epic's full changeset is stashed out (via a real checkout of the branch's merge-base with main) and the suite is re-run against the clean tree, then the same failures reproduce identically -- proving they predate this epic and are not caused by it"
+  - "Given tsc --noEmit, when run, then it completes clean with zero new type errors"
+  - "Given package.json's version field, when this ticket completes, then it reflects the version bump epic.yaml specifies from the version at epic start"
+  - "Given this ticket's completion note, when read, then it includes the actual full test-run output summary and the actual stashed-tree comparison result, matching pu-15's own completion-note detail level"
+
+steps:
+  - id: research
+    description: Confirm the current version in package.json and the exact current pre-existing-failure set by running the full suite once before this epic's final story lands.
+    agent: researcher
+  - id: implement
+    description: Run the full npm test + tsc --noEmit against this epic's final state; if any NEW failure appears, fix it (a regression-fixing step, not a new-feature step) before proceeding.
+    agent: developer
+    depends_on: [research]
+  - id: review
+    description: Perform the real stash-and-reproduce proof against this branch's merge-base with main -- run in a FRESH worktree with its own npm install, and if that fresh-worktree run itself shows unrelated remember()/swarm-memory-backed failures not present in the long-lived development worktree, cross-check with a second fresh worktree at the epic's own tip before concluding whether a failure is a real regression or a fresh-worktree/live-backend artifact (mnemosyne-persona-ux's own pu-15 completion note documents exactly this investigation pattern and its resolution -- read it first).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Bump version per epic.yaml's version_bump field, write the release note summarizing the epic's real deliverables, commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: .pHive/epics/mnemosyne-persona-ux/stories/pu-15-full-suite-regression-release.yaml
+      purpose: "Direct template for this story's expected verification rigor, completion-note detail level, and the exact fresh-worktree-artifact investigation pattern to reuse if the same class of remember()/swarm-memory-backed noise reappears."
+
+files_to_modify:
+  - file: package.json
+    change: "Version bump per epic.yaml's version_bump field."
+  - file: package-lock.json
+    change: "Version bump, matching package.json."
+  - file: CHANGELOG.md
+    change: "New entry covering the epic's real deliverables."
+
+cross_cutting: []

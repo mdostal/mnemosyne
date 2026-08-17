@@ -1,0 +1,80 @@
+id: pf-02-cli-propose-from-files
+epic: mnemosyne-persona-files
+title: "CLI: mnemosyne persona draft propose-from-files"
+status: planned
+complexity: medium
+methodology: tdd
+depends_on: [pf-01-crawl-explicit-files]
+
+description: |
+  Implements horizontal-plan.md H2: a new subcommand on bin/mnemosyne-persona.mjs,
+  `draft propose-from-files --tier <t> --scope-id <id> [--repo <r>] --file <path>
+  [--file <path> ...] [--max-files <n>]`. Builds the persona record (displayName/
+  scope/sections -- same minimal shape the interview skill produces) plus
+  pf-01's crawlExplicitFiles()'s sourceSummary, then writes the draft via the
+  SAME underlying write primitive the existing `draft propose` subcommand
+  already uses -- no new write path.
+
+  Resolves design-discussion.md OQ1 (the --file flag naming collision):
+  propose-from-files is a genuinely separate subcommand, not a flag variant
+  of `draft propose` -- its own --file (repeatable, meaning "a source file to
+  crawl") does not collide with `draft propose --file <candidate.yaml>`'s
+  different, single-file "the whole candidate" meaning, matching this CLI's
+  existing per-subcommand flag-shape precedent (e.g. create's --root vs.
+  draft propose's absence of --root).
+
+acceptance_criteria:
+  - "Given `mnemosyne persona draft propose-from-files --tier company-director --scope-id acme --file README.md --file NOTES.md`, when run, then a real draft is written via pu-02's writeDraftPersona-shaped write path (verified by a direct filesystem read), carrying pf-01's crawlExplicitFiles() sourceSummary"
+  - "Given more --file flags than the configured max, when run, then the CLI exits non-zero with a clear error message naming the limit -- never silently processing a subset"
+  - "Given --repo is supplied, when a code-architect tier draft is proposed, then it lands in the repo-local draft subtree, matching `draft propose`'s own existing --repo handling exactly"
+  - "Given the resulting draft, when read via `mnemosyne persona draft show`, then its sourceSummary is visible and honestly reflects the real content of the --file arguments passed, not a placeholder"
+  - "Given this new subcommand's own tests plus the full existing persona-cli.mjs test suite, when run together, then all pass -- zero regression to the existing draft propose/show/approve/discard subcommands"
+
+steps:
+  - id: research
+    description: Read bin/mnemosyne-persona.mjs's existing `draft propose` subcommand implementation and its CLI-arg parsing convention in full, immediately before adding the sibling subcommand.
+    agent: researcher
+  - id: test-spec
+    description: Extend test/persona-cli.mjs with failing tests for propose-from-files -- successful multi-file propose, the max-files error case, --repo routing, sourceSummary honesty (verified by reading the real file content back out of the draft).
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add the propose-from-files subcommand, importing pf-01's crawlExplicitFiles() and reusing draft propose's existing write-primitive call shape unchanged.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm no reimplemented write logic (grep for a second writeDraftPersona-shaped call). Confirm the --file flag naming resolution matches design-discussion.md OQ1's stated reasoning.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: bin/mnemosyne-persona.mjs
+      purpose: "The existing `draft propose --file <candidate.yaml>` subcommand and its USAGE_DRAFT help text -- the exact CLI-arg/write-primitive convention this story's new subcommand mirrors."
+    - path: skills/mnemosyne-persona-interview/crawl-context.mjs
+      purpose: "pf-01's crawlExplicitFiles() -- this story's source-material builder, imported directly."
+
+files_to_modify:
+  - file: bin/mnemosyne-persona.mjs
+    change: "New subcommand: draft propose-from-files."
+  - file: test/persona-cli.mjs
+    change: "New tests for propose-from-files."
+
+design_decisions:
+  - decision: "propose-from-files is a separate subcommand, not a flag on draft propose."
+    rationale: "design-discussion.md OQ1: avoids the --file flag meaning-collision (whole-candidate-YAML vs. source-file-to-crawl) cleanly, without overloading one flag with two incompatible meanings."
+
+cross_cutting: []
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-files/docs/design-discussion.md
+    relevant_excerpt: |
+      OQ1: "the new verb is a genuinely separate subcommand (draft
+      propose-from-files, not a flag variant of draft propose), so its own
+      --file (repeatable, meaning 'a source file to crawl') does not
+      collide."

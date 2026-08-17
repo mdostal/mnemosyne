@@ -1,0 +1,72 @@
+id: pf-05-ui-file-attachment
+epic: mnemosyne-persona-files
+title: "#persona-form gains a real file-attachment input, wired into the existing draft-propose POST"
+status: planned
+complexity: medium
+methodology: tdd
+depends_on: [pf-04-client-cap-twin]
+
+description: |
+  Implements horizontal-plan.md H3's UI half: ui/index.html's #persona-form
+  gains a real `<input type="file" multiple>` field. On submit, ui/app.js's
+  EXISTING personaForm submit handler (pu-12, POSTs to POST
+  /persona/draft/:tier/:scopeId) reads each selected file's text via
+  File.text(), applies pf-04's client-side cap-twin, and folds the result
+  into the SAME JSON body already being built -- as an addition to whatever
+  sourceSummary the form's other fields imply, never a second POST call and
+  never a new backend route. Rides the existing 4MB readJsonBody() cap
+  (lib/mnemosyne/server.ts) as the hard backstop.
+
+acceptance_criteria:
+  - "Given #persona-form, when rendered, then it includes a real <input type=\"file\" multiple> control, keyboard-reachable, not gated behind any other control"
+  - "Given one or more files selected and the form submitted, when the resulting POST /persona/draft/:tier/:scopeId body is inspected, then it carries a sourceSummary built from the attached files' real content, capped via pf-04's ported functions -- verified by a real subprocess-spawned server test reading the actual request body, not a client-side-only assertion"
+  - "Given the SAME submit handler that already POSTs the form's other fields (tier/scopeId/displayName/scope/sections/repo), when files are attached, then exactly ONE POST call is made -- never a second request for the file content"
+  - "Given no files are attached (the pre-existing behavior), when the form is submitted, then the request body is byte-for-byte identical to what pu-12's own shipped behavior already produces -- this story is additive, zero regression to the no-attachment case"
+  - "Given the file input, when exercised via keyboard only, then it is fully reachable and operable without a mouse"
+
+steps:
+  - id: research
+    description: Read ui/index.html's #persona-form markup and ui/app.js's personaForm submit handler (pu-12) in full, plus pf-04's ported cap-twin functions, immediately before wiring them together.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests -- file input present and keyboard-reachable; attached-file content reaches the real POST body correctly capped; the no-attachment case is byte-for-byte unchanged; exactly one POST call fires.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Add the file input to ui/index.html. Extend the existing submit handler (not a new one) to read attached files via File.text(), apply pf-04's cap-twin, and fold the result into the existing JSON body construction.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm exactly one POST call fires regardless of attachment count. Confirm the no-attachment case's request body is byte-for-byte unchanged from pu-12's shipped behavior (a real diff, not an assumption).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: ui/index.html
+      purpose: "#persona-form's existing markup -- the exact fields this story's new file input sits alongside."
+    - path: ui/app.js
+      purpose: "personaForm's existing submit handler (pu-12) -- the exact single POST call this story extends, never duplicates."
+
+files_to_modify:
+  - file: ui/index.html
+    change: "New file-attachment input in #persona-form."
+  - file: ui/app.js
+    change: "Submit handler extended to read attached files and fold their capped content into the existing JSON body."
+  - file: test/persona-write-form.mjs
+    change: "New assertions for the file-attachment behavior, extending the existing test convention."
+
+design_decisions:
+  - decision: "Attached file content folds into the existing single POST body, never a second request or a new upload route."
+    rationale: "design-discussion.md §1 Direction 2 and horizontal-plan.md's own 'no new backend routes' cross-cutting concern -- rides the existing 4MB JSON body cap rather than building new upload infrastructure."
+
+cross_cutting: []
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-ux/stories/pu-12-draft-review-approve-ui.yaml
+    relevant_excerpt: "The exact existing #persona-form submit handler this story extends, never replaces."

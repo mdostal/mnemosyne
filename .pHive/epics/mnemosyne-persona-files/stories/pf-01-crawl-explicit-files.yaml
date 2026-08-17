@@ -1,0 +1,78 @@
+id: pf-01-crawl-explicit-files
+epic: mnemosyne-persona-files
+title: "crawlExplicitFiles(): sibling to crawlBoundedContext() for operator/agent-chosen files"
+status: planned
+complexity: medium
+methodology: tdd
+depends_on: []
+
+description: |
+  Implements horizontal-plan.md H1: a new export in
+  skills/mnemosyne-persona-interview/crawl-context.mjs,
+  crawlExplicitFiles({ filePaths, repoRoot, parentRef, home }), letting an
+  operator or agent supply an explicit list of file paths as source material
+  for a proposed persona draft -- instead of pu-07's fixed 5-source
+  auto-crawl list. Reuses capExcerpt()/assembleSourceSummary() completely
+  unchanged so the same per-source and whole-summary caps apply uniformly
+  regardless of which crawl function produced the sourceSummary.
+
+  A genuinely separate, sibling function to crawlBoundedContext() -- not a
+  parameterized rewrite of it. crawlBoundedContext() itself gets zero
+  changes (matches this repo's own established convention: persona-writer.mjs
+  vs. persona-draft-writer.mjs, two structurally separate siblings, not one
+  parameterized module).
+
+acceptance_criteria:
+  - "Given a list of 1-10 real file paths, when crawlExplicitFiles() is called, then it returns {sourceSummary, sourcesRead} with the same shape crawlBoundedContext() already returns"
+  - "Given a file whose content exceeds MAX_LINES_PER_SOURCE/MAX_CHARS_PER_SOURCE, when crawled, then capExcerpt() (imported, not reimplemented) truncates it identically to how it truncates crawlBoundedContext()'s own sources -- verified by a direct call-site check, not just 'looks truncated'"
+  - "Given more than the configured max file count (default 10), when crawlExplicitFiles() is called, then it throws a clear, named error rather than silently processing only the first N or silently processing all of them"
+  - "Given a parentRef, when crawlExplicitFiles() is called, then it uses the SAME real `mnemosyne persona show` CLI-subprocess mechanism crawlBoundedContext() already uses for parent summaries -- never a second parent-read implementation"
+  - "Given crawlBoundedContext()'s own existing test file, when this story ships, then it still passes unmodified -- crawlExplicitFiles() is additive, zero changes to the existing function's behavior"
+
+steps:
+  - id: research
+    description: Read crawl-context.mjs in full (capExcerpt/assembleSourceSummary/crawlBoundedContext, the parent-ref CLI-subprocess mechanism) and its paired test file, immediately before writing the sibling function.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for crawlExplicitFiles() -- multi-file summary assembly, per-file truncation parity with crawlBoundedContext()'s own caps, the max-file-count error case, parent-ref reuse -- extending the existing test file's convention.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Implement crawlExplicitFiles(), importing capExcerpt()/assembleSourceSummary() and the parent-ref CLI-subprocess helper directly from the existing module scope. Zero changes to crawlBoundedContext() itself.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm zero diff to crawlBoundedContext()'s own function body. Confirm capExcerpt()/assembleSourceSummary() are imported/reused, not reimplemented. Confirm the max-file-count cap is a real, enforced throw, not a silent truncation.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: skills/mnemosyne-persona-interview/crawl-context.mjs
+      purpose: "capExcerpt()/assembleSourceSummary() (the exact truncation/assembly logic this story reuses) and crawlBoundedContext()'s own parent-ref CLI-subprocess mechanism (the pattern this story's parentRef handling mirrors)."
+
+files_to_modify:
+  - file: skills/mnemosyne-persona-interview/crawl-context.mjs
+    change: "New export: crawlExplicitFiles(). Zero changes to existing exports."
+  - file: skills/mnemosyne-persona-interview/crawl-context.d.mts
+    change: "New type declarations for crawlExplicitFiles()."
+
+design_decisions:
+  - decision: "Default max file count of 10, configurable only via an explicit override, never silently unbounded."
+    rationale: "design-discussion.md OQ2: matches order-of-magnitude with pu-07's own 5-source fixed list while staying a real, enforced ceiling -- an explicit list is operator-directed, warranting some headroom, but not unlimited."
+
+cross_cutting: []
+
+references:
+  - path: .pHive/epics/mnemosyne-persona-files/docs/design-discussion.md
+    relevant_excerpt: |
+      §1 Direction 1: "New export in crawl-context.mjs:
+      crawlExplicitFiles({ filePaths, repoRoot, parentRef, home }). Same
+      return shape as crawlBoundedContext() ... the only difference is the
+      source list is caller-supplied file paths instead of the fixed
+      5-source list."

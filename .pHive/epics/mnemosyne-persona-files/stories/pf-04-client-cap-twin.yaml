@@ -1,0 +1,69 @@
+id: pf-04-client-cap-twin
+epic: mnemosyne-persona-files
+title: "Client-side cap-twin: port capExcerpt()/assembleSourceSummary() to ui/app.js, with a parity test"
+status: planned
+complexity: medium
+methodology: tdd
+depends_on: []
+
+description: |
+  Implements horizontal-plan.md H3's cap-parity requirement: a client-side
+  JS port of crawl-context.mjs's capExcerpt()/assembleSourceSummary()
+  (MAX_LINES_PER_SOURCE=40, MAX_CHARS_PER_SOURCE=1200,
+  MAX_SOURCE_SUMMARY_CHARS=4000 -- the SAME constants, not re-derived), so a
+  browser-side file attachment (pf-05) enforces the identical truncation
+  behavior before content ever leaves the browser, rather than trusting a
+  server-side re-check alone (the existing 4MB readJsonBody() cap on
+  lib/mnemosyne/server.ts remains the hard backstop regardless).
+
+  This story delivers ONLY the ported functions + the parity test -- it does
+  not touch the file input or the submit handler (that's pf-05). Matches
+  ml-06's own "verify the raw mechanism before wiring it into a caller"
+  sequencing discipline (a real, already-shipped precedent in this same
+  codebase).
+
+acceptance_criteria:
+  - "Given the same fixture text input, when capped by ui/app.js's ported functions and by crawl-context.mjs's own capExcerpt()/assembleSourceSummary(), then both produce byte-for-byte identical output -- a direct parity test running both implementations against the same fixtures, not a visual/approximate comparison"
+  - "Given the ported constants (MAX_LINES_PER_SOURCE/MAX_CHARS_PER_SOURCE/MAX_SOURCE_SUMMARY_CHARS), when compared to crawl-context.mjs's own values, then they are identical -- verified by the parity test importing both modules' constants directly, never hand-copied numbers that could drift"
+  - "Given this story's own new functions, when grepped, then they are never called from any existing UI code path yet (pf-05's job) -- this story is additive-only, zero behavior change to the shipped UI"
+
+steps:
+  - id: research
+    description: Read crawl-context.mjs's capExcerpt()/assembleSourceSummary() implementations and their existing test file's fixture cases in full, immediately before porting.
+    agent: researcher
+  - id: test-spec
+    description: Write the parity test -- same fixtures run through both the Node original and the new client-side port, asserting byte-for-byte equality.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Port capExcerpt()/assembleSourceSummary() into ui/app.js as new, unexported-from-module-but-locally-scoped functions (this file has no export mechanism, matching its existing plain-script convention). Import/reuse the exact numeric constants rather than hand-copying them where the test setup allows a shared source.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the parity test genuinely exercises both implementations against identical input, not two separately-asserted expectations that could both be wrong the same way.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: skills/mnemosyne-persona-interview/crawl-context.mjs
+      purpose: "capExcerpt()/assembleSourceSummary() -- the reference implementation this story ports and must match byte-for-byte."
+    - path: test/personas-panel-shell.mjs
+      purpose: "This repo's own existing convention for testing ui/app.js's plain-script (non-ESM) functions from a Node test file: extract the function body's source text via regex from the served/on-disk content, then exercise it directly (e.g. via `new Function(...)` or an equivalent real-execution harness) -- reuse this exact pattern for the parity test rather than inventing a new one, since ui/app.js has no export mechanism to import from normally."
+
+files_to_modify:
+  - file: ui/app.js
+    change: "New, additive-only functions: a client-side twin of capExcerpt()/assembleSourceSummary()."
+  - file: test/persona-files-cap-twin-parity.mjs
+    change: "New file. Parity test between the Node original and the client-side port."
+
+design_decisions:
+  - decision: "Cap parity verified by a direct test, not by code review alone."
+    rationale: "design-discussion.md Risks: 'a second, divergent truncation implementation could disagree with the server/CLI-side Node implementation' -- a real risk this story's own acceptance criteria close with a running proof, not an assertion."
+
+cross_cutting: []
