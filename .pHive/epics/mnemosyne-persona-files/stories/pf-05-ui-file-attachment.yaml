@@ -1,10 +1,33 @@
 id: pf-05-ui-file-attachment
 epic: mnemosyne-persona-files
 title: "#persona-form gains a real file-attachment input, wired into the existing draft-propose POST"
-status: planned
+status: complete
 complexity: medium
 methodology: tdd
 depends_on: [pf-04-client-cap-twin]
+
+note_on_completion: >
+  Merged 2026-08-17 (commit e6a8b3c). Independently verified: read the full
+  ui/app.js diff -- confirmed the file input is folded into the SAME
+  candidate object via the SAME single fetch() call (grep-confirmed exactly
+  one fetch( in the submit handler), confirmed zero files attached leaves
+  candidate untouched (no sourceSummary key). Reran test/persona-write-
+  form.mjs myself in both the builder's worktree and the merged integration
+  worktree -- all passing both times, including the genuinely dynamic
+  byte-for-byte no-attachment parity proof (real handler execution, diffed
+  against the same extraction applied to the pre-pf-05 baseline commit) and
+  the with-attachment proof (real POST body's sourceSummary matches an
+  independently-computed expected value, verified again via a real GET
+  read-back). Also independently reviewed and confirmed a genuine latent bug
+  fix the builder found in persona-files-cap-twin-parity.mjs's own
+  stripJsComments (comment-strip ordering bug: a "//" comment containing a
+  literal "/*" substring was making the block-comment regex swallow real
+  code) -- a real, well-reasoned fix, not scope creep. tsc --noEmit clean
+  both times. Additionally merged origin/main into this epic branch
+  (separate commit) to pick up an unrelated fix (d203115, stale test
+  assertions from the v0.10.0 release merge) this branch had been missing
+  since before that fix landed -- full suite (691/691) confirmed clean
+  after. All acceptance criteria met.
 
 description: |
   Implements horizontal-plan.md H3's UI half: ui/index.html's #persona-form
