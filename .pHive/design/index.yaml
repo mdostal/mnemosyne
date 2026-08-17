@@ -51,3 +51,24 @@ topics:
         post-approval provenance note, code-architect/repo data
         unreachable in the shipped UI).
       date: 2026-08-16
+
+  - topic: mnemosyne-icon-set
+    output_dir: .pHive/design/mnemosyne-icon-set/
+    process: 10-option-generation -> 7-lens-review-panel (queued) -> 3-option-synthesis (queued) -> operator final pick
+    artifacts:
+      initial_options:
+        - .pHive/design/mnemosyne-icon-set/options/icon-01-memory-spiral-brain.jpg
+        - .pHive/design/mnemosyne-icon-set/options/icon-02-laurel-profile.jpg
+        - .pHive/design/mnemosyne-icon-set/options/icon-03-neural-node-network.jpg
+        - .pHive/design/mnemosyne-icon-set/options/icon-04-scroll-quill.jpg
+        - .pHive/design/mnemosyne-icon-set/options/icon-05-infinity-recall-loop.jpg
+        - .pHive/design/mnemosyne-icon-set/options/icon-06-hourglass-memory.jpg
+        - .pHive/design/mnemosyne-icon-set/options/icon-07-owl-minimal.jpg
+        - .pHive/design/mnemosyne-icon-set/options/icon-08-ancient-urn-vessel.jpg
+        - .pHive/design/mnemosyne-icon-set/options/icon-09-monogram-m-thread.jpg
+        - .pHive/design/mnemosyne-icon-set/options/icon-10-concentric-memory-rings.jpg
+    generator: "Gemini 3 Pro Image (\"Nano Banana Pro\", gemini-3-pro-image), via portunus resolve --exec -- key never read into this session's context"
+    status: options-generated-review-not-yet-run
+    consumers:
+      - mnemosyne-icon-set-review (epic, to be filed when the review pass is dispatched)
+    date: 2026-08-17
