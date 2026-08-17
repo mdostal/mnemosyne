@@ -122,30 +122,37 @@ const uiAssembleSourceSummary = new Function(
 ok(typeof uiAssembleSourceSummary === "function", "built a real, callable ui/app.js-side assembleSourceSummary()");
 
 // ---------------------------------------------------------------------------
-// Step 3: acceptance criterion #3 -- grep-confirm the ported functions are
-// never called from any existing UI code path yet (additive-only, zero
-// behavior change to the shipped UI; pf-05's explicit later job to wire
-// them in).
+// Step 3: acceptance criterion #3 -- pf-05-ui-file-attachment has now wired
+// these functions into personaForm's submit handler (test/persona-write-
+// form.mjs is the dedicated, dynamic proof of that wiring's actual runtime
+// behavior) -- so the invariant here changes from "never called" to
+// "called from exactly one real call site (the submit handler), beyond
+// each function's own definition."
 // ---------------------------------------------------------------------------
 // Strip comments (JSDoc/// prose legitimately mentions "capExcerpt()" /
 // "assembleSourceSummary()" by name several times -- that's documentation,
-// not a call site) before counting real code occurrences.
+// not a call site) before counting real code occurrences. Line comments
+// MUST be stripped before block comments: this file's own ui/app.js has at
+// least one `//` line comment whose PROSE contains a literal "/*"
+// substring (e.g. "for /persona/*,"), which would otherwise make the
+// block-comment regex (run first) swallow everything up to the next real
+// "*/" -- silently eating real code, not just comments, in between.
 function stripJsComments(src) {
   return src
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^[ \t]*\/\/.*$/gm, "");
+    .replace(/^[ \t]*\/\/.*$/gm, "")
+    .replace(/\/\*[\s\S]*?\*\//g, "");
 }
 const appJsCodeOnly = stripJsComments(appJsSrc);
 
 const capExcerptCallCount = (appJsCodeOnly.match(/\bcapExcerpt\(/g) || []).length;
 const capExcerptDefCount = (appJsCodeOnly.match(/function capExcerpt\(/g) || []).length;
-ok(capExcerptCallCount === capExcerptDefCount,
-  `capExcerpt() appears only in its own definition (${capExcerptDefCount} def, ${capExcerptCallCount} total code occurrences of "capExcerpt(") -- never called elsewhere in ui/app.js yet`);
+ok(capExcerptCallCount === capExcerptDefCount + 1,
+  `pf-05: capExcerpt() has exactly one real call site beyond its own definition (${capExcerptDefCount} def, ${capExcerptCallCount} total code occurrences of "capExcerpt(") -- the submit handler's file-attachment wiring, never a second one`);
 
 const assembleCallCount = (appJsCodeOnly.match(/\bassembleSourceSummary\(/g) || []).length;
 const assembleDefCount = (appJsCodeOnly.match(/function assembleSourceSummary\(/g) || []).length;
-ok(assembleCallCount === assembleDefCount,
-  `assembleSourceSummary() appears only in its own definition (${assembleDefCount} def, ${assembleCallCount} total code occurrences of "assembleSourceSummary(") -- never called elsewhere in ui/app.js yet`);
+ok(assembleCallCount === assembleDefCount + 1,
+  `pf-05: assembleSourceSummary() has exactly one real call site beyond its own definition (${assembleDefCount} def, ${assembleCallCount} total code occurrences of "assembleSourceSummary(") -- the submit handler's file-attachment wiring, never a second one`);
 
 // ---------------------------------------------------------------------------
 // Step 4: the actual parity fixtures -- same input, both real
