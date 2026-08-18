@@ -64,3 +64,5 @@ config/minerva.local.yaml
 !.pHive/epics/mnemosyne-icon-selection/**
 !.pHive/epics/mnemosyne-persona-files/
 !.pHive/epics/mnemosyne-persona-files/**
+!.pHive/epics/mnemosyne-ui-redesign/
+!.pHive/epics/mnemosyne-ui-redesign/**
