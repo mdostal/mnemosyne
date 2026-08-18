@@ -2442,6 +2442,21 @@ function syncJumpChips() {
     const isFail = !!statusEl && statusEl.classList.contains("fail");
     chip.classList.toggle("chip-pass", isPass);
     chip.classList.toggle("chip-fail", isFail);
+    // ui-05-accessibility-hardening: mirror the SAME isPass/isFail values
+    // just computed onto the chip's visually-hidden text alternative
+    // (index.html's #chip-status-<panelId> span) -- a real screen-reader
+    // announcement of this chip's real status, never a static/generic
+    // label. Read via document.getElementById() (not chip.querySelector())
+    // so this keeps working unmodified against test/jump-chip-nav-status-
+    // wiring.mjs's fake-DOM harness, whose FakeChip stub only implements
+    // getAttribute(), not querySelector() -- getElementById() on a fake
+    // document that doesn't know this id just returns null, which the
+    // guard below already handles safely. Concatenated after the chip's
+    // own visible panel-name text node, so the chip's full accessible name
+    // reads e.g. "Liveliness: pass" (never fabricated for Search/
+    // Operations, which have no statusId and so always get "" here).
+    const statusTextEl = document.getElementById(`chip-status-${panelId}`);
+    if (statusTextEl) statusTextEl.textContent = isPass ? ": pass" : isFail ? ": fail" : "";
   });
 }
 // ==================== end ui-03-jump-chip-nav-and-status-wiring (part 1) ====================
