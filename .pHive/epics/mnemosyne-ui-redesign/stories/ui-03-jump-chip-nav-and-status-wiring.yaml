@@ -1,10 +1,144 @@
 id: ui-03-jump-chip-nav-and-status-wiring
 epic: mnemosyne-ui-redesign
 title: "Sticky jump-chip navigation bar with live per-panel status rings"
-status: planned
+status: complete
 complexity: medium
 methodology: classic
 depends_on: [ui-01-accent-token-reconciliation]
+
+note_on_completion: >
+  Worktree note: the main repo checkout already had feat/mnemosyne-ui-redesign
+  (tip b377f48, ui-01 + ui-02 merged) checked out, so this dispatch's own
+  worktree branched its own local branch, feat/ui-03-jump-chip-nav-and-status-
+  wiring, directly off that same b377f48 tip, and pushed that instead --
+  same base commit either way, just a different branch name to avoid the
+  two-worktrees-one-branch conflict.
+
+  Independent verification (orchestrating session, before merge): read the
+  real ui/app.js diff directly -- confirmed CHIP_STATUS_SOURCE genuinely
+  excludes search/operations (no real refresh-time .panel-status exists for
+  either) and genuinely includes graph, with a well-reasoned, explicitly
+  documented departure from this ticket's own text (which cited a stale
+  research-brief.md claim that Graph has no status line -- true of the
+  round-2 mockup, false of this repo's real app.js, where #graph-status is
+  real and unconditionally set by loadGraph() every refreshAll()). Ran the
+  new test/jump-chip-nav-status-wiring.mjs directly: all checks pass,
+  including the no-JS-dependency proof (script stripped, all 8 panels still
+  render) and the never-fabricate proof (search/operations status exists in
+  the DOM but never reaches their chips). Ran the full suite myself (after
+  npm install in this worktree): 54/54 vitest files, 727/727 tests, .mjs
+  suite clean except the 3 already-documented pre-existing POST /remember
+  failures. Started a real server (port 8579, avoiding a real, unrelated
+  Docker container squatting on the default 8477) and loaded /ui in a real
+  Playwright browser: all 8 chips present, liveliness/settings/lanes/graph
+  correctly chip-pass, search/operations correctly carry no status class,
+  personas/memory-levels correctly chip-fail (real, honest reflection of
+  this sandbox's expected CORS failures against the not-running-here
+  persona service on :3141 -- same known, pre-existing, unrelated pattern
+  already documented in ui-02's own completion note), and the scroll-spy's
+  "current" class genuinely applied to the in-view panel's chip.
+
+  Added <nav id="jump-chips"> to ui/index.html directly under <header>, with
+  exactly 8 real <a href="#id"> anchors (liveliness/settings/lanes/search/
+  graph/operations/personas/memory-levels, real document order). Added
+  CHIP_STATUS_SOURCE + syncJumpChips() to ui/app.js, called once from
+  refreshAll()'s completion path (after its Promise.all(...) of every
+  load*() resolves) -- verified in a real running browser (Playwright) that
+  it fires exactly then, not before: chips stayed classless while any
+  load*() was still in flight, then all six ring-eligible chips populated
+  correctly the instant the full Promise.all settled.
+
+  never-fabricate rule, verified against the REAL current app.js/index.html
+  (not assumed uniform, not copied from the static mockup) -- rings ended up
+  on 6 of 8 chips, not the 6 the ticket's own citation predicted:
+    - RING: Liveliness, Settings, Lanes, Personas, Memory Levels -- each has
+      a real .panel-status directly under its <h2> that its own load*()
+      unconditionally sets to pass/fail every refreshAll() call.
+    - RING: Graph -- also included, and this is the one deliberate deviation
+      from this ticket's own text. The ticket (quoting a claimed research-
+      brief.md line) says Graph "carries no .panel-status line," but
+      research-brief.md never actually says that anywhere (grepped the full
+      481-line doc -- zero hits on graph-status or any Graph/status
+      sentence); that claim is true only of the round-2 design MOCKUP's
+      Graph section (verified by inspection: no .panel-status anywhere in
+      it) and got mis-cited onto the real repo. This repo's real
+      ui/index.html has had a genuine #graph-status <p class="panel-status">
+      immediately under <h2>Graph</h2> since s-04 (graph-view), and
+      loadGraph() sets it to pass/fail unconditionally on every refreshAll()
+      -- structurally identical to Liveliness/Settings/Lanes. Suppressing
+      that real, already-rendered status to match a stale/incorrect doc
+      citation would itself have been a fabrication in the other direction,
+      so Graph's chip is wired honestly from its own real element, and the
+      divergence is documented in both ui/app.js's CHIP_STATUS_SOURCE
+      comment and the committed test.
+    - NO RING: Search -- #search-status exists but is only ever set inside
+      the search-form's own submit handler (a user action); refreshAll()
+      never calls it, so at refresh-completion time it's genuinely empty
+      with no pass/fail class. NO RING: Operations -- has no top-level
+      .panel-status at all; #reindex-status/#refresh-cache-status are two
+      separate sub-form statuses, each set only by its own submit/click
+      handler, never by refreshAll(). Both proven in the committed test by
+      populating their real elements with a fail/pass class and confirming
+      their chips still get neither class, because neither id is in
+      CHIP_STATUS_SOURCE.
+
+  IntersectionObserver scroll-spy: `if (!("IntersectionObserver" in
+  window)) return;` is the literal first statement of the guarded IIFE
+  (asserted verbatim in the test), and it never calls syncJumpChips() --
+  core status wiring has zero dependency on scroll-spy support.
+
+  No-JS-dependency, tested literally two ways: (1) the committed test
+  strips the served <script src="/ui/app.js"> tag out of the fetched HTML
+  and confirms all 8 <section class="panel..."> and all 8 plain #anchor
+  chips are still present with no onclick handlers and no display:none/
+  visibility:hidden rule on .panel anywhere in ui/style.css; (2) a real
+  Playwright browser, live, with the app.js request genuinely routed to
+  route.abort() (confirmed via `typeof window.refreshAll === "undefined"`
+  that the script never ran at all) -- all 8 sections and all 8 chips
+  rendered, and clicking the Memory Levels chip performed a real
+  #anchor scroll-jump (scrollY 0 -> 2370, landing on "Memory Levels
+  (0-4)") with zero JS executing anywhere on the page.
+
+  Styles use only ui-01's existing --accent/--pass/--fail/--border/
+  --panel-bg/--muted/--text tokens; the two ring box-shadow colors are the
+  same literal rgb() decomposition of --pass/--fail already used by
+  .status-pill.live/.status-pill.degraded (style.css lines 121, 133) with
+  alpha added, not a new uncoordinated color (box-shadow can't take a bare
+  CSS var plus a separate alpha channel).
+
+  Tests: new test/jump-chip-nav-status-wiring.mjs (55 checks, all passing)
+  -- static-assertion structure checks against a spawned src/server.mjs
+  (matching test/personas-panel-shell.mjs's established no-jsdom
+  convention), plus real-execution behavioral checks that extract the real
+  setStatus()/syncJumpChips()/CHIP_STATUS_SOURCE source out of the on-disk
+  ui/app.js via regex and run them with `new Function(...)` against a small
+  fake DOM (test/persona-write-form.mjs's established technique) --
+  proving initial-state correctness, live status-change propagation (pass
+  -> fail and fail -> pass on the same chip), and the never-fabricate rule
+  under direct pressure (populating search-status/reindex-status and
+  confirming their chips still get neither class). Also re-ran
+  test/personas-panel-shell.mjs, test/persona-write-form.mjs, and
+  test/persona-layer-stack.mjs -- all still pass unmodified.
+
+  npm install run (worktree's node_modules was absent). Full npm test:
+  identical 3 pre-existing POST /remember failures and nothing else,
+  verified genuinely pre-existing via git stash + reproduce against this
+  story's own unmodified b377f48 base commit (same 3 failures, byte-for-
+  byte identical assertions). npm test's own compound `&&` chain stops at
+  http-api.mjs on those 3 failures before reaching
+  single-layer-config.mjs/git-hooks.mjs/install-git-hooks.mjs/
+  lifecycle-compliance-audit.mjs/persona-cli.mjs/vitest -- ran each of
+  those six remaining pieces individually to confirm they still exit 0
+  (vitest: 727/727 passing across 54 files). tsc --noEmit: clean, no
+  output, exit 0. Also ran test/ui-shell.mjs manually (not part of npm
+  test's script chain) and it failed with 22 checks -- confirmed this is an
+  environment artifact (that test expects an already-running, fully-
+  configured server on MNEMOSYNE_URL/8477 with a real swarm-memory binary
+  on PATH; a bare `node src/server.mjs` without that setup 500s on
+  /config and 404s on /ui independent of anything in this diff), not a
+  regression -- left untouched, out of this story's contract, same
+  documented judgment call ui-01's own completion note made about this
+  exact test file.
 
 description: |
   Implements horizontal-plan.md's H2 (nav portion) + H3. This is the core
