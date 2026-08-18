@@ -1,0 +1,99 @@
+id: ui-04-personas-draft-tools-collapse
+epic: mnemosyne-ui-redesign
+title: "Collapse Personas' write-tooling tail into a single <details> section"
+status: planned
+complexity: low
+methodology: classic
+depends_on: [ui-03-jump-chip-nav-and-status-wiring]
+
+description: |
+  Implements horizontal-plan.md's H2 (Personas collapse portion) /
+  vertical-plan.md's Slice 4. Personas is confirmed to be ~50% of this
+  codebase's UI surface (research-brief.md §5) after its own dedicated
+  redesign this session. This story addresses the page-weight symptom at
+  the shell level without touching Personas' own already-shipped,
+  already-tested internals: one native <details id="persona-tools">
+  wraps ONLY the write-oriented draft-propose form, the Retrieval Layer
+  Stack sub-section, and the Level 0 pointer -- defaulted open. The
+  read-oriented identity table (the actual list of live/pending personas)
+  stays fully visible, untouched, outside the disclosure -- it is not
+  what makes Personas long, and hiding it would regress the panel's core
+  job.
+
+acceptance_criteria:
+  - "Given Personas' real current markup, when this story ships, then a new <details id=\"persona-tools\"> wraps exactly the draft-propose form + Retrieval Layer Stack sub-section + Level 0 pointer -- and nothing else"
+  - "Given the same markup, when this story ships, then the persona identity table (every live/pending row) remains a direct, always-visible sibling OUTSIDE the new <details> -- never wrapped, never hidden by default"
+  - "Given Personas' existing shipped tests (test/persona-draft-review-approve-ui.mjs, test/persona-write-form.mjs, and others touching this panel's DOM), when run against this story's diff, then they pass unmodified or with only mechanical selector updates that don't change what's being asserted -- a real regression check, not a rewrite"
+  - "Given the <details> defaults to open, when the page loads fresh, then first-paint length is unchanged from before this story (round-2's own finding: a default-open collapse point offers no length reduction until a user acts) -- this is an accepted, documented tradeoff, not a bug"
+
+steps:
+  - id: research
+    description: >
+      Read Personas' real current markup in ui/index.html end to end
+      (confirmed ~249 of 490 lines, research-brief.md §5) to identify the
+      exact real boundary between its write-tooling tail and its
+      read-oriented identity table. Read every existing test file that
+      asserts against Personas' DOM structure to know what must not break.
+    agent: researcher
+  - id: implement
+    description: >
+      Wrap the draft-propose form + Retrieval Layer Stack sub-section +
+      Level 0 pointer in <details id="persona-tools" open>. Add a plain,
+      real <summary> label. Do not touch the identity table, the
+      approve/discard flow, the aria-live region, or any other already-
+      shipped Personas internals.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: >
+      Run Personas' full existing test suite against this diff. Fix any
+      selector that legitimately needs updating for the new wrapper
+      element (e.g. a test that previously found the draft form as a
+      direct child of #personas) -- but do not change what any test
+      actually asserts.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: >
+      Confirm the identity table was never touched. Confirm no Personas
+      test's real assertion changed, only (if needed) its selector path.
+      This is the highest-risk story in the epic for regressing already-
+      shipped work -- treat it accordingly.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: ui/index.html
+      purpose: "Personas' real markup, lines ~196-455 including the nested Retrieval Layer Stack sub-section -- the only real target."
+    - path: test/persona-draft-review-approve-ui.mjs
+      purpose: "Existing shipped test asserting against Personas' draft-review DOM -- the highest-risk regression surface for this story."
+
+files_to_modify:
+  - file: ui/index.html
+    change: "Wrap the draft-propose form + Retrieval Layer Stack + Level 0 pointer in <details id=\"persona-tools\" open>."
+
+design_decisions:
+  - decision: "The identity table stays outside the collapse, always visible."
+    rationale: "Round-2's scale-realism critique confirmed this exact scoping choice in the reference mockup as correct -- the table is what an operator actually needs to see; the write-tooling tail is what's bulky and least frequently needed at a glance."
+  - decision: "Defaults to open, accepting no first-paint length reduction."
+    rationale: "design-discussion.md §8/round-2 consensus: this is a real, disclosed tradeoff (relief valve on demand, not automatic), not an oversight -- matching how the confirmed reference mockup itself shipped it."
+
+cross_cutting: []
+
+risks:
+  - severity: high
+    description: "Personas is already shipped and tested this session (mnemosyne-persona-ux, mnemosyne-persona-files) -- any structural change here risks regressing real, working functionality."
+    mitigation: "Full existing Personas test suite must pass before integrate; scope is deliberately narrow (one wrapper element, zero logic change) to minimize surface area."
+
+references:
+  - path: .pHive/epics/mnemosyne-ui-redesign/docs/vertical-plan.md
+    relevant_excerpt: |
+      "Slice 4 -- Personas draft-tools collapse (H2, narrow). The one
+      collapse point in this epic, scoped tightly to Personas' write-
+      tooling tail."

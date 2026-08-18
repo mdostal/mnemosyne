@@ -1,0 +1,106 @@
+id: ui-03-jump-chip-nav-and-status-wiring
+epic: mnemosyne-ui-redesign
+title: "Sticky jump-chip navigation bar with live per-panel status rings"
+status: planned
+complexity: medium
+methodology: classic
+depends_on: [ui-01-accent-token-reconciliation]
+
+description: |
+  Implements horizontal-plan.md's H2 (nav portion) + H3. This is the core
+  deliverable of the epic -- the real answer to "the ungodly long list."
+  A sticky <nav id="jump-chips"> with one anchor per real panel (8 total:
+  Liveliness, Settings, Lanes, Search, Graph, Operations, Personas, Memory
+  Levels), each carrying a live status ring sourced from that panel's own
+  real status text after refreshAll() completes -- never fabricated.
+  Depends on ui-01 because the chip-ring colors are defined by that
+  story's token work.
+
+acceptance_criteria:
+  - "Given the real standalone UI loaded in a browser, when the page finishes its initial refreshAll(), then #jump-chips contains exactly 8 real anchor links, one per panel, each scrolling to that panel's real section id on click"
+  - "Given a panel that has a real .panel-status line (e.g. Liveliness, Memory Levels), when its status is pass or fail, then its corresponding chip carries a chip-pass or chip-fail class matching that real status -- verified by reading the actual rendered status text, not assumed"
+  - "Given a panel with NO .panel-status line at all (Search, Graph, Operations, per research-brief.md's real current markup), when the chips render, then that panel's chip carries NEITHER chip-pass nor chip-fail -- no fabricated status, matching round-2's own verified rule for the reference mockup"
+  - "Given JavaScript disabled or a script error, when the page loads, then every panel remains fully visible and every chip remains a working plain #anchor link -- no panel visibility may depend on JS (horizontal-plan.md's cross-cutting constraint)"
+  - "Given the IntersectionObserver scroll-spy enhancement, when the browser doesn't support it, then the guard (if (!('IntersectionObserver' in window)) return;) prevents any error and the chip bar still functions for click-to-jump"
+
+steps:
+  - id: research
+    description: >
+      Read ui/app.js's real refreshAll() and setStatus() (the one already-
+      proven shared primitive, ~70 call sites per research-brief.md §1).
+      Read the confirmed reference mockup's nav#jump-chips markup and its
+      status-propagation logic for the real pattern to translate into
+      production code.
+    agent: researcher
+  - id: implement
+    description: >
+      Add the nav#jump-chips markup to ui/index.html (8 real anchors).
+      Add status-propagation logic to ui/app.js's refreshAll() completion
+      path: after each panel's load*() sets its real status via
+      setStatus(), mirror that pass/fail state onto the matching chip.
+      Add the optional, correctly-guarded IntersectionObserver scroll-spy.
+      Add nav/chip styles to ui/style.css using ui-01's new tokens.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: >
+      Real subprocess/browser test proving: all 8 chips exist and link
+      correctly; a panel's real status change (e.g. simulate a fail)
+      propagates to its chip; a panel with no status line never gets a
+      fabricated ring; disabling JS (or stripping the script tag) leaves
+      every panel visible and every chip a working anchor.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: >
+      Confirm no panel visibility is JS-load-bearing (the hard,
+      cross-cutting constraint from horizontal-plan.md). Confirm chip
+      status is never fabricated for panels without real status text.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: ui/app.js
+      purpose: "refreshAll() (~line 2359) is the single orchestration point every panel's load*() runs through -- the real integration point for chip status propagation."
+    - path: .pHive/design/mnemosyne-ui-redesign/round2/candidates/hybrid-rings-original-graph-colors.html
+      purpose: "The confirmed reference mockup -- real markup pattern for nav#jump-chips and the per-chip status-ring CSS, already verified honest (round-2's glanceable-monitoring.md cross-checked every ring against real panel status)."
+
+files_to_modify:
+  - file: ui/index.html
+    change: "New nav#jump-chips markup, one anchor per real panel."
+  - file: ui/app.js
+    change: "Status-propagation logic in refreshAll()'s completion path; optional IntersectionObserver scroll-spy."
+  - file: ui/style.css
+    change: "Nav/chip layout + status-ring styles."
+
+design_decisions:
+  - decision: "Chips are plain <a href=\"#id\"> anchors, never a JS-driven single-active-panel switcher."
+    rationale: "design-discussion.md §8's confirmed direction explicitly rejected the sidebar/tab pattern -- round 2 confirmed it structurally hides 7 of 8 panels at any moment regardless of how well its ARIA/fallback is implemented. Anchors give free bookmarkability and zero JS dependency for core navigation."
+
+cross_cutting:
+  - concern: accessibility
+    action: "Status ring text alternative is explicitly deferred to ui-05, not bundled here -- this story ships the ring visually correct and status-honest; ui-05 closes the screen-reader gap round 2 found."
+
+risks:
+  - severity: medium
+    description: "Status-propagation logic could silently break if a panel's load*() function's real DOM structure doesn't match what the chip-wiring code expects (e.g. a panel-status class name change elsewhere)."
+    mitigation: "Test against each panel's REAL current setStatus() call, not an assumed shape -- read ui/app.js directly rather than working from the mockup's static markup alone."
+
+references:
+  - path: .pHive/epics/mnemosyne-ui-redesign/docs/horizontal-plan.md
+    relevant_excerpt: |
+      "H3... propagate a chip-pass/chip-fail class onto that panel's
+      corresponding #jump-chips anchor -- sourced from the same real
+      status the panel itself just rendered, never fabricated."
+  - path: .pHive/design/mnemosyne-ui-redesign/round2/critiques/glanceable-monitoring.md
+    relevant_excerpt: |
+      "Checked every chip against its panel's real .panel-status text for
+      faithfulness (not fabricated at the nav level)... Search/Graph/
+      Operations have no status text at all in any candidate, and
+      correctly get no ring rather than a fabricated one."

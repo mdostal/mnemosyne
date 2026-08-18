@@ -1,0 +1,102 @@
+id: ui-01-accent-token-reconciliation
+epic: mnemosyne-ui-redesign
+title: "Migrate --accent to amber-gold + fix status-pill/graph-node color-semantics bugs"
+status: planned
+complexity: low
+methodology: classic
+depends_on: []
+
+description: |
+  Implements horizontal-plan.md's H1. The shipped favicon (v0.11.1) is
+  amber-gold (#D8A84E); the live UI's --accent token is still blue
+  (#7aa2f7), confirmed unreconciled in research-brief.md §2 (14 call
+  sites, zero "amber"/"gold" hits anywhere in ui/style.css). This story
+  migrates the token and fixes two real color-semantics bugs round-1/
+  round-2 review confirmed still live in the actual app (not just the
+  mockups): .status-pill's "needs-review" class doubling as "Degraded"
+  for a genuinely failed store, and the graph's selected/focus node states
+  reusing --fail/--pass raw. The graph fix is NOT a rename-only alias --
+  it must be documented as a deliberate choice (see design_decisions),
+  the exact overclaiming defect round 2 caught in the reference mockup's
+  own code comment.
+
+acceptance_criteria:
+  - "Given ui/style.css's :root block, when this story ships, then --accent is #D8A84E and no rule anywhere in the file still references the old #7aa2f7 literal or relies on --accent resolving to blue"
+  - "Given the Memory Levels table's real current markup (ui/index.html + ui/app.js's rendering of it), when a store is genuinely degraded, then it renders with a new .status-pill.degraded class (red, var(--fail)) -- never the same class used for a persona draft awaiting review"
+  - "Given the Graph panel's real SVG node rendering (ui/app.js), when a node is selected or focused, then it uses new --node-selected/--node-focus custom properties -- and ui/style.css's own comment directly above those properties states plainly that they intentionally alias to var(--fail)/var(--pass) per operator preference (round-2 finding: the reference mockup's comment falsely claimed a color change that wasn't real -- this story's comment must not repeat that mistake)"
+  - "Given the full existing test suite, when run against this story's diff, then it passes with no new failures beyond the 3 already-documented pre-existing POST /remember assertions"
+
+steps:
+  - id: research
+    description: >
+      Read ui/style.css's real current :root block and every --accent/
+      --fail/--pass call site (14 for --accent per research-brief.md §2).
+      Read .pHive/design/mnemosyne-ui-redesign/round2/critiques/
+      visual-identity-cohesion.md's findings on the graph-node color
+      defect and the Memory Levels degraded/needs-review conflation.
+    agent: researcher
+  - id: implement
+    description: >
+      Migrate --accent to #D8A84E. Add .status-pill.degraded (red) as a
+      genuinely distinct class from .status-pill.needs-review (amber);
+      update whatever real code path renders the Memory Levels table to
+      use it for an actually-degraded store. Add --node-selected/
+      --node-focus custom properties aliasing to var(--fail)/var(--pass)
+      with an honest code comment; update the graph SVG rendering to use
+      the new tokens instead of the raw --fail/--pass literals.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: >
+      Verify the token migration doesn't break any existing pass/fail
+      visual-state test or snapshot. Add/extend a test asserting the
+      Memory Levels degraded-vs-needs-review class distinction is real
+      (not just present in markup by accident).
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: >
+      Confirm no old #7aa2f7 literal survives anywhere in ui/style.css.
+      Confirm the --node-selected/--node-focus comment is honest (does
+      not claim a color change that isn't real) -- this is the exact
+      defect round 2 flagged in the reference mockup and must not ship
+      in production code.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: ui/style.css
+      purpose: "The entire token system is 8 custom properties on :root (research-brief.md §1) -- this story's only real target file for the token change itself."
+    - path: .pHive/design/mnemosyne-ui-redesign/round2/critiques/visual-identity-cohesion.md
+      purpose: "Documents both color-semantics bugs this story fixes, and the exact overclaiming-comment defect to avoid repeating."
+
+files_to_modify:
+  - file: ui/style.css
+    change: "--accent migration; new .status-pill.degraded, --node-selected, --node-focus."
+  - file: ui/app.js
+    change: "Wire the new degraded pill class and node-color tokens into the real render paths (Memory Levels table, Graph SVG)."
+
+design_decisions:
+  - decision: "--node-selected/--node-focus alias directly to var(--fail)/var(--pass), documented honestly as an operator preference, not disguised as a 'fix.'"
+    rationale: "Operator explicitly requested finalist-2's original red/green graph coloring over finalist-3's dedicated-token treatment (this session, round 2 dispatch). Round 2's own visual-identity-cohesion.md critique caught the reference mockup's inherited comment falsely claiming these were new, non-colliding colors when they're the same values renamed -- production code must state the real, honest reason (operator choice) instead."
+
+cross_cutting: []
+
+risks:
+  - severity: low
+    description: "A missed --accent literal (e.g. a hardcoded hex instead of the custom property) could leave a stray blue element after migration."
+    mitigation: "Grep the full diff for '7aa2f7' after the change, not just the :root block, before integrate."
+
+references:
+  - path: .pHive/epics/mnemosyne-ui-redesign/docs/horizontal-plan.md
+    relevant_excerpt: |
+      "H1 -- Visual token layer... Migrate --accent from the current blue
+      (#7aa2f7) to the shipped favicon's amber-gold (#D8A84E)... graph node
+      custom properties are added but must alias directly to var(--fail)/
+      var(--pass) with an honest code comment."

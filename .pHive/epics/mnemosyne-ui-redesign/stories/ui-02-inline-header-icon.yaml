@@ -1,0 +1,62 @@
+id: ui-02-inline-header-icon
+epic: mnemosyne-ui-redesign
+title: "Embed the real shipped favicon inline in the header"
+status: planned
+complexity: low
+methodology: classic
+depends_on: []
+
+description: |
+  Implements horizontal-plan.md's H2 (icon portion only). The real
+  favicon (ui/favicon.png, the Ancient Urn, shipped v0.11.1) currently
+  only appears as a browser-tab icon via <link rel="icon">. The operator
+  explicitly asked to see the actual icon in the mockups' header, not
+  only as a tab glyph -- this story ships that in production.
+
+acceptance_criteria:
+  - "Given ui/index.html's real <header>, when this story ships, then an <img> referencing the real committed ui/favicon.png sits immediately beside the <h1>Mnemosyne text -- not a re-encoded/duplicated copy, not a placeholder"
+  - "Given the standalone UI server running, when the page loads, then a real HTTP fetch of the <img>'s src resolves 200"
+  - "Given the header's existing layout (h1 + subtitle + refresh button), when the icon is added, then no existing element's position/visibility regresses (verified by loading the real page, not just reading the diff)"
+
+steps:
+  - id: implement
+    description: >
+      Add <img src="/ui/favicon.png" alt="" width="28" height="28"> (or
+      the real equivalent sizing used in the confirmed mockup) beside the
+      <h1> in ui/index.html. No JS change needed -- this is a static
+      markup addition.
+    agent: developer
+  - id: review
+    description: >
+      Start the real standalone server, load /ui in a real browser
+      (Playwright), confirm the icon renders and the header layout is
+      intact.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: ui/index.html
+      purpose: "Header markup, line ~11-14 (h1 + subtitle + refresh button) -- the only real target."
+    - path: ui/favicon.png
+      purpose: "Already-shipped, real transparent-alpha PNG (is-02) -- reused as-is, no new asset generation needed."
+
+files_to_modify:
+  - file: ui/index.html
+    change: "New <img> referencing the existing ui/favicon.png, placed beside the <h1>."
+
+design_decisions: []
+cross_cutting: []
+risks: []
+
+references:
+  - path: .pHive/epics/mnemosyne-ui-redesign/docs/horizontal-plan.md
+    relevant_excerpt: |
+      "H2... the real shipped favicon (ui/favicon.png) embedded inline via
+      <img> next to the <h1>Mnemosyne text, not only as the existing
+      <link rel=\"icon\">."

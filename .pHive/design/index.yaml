@@ -215,5 +215,9 @@ topics:
         its 5 claimed fixes were independently re-verified true against the
         live markup. Recommended as the base direction for H/V planning,
         pending the operator's own confirmation -- not an autonomous pick.
-      status: recommendation-pending-operator-confirmation
+      status: confirmed
+      operator_confirmation: >
+        "cool, go for it, now hive plan and execute and nail it fully" --
+        confirmed 2026-08-18. hybrid-rings-original-graph-colors is the
+        base direction for H/V planning and build-out.
       date: 2026-08-18

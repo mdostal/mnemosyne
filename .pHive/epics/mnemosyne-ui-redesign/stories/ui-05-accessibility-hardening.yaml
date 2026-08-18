@@ -1,0 +1,91 @@
+id: ui-05-accessibility-hardening
+epic: mnemosyne-ui-redesign
+title: "Status-ring text alternative + full label-association audit"
+status: planned
+complexity: medium
+methodology: classic
+depends_on: [ui-02-inline-header-icon, ui-04-personas-draft-tools-collapse]
+
+description: |
+  Implements horizontal-plan.md's H4. Closes the two concrete,
+  round-2-cited accessibility gaps rather than leaving them as known
+  debt: (1) the jump-chip status rings (ui-03) have no text alternative
+  for screen readers -- round 2 confirmed a bare title attribute is not
+  read in normal browse mode by any major screen reader; (2) round 2
+  separately confirmed this session's own "hardening" pass on a rejected
+  mockup candidate introduced 8 NEW broken label/input associations --
+  proof that changes touching form-adjacent markup can regress
+  accessibility even when that isn't the intent. This story runs a real
+  audit across every panel this epic's own stories (ui-01..ui-04) touched
+  or moved, not just the new chip nav.
+
+acceptance_criteria:
+  - "Given a jump chip carrying chip-pass or chip-fail (ui-03), when read by a screen reader, then the panel's real status (pass/fail) is announced as text -- via a visually-hidden span or aria-label, never a bare title attribute alone"
+  - "Given every <label> element inside any panel this epic's stories (ui-01 through ui-04) touched or moved, when audited, then each one is explicitly associated with its control via for=/id (or correctly wraps it) -- zero orphaned labels introduced by this epic's own changes"
+  - "Given the full page, when audited with an automated accessibility check (e.g. axe-core or equivalent) plus a manual screen-reader-adjacent pass, then no new violation is introduced relative to the pre-epic baseline (a documented before/after comparison, not just a single pass/fail claim)"
+  - "Given the Personas <details id=\"persona-tools\"> from ui-04, when audited, then its <summary> is confirmed keyboard-operable and its expanded/collapsed state is confirmed exposed to assistive tech (native <details> behavior, verified not assumed)"
+
+steps:
+  - id: research
+    description: >
+      Read round-2's accessibility.md in full for the exact defects found
+      (title-only status signals, broken label associations) and its
+      methodology for verifying fixes against real markup rather than
+      trusting labels/comments. Read every diff from ui-01 through ui-04.
+    agent: researcher
+  - id: implement
+    description: >
+      Add a visually-hidden text node (or aria-label) to each jump chip
+      stating its real status in words. Audit and fix every <label> in
+      panels touched by ui-01..ui-04 -- add missing for=/id pairs.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: >
+      Run an automated accessibility check against the real running page,
+      before and after this story's diff, and record the comparison.
+      Manually verify (e.g. via a screen-reader-adjacent tool or
+      Playwright's accessibility snapshot) that chip status is announced
+      as real text.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: >
+      Confirm zero new violations relative to the documented pre-epic
+      baseline. Confirm the label audit's fixes match round-2's own
+      standard (real for=/id association, not a cosmetic change).
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: .pHive/design/mnemosyne-ui-redesign/round2/critiques/accessibility.md
+      purpose: "The exact defects this story closes, and the verification standard (re-read real markup, don't trust a fix's own description) it must be held to."
+
+files_to_modify:
+  - file: ui/index.html
+    change: "Visually-hidden status text on jump chips; any label-association fixes found by the audit."
+  - file: ui/style.css
+    change: "A real .sr-only/visually-hidden utility class if one doesn't already exist (research-brief.md confirmed .sr-only already exists as a shared class -- reuse it, don't duplicate)."
+
+design_decisions: []
+cross_cutting: []
+
+risks:
+  - severity: medium
+    description: "An accessibility audit run too early (before ui-01..ui-04 land) would miss defects those stories introduce; run too late, fixes compete with in-flight work."
+    mitigation: "Sequenced explicitly after ui-02 and ui-04 (vertical-plan.md's own stated reasoning) -- auditing once after all structural/visual changes land, not repeatedly against a moving target."
+
+references:
+  - path: .pHive/design/mnemosyne-ui-redesign/round2/critiques/accessibility.md
+    relevant_excerpt: |
+      "title on a plain, non-interactive <span> is a well-documented
+      unreliable accessibility pattern: it is not read as part of normal
+      document/browse-mode reading by any major screen reader... A
+      visually-hidden text node or aria-label on the dot would have
+      closed this completely."
