@@ -166,6 +166,34 @@ note_on_completion: >
   origin) -- a dedicated branch off the real 5362196 tip, matching
   ui-03/ui-04's own established worktree-to-branch pattern.
 
+  Independent verification (orchestrating session, before merge): read the
+  real ui/app.js and ui/index.html diffs directly -- confirmed .sr-only is
+  reused verbatim (no new/duplicate utility class), the sr-only span text
+  is set from the exact same isPass/isFail values that drive chip-pass/
+  chip-fail (never a separate, independently-computed value that could
+  drift), and Search/Operations correctly never get populated. Confirmed
+  the label audit used the DOM's own native label.control resolution API
+  (not string matching) and covered exactly the 3 in-scope regions (header,
+  #jump-chips, #persona-tools) -- zero fixes needed, consistent with round
+  2's own finding that the 8 broken labels were specific to a REJECTED
+  mockup's hardening pass, not this repo's real app.
+
+  Ran the full suite myself (after npm install): tsc clean; 54/54 vitest
+  files, 727/727 tests; .mjs suite clean except the 3 pre-existing POST
+  /remember failures; explicitly re-ran all 7 Personas tests plus
+  jump-chip-nav-status-wiring.mjs -- all pass, confirming ui-05 didn't
+  regress ui-03/ui-04's work. Started a real server and loaded /ui in a
+  real Playwright browser: an initial check came back with all sr-only
+  spans empty, investigated rather than assumed broken -- confirmed via a
+  longer wait that this was a real async-timing artifact (refreshAll()
+  hadn't completed yet), not a defect; after waiting for the real refresh,
+  all 6 status-bearing chips carried accurate ": pass"/": fail" text
+  matching their real panel-status elements exactly (liveliness/settings/
+  lanes/graph = pass, personas/memory-levels = fail, both genuinely
+  reflecting this sandbox's real GET /persona and /memory-levels fetch
+  failures against the not-running-here :3141 service), and Search/
+  Operations correctly carried no text at all.
+
 description: |
   Implements horizontal-plan.md's H4. Closes the two concrete,
   round-2-cited accessibility gaps rather than leaving them as known
