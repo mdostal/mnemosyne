@@ -1,0 +1,106 @@
+id: aha-04-ui-connect-banner
+epic: mnemosyne-agent-harness-install
+title: "Top-and-forefront, collapsible 'connect an agent/harness' UI banner"
+status: planned
+complexity: medium
+methodology: classic
+depends_on: [aha-03-install-script-and-readme]
+
+description: |
+  Implements design-discussion.md §1.4. A new, real banner section in
+  ui/index.html, placed between </header> and <nav id="jump-chips"> (the
+  real first available slot below the title bar, above even navigation --
+  research-brief.md §3 confirms this is genuinely new territory, no
+  existing banner/callout region to repurpose). Shows the real curl
+  install command (aha-03) and the real `mnemosyne agent init` command in
+  a copy-pasteable code block, plus one line naming what agent init does.
+  Collapsible, but the collapse control always stays reachable -- a
+  persistent localStorage-backed state, never a one-time dismiss that
+  deletes the affordance.
+
+acceptance_criteria:
+  - "Given a first-time page load (no localStorage state), when the page renders, then the banner is expanded and visible, positioned between the header and the jump-chip nav -- the literal first thing below the title bar"
+  - "Given the banner's real content, then it shows the ACTUAL curl command from aha-03's docs/install.sh (not a placeholder/example URL) and the actual `mnemosyne agent init` command, both in a real copy-pasteable <code>/<pre> block"
+  - "Given the operator clicks the banner's collapse control, when the page is reloaded afterward, then the banner starts collapsed (a slim, single-line reopenable strip) -- state persisted via localStorage, verified by actually reloading the page in a real browser, not just checking the JS logic in isolation"
+  - "Given the banner is collapsed, then a reopen control is still genuinely visible and clickable -- clicking it re-expands the banner and updates localStorage accordingly. The affordance is NEVER fully removed from the page, only ever collapsed to a slim strip."
+  - "Given the banner (expanded or collapsed), then it never depends on JavaScript for its BASIC content to be visible -- if the collapse/expand script fails to load or errors, the banner defaults to expanded (fail open, matching horizontal-plan's established cross-cutting rule from the ui-redesign epic: nothing in this shell may become invisible because of a JS failure)"
+  - "Given the banner's visual styling, then it reuses ui/style.css's existing --accent/--bg/--panel-bg/--border/--text tokens (post ui-01's amber-gold reconciliation) -- no new, uncoordinated color palette introduced"
+
+steps:
+  - id: research
+    description: >
+      Read ui/index.html's real current structure between </header> and
+      <nav id="jump-chips"> to confirm the exact insertion point. Read
+      ui/app.js to confirm zero existing localStorage usage (research-brief.md
+      §3) before adding the first one. Read docs/install.sh (aha-03) for
+      the exact, real command text to embed.
+    agent: researcher
+  - id: implement
+    description: >
+      Add the banner markup to ui/index.html (real commands, real copy
+      button if feasible, real collapse control). Add
+      localStorage-backed collapse/expand logic to ui/app.js, fail-open
+      by default (defaults to expanded if the script errors or
+      localStorage is unavailable -- e.g. private browsing). Add banner
+      styles to ui/style.css using existing tokens only.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: >
+      Real test proving: first-load expanded state; collapse persists
+      across a real page reload (via a real browser, not just unit logic);
+      reopen control stays reachable and functional when collapsed; the
+      banner's core content renders even with the collapse script
+      stripped/disabled (fail-open proof, matching this epic's own
+      established no-JS-dependency discipline from the ui-redesign epic).
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: >
+      Confirm placement is genuinely the first thing below the header
+      (not just visually appearing that way via CSS order while being
+      structurally elsewhere). Confirm the embedded commands are the
+      REAL ones from aha-03, not hardcoded placeholders that could drift.
+      Confirm fail-open behavior for the collapse script.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: ui/index.html
+      purpose: "Real current <header>/<nav id=\"jump-chips\"> structure (post v0.12.0) -- the exact insertion point for this ticket's new banner."
+    - path: ui/app.js
+      purpose: "Zero existing localStorage usage (confirmed) -- this ticket's collapse-state persistence is genuinely new, must be added carefully (fail-open on any error)."
+
+files_to_modify:
+  - file: ui/index.html
+    change: "New banner section between </header> and <nav id=\"jump-chips\">."
+  - file: ui/app.js
+    change: "New localStorage-backed collapse/expand logic, fail-open by default."
+  - file: ui/style.css
+    change: "New banner styles, reusing existing tokens only."
+
+design_decisions:
+  - decision: "Collapse persists via localStorage; the reopen control is always reachable, never a one-time dismiss."
+    rationale: "design-discussion.md §1.4's resolution of research-brief.md's open question 3 -- the more conservative, more recoverable reading of 'collapse it after the first time,' consistent with this session's established 'never make information un-reachable' bias from the ui-redesign epic."
+  - decision: "Fails open (defaults to expanded) if the collapse script errors or localStorage is unavailable."
+    rationale: "Matches the ui-redesign epic's own hard cross-cutting rule (horizontal-plan.md) that no panel/content's basic visibility may depend on JavaScript running -- this banner is the FIRST thing an operator sees and is exactly the wrong place to silently fail invisible."
+
+cross_cutting: []
+
+risks:
+  - severity: low
+    description: "Embedding the install command as a hardcoded string risks drifting from aha-03's real script if either changes independently later."
+    mitigation: "Note in the completion note exactly where the command is duplicated, as a known, accepted small risk (no dynamic cross-file templating exists in this zero-build-step app to avoid it cleanly) -- future edits to the install command must remember to update both."
+
+references:
+  - path: .pHive/epics/mnemosyne-agent-harness-install/docs/design-discussion.md
+    relevant_excerpt: |
+      "§1.4... Placement: between </header> and <nav id=\"jump-chips\">...
+      collapse persists across page loads once the operator has collapsed
+      it themselves... a manual reopen control is *always* reachable."

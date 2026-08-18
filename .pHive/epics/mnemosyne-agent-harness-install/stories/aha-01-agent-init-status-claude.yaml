@@ -1,0 +1,109 @@
+id: aha-01-agent-init-status-claude
+epic: mnemosyne-agent-harness-install
+title: "mnemosyne agent init/status -- Claude Code harness (MCP registration + skill install)"
+status: planned
+complexity: medium
+methodology: classic
+depends_on: []
+
+description: |
+  Implements design-discussion.md §1.1 for the Claude Code harness (the
+  certain, locally-verifiable half -- Codex is aha-02). New
+  bin/mnemosyne-agent.mjs, wired into bin/mnemosyne's existing dispatch
+  pattern (same shape as its real current `reindex`/`persona` branches).
+  `agent init` registers bin/mnemosyne-mcp.mjs (already exists, already
+  tested -- this ticket does NOT touch it) as an MCP server named
+  "mnemosyne" via `claude mcp add`, and copies
+  skills/mnemosyne-standalone/ + skills/mnemosyne-persona-interview/ (the
+  2 real, current skills -- research-brief.md §2) into ~/.claude/skills/.
+  `agent status` is read-only. Both idempotent.
+
+acceptance_criteria:
+  - "Given `mnemosyne agent init` run on a machine with the claude CLI on PATH, when it completes, then `claude mcp get mnemosyne` succeeds and reports bin/mnemosyne-mcp.mjs's real absolute path -- verified by actually running the real claude CLI, not mocked"
+  - "Given the registration CHECK specifically, then it uses `claude mcp get mnemosyne` (a single targeted lookup), never `claude mcp list` -- the exact named bug Portunus's own real build hit and fixed (30+ second health-check-every-server cost). A code comment must name this decision so a future edit doesn't regress it."
+  - "Given `mnemosyne agent init` run a second time (already registered, already installed), then it makes zero redundant writes and reports 'already registered'/'already installed' rather than erroring or duplicating -- real idempotency, verified by running it twice for real and diffing state"
+  - "Given ~/.claude/skills/ after `agent init`, then it contains real copies of both mnemosyne-standalone and mnemosyne-persona-interview's full directory contents (SKILL.md + every .mjs/.d.mts file each skill needs to function), not just SKILL.md alone"
+  - "Given `mnemosyne agent status`, when run before AND after `agent init`, then its output genuinely differs (reflects real state) and neither call registers, installs, or modifies anything -- verified by checking `claude mcp get mnemosyne` / ~/.claude/skills/ are unchanged after a `status` call"
+  - "Given `mnemosyne agent init --harness claude`, then only the Claude Code path runs (no Codex detection/action attempted) -- the flag genuinely narrows scope, not just cosmetically accepted and ignored"
+
+steps:
+  - id: research
+    description: >
+      Read bin/mnemosyne (the real current dispatch script) and
+      bin/mnemosyne-install-hooks (the real current idempotency pattern
+      for a similar "modify the operator's Claude Code environment"
+      action -- reuse its established conventions, e.g. how it detects
+      already-installed state, rather than inventing a new one). Read
+      bin/mnemosyne-mcp.mjs's own header comment for its real absolute
+      invocation shape. Read both skills' real directory contents
+      (skills/mnemosyne-standalone/, skills/mnemosyne-persona-interview/)
+      to know exactly what must be copied.
+    agent: researcher
+  - id: implement
+    description: >
+      Create bin/mnemosyne-agent.mjs implementing init/status for the
+      Claude Code harness per this ticket's acceptance criteria. Wire a
+      new `agent` branch into bin/mnemosyne's dispatch, matching its
+      existing reindex/persona pattern exactly (same exec-node shape).
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: >
+      Write a real subprocess test (matching this repo's own established
+      .mjs test convention -- see test/persona-cli.mjs for the pattern)
+      that actually runs `mnemosyne agent init`/`agent status` against a
+      real, isolated $HOME (never the operator's real ~/.claude/) and
+      asserts on real filesystem/subprocess state -- not mocked. Cover:
+      first-run registration, idempotent second run, status reflecting
+      real state before/after, --harness claude narrowing.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: >
+      Confirm the targeted claude mcp get check (never list) is real and
+      commented. Confirm skill copies are complete (every file each skill
+      needs, not just SKILL.md). Confirm the test suite never touches the
+      real operator's ~/.claude/ directory.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: bin/mnemosyne-install-hooks
+      purpose: "The real, established idempotency/settings-merge pattern for modifying an operator's Claude Code environment -- reuse its conventions."
+    - path: bin/mnemosyne-mcp.mjs
+      purpose: "Already exists, already tested -- this ticket only registers it, never modifies it."
+    - path: skills/mnemosyne-standalone/SKILL.md
+      purpose: "Self-describes as 'the harness plugin interaction piece' -- the most directly relevant existing artifact to this ticket's goal."
+
+files_to_modify:
+  - file: bin/mnemosyne
+    change: "New `agent` dispatch branch, matching the existing reindex/persona pattern."
+  - file: bin/mnemosyne-agent.mjs
+    change: "New file: agent init/status implementation for the Claude Code harness."
+
+design_decisions:
+  - decision: "Registration check uses `claude mcp get mnemosyne`, never `claude mcp list`."
+    rationale: "Portunus's own real, shipped build hit this exact bug (list health-checks every registered server, 30+ seconds) and fixed it this same session -- avoid repeating a known, already-solved mistake."
+  - decision: "agent init is a separate, explicit step from the install script (aha-03), never auto-chained."
+    rationale: "design-discussion.md §1.2 -- installing the CLI and mutating a harness's own MCP/skill config are different blast-radius actions and should both be visible, confirmable steps."
+
+cross_cutting: []
+
+risks:
+  - severity: medium
+    description: "Testing against the operator's REAL ~/.claude/ directory could corrupt their actual Claude Code config."
+    mitigation: "All tests must set HOME (or the equivalent env var Claude Code's own CLI respects) to an isolated temp directory -- verified explicitly in review, not assumed."
+
+references:
+  - path: .pHive/epics/mnemosyne-agent-harness-install/docs/design-discussion.md
+    relevant_excerpt: |
+      "§1.1... Registration check must be targeted, not broad -- this is the
+      one concrete, named bug the operator already found and fixed in
+      Portunus's real build: use `claude mcp get mnemosyne`... never
+      `claude mcp list`."

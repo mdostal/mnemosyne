@@ -1,0 +1,91 @@
+id: aha-03-install-script-and-readme
+epic: mnemosyne-agent-harness-install
+title: "docs/install.sh (git-clone-based) + README top-line curl command"
+status: planned
+complexity: low
+methodology: classic
+depends_on: [aha-01-agent-init-status-claude]
+
+description: |
+  Implements design-discussion.md §1.2/§1.3. A real, git-clone-based
+  install script (Mnemosyne is "private": true in package.json -- no
+  package-registry install exists, per research-brief.md §2) committed at
+  docs/install.sh so it's immediately fetchable at
+  https://mdostal.github.io/mnemosyne/install.sh once merged to main (this
+  repo's GitHub Pages already serves /docs off main with no separate
+  deploy step -- confirmed, not assumed). A thin scripts/install.sh
+  wrapper points at the same file for anyone browsing the repo directly.
+  README's Quickstart gains the curl command as its new first line; the
+  existing manual gh-repo-clone block stays underneath as the dev-clone
+  alternative.
+
+acceptance_criteria:
+  - "Given `curl -fsSL <raw-content-url-for-docs/install.sh> | bash` run against a real temp $HOME/workdir, when it completes, then a real, working `mnemosyne` command is reachable on PATH, cloned from this repo, with node_modules installed"
+  - "Given the script is run a SECOND time against the same target location, then it detects the existing clone and updates/re-links rather than erroring or duplicating -- idempotent, matching aha-01's own established convention for this epic"
+  - "Given the script completes, then it prints (does not run) the `mnemosyne agent init` command as an explicit next step -- installing and registering stay two separate, operator-confirmable actions per design-discussion.md §1.2, never silently chained"
+  - "Given docs/install.sh exists on this branch, then scripts/install.sh also exists and is either a symlink to it or a one-line wrapper that execs it -- both paths must produce identical behavior, verified by actually running both"
+  - "Given README.md, when this ticket ships, then its Quickstart section's first line is the real curl command (pointing at the real, correct URL), and the existing gh-repo-clone/npm-install/npm-test block is preserved below it, not removed or replaced"
+
+steps:
+  - id: implement
+    description: >
+      Write docs/install.sh: shallow git clone (idempotent re-run
+      behavior), npm install, link bin/mnemosyne onto PATH (check how
+      this operator's own machine already does this for a sibling tool --
+      e.g. ~/.local/bin -- and match that convention rather than
+      inventing a new one). Prints the `mnemosyne agent init` next-step
+      command at the end. Add scripts/install.sh as a symlink/wrapper.
+      Update README.md's Quickstart per this ticket's own acceptance
+      criteria.
+    agent: developer
+  - id: test
+    description: >
+      Run the real script against a real, isolated temp directory (never
+      overwriting any real existing Mnemosyne clone on this machine) --
+      twice, to prove idempotency. Confirm the resulting `mnemosyne`
+      command actually runs and produces real output.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: >
+      Confirm the script never writes outside its intended target
+      directory. Confirm the printed next-step command is exactly
+      correct (copy-pasteable, real). Confirm the README diff is
+      additive (nothing real removed).
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: README.md
+      purpose: "Real current Quickstart section (gh-repo-clone-based) -- this ticket adds the curl line above it, doesn't replace it."
+    - path: docs/index.html
+      purpose: "Confirms /docs is the real, live GitHub Pages root for this repo already -- docs/install.sh lands at the right URL with no new deploy work."
+
+files_to_modify:
+  - file: docs/install.sh
+    change: "New: git-clone-based install script."
+  - file: scripts/install.sh
+    change: "New: symlink/wrapper pointing at docs/install.sh."
+  - file: README.md
+    change: "New curl command as Quickstart's first line; existing manual block preserved below."
+
+design_decisions:
+  - decision: "Committed at docs/install.sh (not a separate gh-pages branch/sync step)."
+    rationale: "research-brief.md §2 confirms this repo's GitHub Pages already serves /docs off main directly -- no new CI/deploy work needed, unlike Portunus's own separate-gh-pages-root approach."
+  - decision: "The script prints, but never runs, `mnemosyne agent init`."
+    rationale: "design-discussion.md §1.2 -- install and harness-registration are different blast-radius actions, kept as two explicit steps."
+
+cross_cutting: []
+risks: []
+
+references:
+  - path: .pHive/epics/mnemosyne-agent-harness-install/docs/design-discussion.md
+    relevant_excerpt: |
+      "§1.2... The script clones the repo... then prints (does not
+      auto-run) the `mnemosyne agent init` command as the next step..."

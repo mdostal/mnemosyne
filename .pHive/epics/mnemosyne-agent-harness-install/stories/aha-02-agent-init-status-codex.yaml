@@ -1,0 +1,101 @@
+id: aha-02-agent-init-status-codex
+epic: mnemosyne-agent-harness-install
+title: "mnemosyne agent init/status -- Codex CLI harness (MCP registration)"
+status: planned
+complexity: medium
+methodology: classic
+depends_on: [aha-01-agent-init-status-claude]
+
+description: |
+  Implements design-discussion.md §1.1/§2 for the Codex CLI harness --
+  the higher-risk half, since (per research-brief.md §4) nothing in this
+  repo or a locally-available reference confirms Codex CLI's exact
+  MCP-registration/targeted-lookup command shape. Extends
+  bin/mnemosyne-agent.mjs (built in aha-01) with Codex detection +
+  registration; no skill install for Codex (confirmed: Codex CLI has no
+  analogous skill-file mechanism).
+
+acceptance_criteria:
+  - "Given `mnemosyne agent init` (or `--harness codex`) run on a machine with the codex CLI on PATH, when it completes, then Codex's own MCP config genuinely lists mnemosyne's MCP server -- verified against the REAL installed codex CLI's real config output, not assumed from Claude's own command shape"
+  - "Given the codex CLI is NOT on PATH, when `mnemosyne agent init` runs with no --harness flag, then Claude Code registration (aha-01) still completes normally and Codex is skipped with a clear, honest message -- never a hard failure just because one of two possible harnesses is absent"
+  - "Given codex's real MCP-registration command differs from what this ticket assumed (a real risk per design-discussion.md §2's own named risk), then the failure is LOUD and specific (names the exact command that failed and why), never a silent no-op -- matching this repo's own SERVICE.md 'loud failure is a hard requirement' convention"
+  - "Given `mnemosyne agent status --harness codex`, then it reports real registration state via a targeted, single-server lookup (the Codex equivalent of `claude mcp get`, not a full-list health-check-everything equivalent) -- same anti-pattern avoidance as aha-01's Claude-side fix, applied to Codex specifically"
+  - "Given `mnemosyne agent init` run twice against a real Codex CLI, then the second run is a real no-op (idempotent), not a duplicate registration or an error"
+
+steps:
+  - id: research
+    description: >
+      Investigate the actually-installed codex CLI on this machine (if
+      present -- check `which codex`/`codex --help` for real, live
+      command surface) for its real MCP-registration and single-server
+      lookup command shape. If codex CLI is not installed on this
+      machine, document that gap explicitly and implement against the
+      operator's own reported Portunus precedent as a documented
+      best-effort, per design-discussion.md §2's risk mitigation --
+      do not silently skip Codex support or narrow scope without saying
+      so in the completion note.
+    agent: researcher
+  - id: implement
+    description: >
+      Extend bin/mnemosyne-agent.mjs with Codex detection, registration,
+      and status reporting, using the real command shape found in
+      research (or the documented best-effort if codex CLI wasn't
+      locally available to verify against). Loud, specific failure
+      messaging on any command-shape mismatch.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: >
+      Real subprocess test against the actual codex CLI if present on
+      this machine. If codex CLI is genuinely unavailable in this
+      sandbox, write the test to skip gracefully with a clear, logged
+      reason (never silently passing as if it ran) -- and say so
+      explicitly in the completion note rather than claiming full
+      coverage.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: >
+      Confirm the --harness claude/codex flag genuinely narrows scope for
+      both harnesses (not just Claude, per aha-01). Confirm failure
+      messaging is loud and specific, not swallowed. Confirm the
+      completion note is honest about what was/wasn't verifiable in this
+      environment.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: bin/mnemosyne-agent.mjs
+      purpose: "Built by aha-01 -- this ticket extends it with the Codex harness path, not a separate file."
+
+files_to_modify:
+  - file: bin/mnemosyne-agent.mjs
+    change: "Codex CLI detection, MCP registration, and status reporting."
+
+design_decisions:
+  - decision: "No skill install for Codex CLI."
+    rationale: "Confirmed no analogous skill-file mechanism exists for Codex, per research-brief.md §4 -- MCP registration only."
+  - decision: "Loud, specific failure on command-shape mismatch rather than a silent no-op."
+    rationale: "design-discussion.md §2's own named risk mitigation -- Codex's exact command surface is unverified locally, so a wrong assumption must fail visibly, not silently claim success."
+
+cross_cutting: []
+
+risks:
+  - severity: high
+    description: "Codex CLI's real command shape may differ from what's implemented here, since it could not be independently verified against Portunus's actual source (unavailable in the local checkout, per research-brief.md §1)."
+    mitigation: "Loud failure requirement above; document exactly what was/wasn't verified in this environment in the completion note, so a human can quickly confirm or correct the Codex-specific commands."
+
+references:
+  - path: .pHive/epics/mnemosyne-agent-harness-install/docs/design-discussion.md
+    relevant_excerpt: |
+      "§2... Codex CLI's exact MCP-registration and targeted-lookup command
+      shape is unverified locally... implement Codex support against the
+      operator's own reported Portunus pattern... with a loud, explicit
+      failure message... if the actual installed Codex CLI's command
+      surface differs."

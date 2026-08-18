@@ -1,0 +1,58 @@
+id: aha-05-release
+epic: mnemosyne-agent-harness-install
+title: "Full-suite regression + version bump + release note"
+status: planned
+complexity: low
+methodology: classic
+depends_on: [aha-02-agent-init-status-codex, aha-04-ui-connect-banner]
+
+description: |
+  Closes the mnemosyne-agent-harness-install epic (aha-01 through
+  aha-05), mirroring this session's established closing-ticket
+  convention (pf-08, ui-06): a real full-suite regression pass, a
+  version bump, and a CHANGELOG entry.
+
+acceptance_criteria:
+  - "Given the full npm test script (vitest + .mjs subprocess suite) plus tsc --noEmit, when run on this epic's final state, then it completes with only the already-documented pre-existing failures (the 3 POST /remember assertions; test/ui-shell.mjs's 22 failures, confirmed pre-existing this session) -- no NEW failures anywhere"
+  - "Given any NEW failure found, then it is fixed before this ticket completes"
+  - "Given package.json's version field, then it reflects a real minor bump from the version at epic start (0.12.0 -> 0.13.0, matching epic.yaml's version_bump -- new CLI capability + a new public install surface + a new UI feature is more than a patch)"
+  - "Given this ticket's completion note, then it includes the real full test-run output summary and a real confirmation that the shipped README curl command / UI banner commands are byte-identical to what docs/install.sh and bin/mnemosyne-agent.mjs actually do"
+
+steps:
+  - id: implement
+    description: >
+      Run the full npm test + tsc --noEmit against this epic's final
+      state; fix any new failure. Bump package.json/package-lock.json to
+      0.13.0. Write a CHANGELOG.md entry covering the real deliverable:
+      mnemosyne agent init/status (Claude + Codex), the install script,
+      and the UI connect banner.
+    agent: developer
+  - id: review
+    description: >
+      Start the real standalone server, load /ui in a real browser
+      (Playwright), confirm the banner genuinely renders top-and-forefront
+      with real commands, and confirm collapse/reopen works for real.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: .pHive/epics/mnemosyne-ui-redesign/stories/ui-06-release.yaml
+      purpose: "Direct template for this closing ticket's rigor and shape."
+
+files_to_modify:
+  - file: package.json
+    change: "Version bump 0.12.0 -> 0.13.0."
+  - file: package-lock.json
+    change: "Version bump, matching package.json."
+  - file: CHANGELOG.md
+    change: "New entry covering agent init/status, the install script, and the UI banner."
+
+design_decisions: []
+cross_cutting: []
+risks: []
