@@ -1,0 +1,356 @@
+id: aha-03-install-script-and-readme
+epic: mnemosyne-agent-harness-install
+title: "docs/install.sh (git-clone-based) + README top-line curl command"
+status: complete
+complexity: low
+methodology: classic
+depends_on: [aha-01-agent-init-status-claude]
+
+note_on_completion: >
+  docs/install.sh implements design-discussion.md §1.2: a real,
+  git-clone-based install script (repo is "private": true -- no
+  package-registry install exists). Idempotent re-run: if
+  MNEMOSYNE_INSTALL_DIR/.git already exists, `git -C <dir> pull --ff-only`
+  instead of re-cloning; if it exists but is NOT a git dir, the script
+  refuses to overwrite it and exits 1 with a clear message (never silently
+  clobbers unrelated real content) rather than cloning fresh. `npm install`
+  runs in the clone every time (npm's own idempotency covers the "nothing
+  changed" case). Links `bin/mnemosyne` onto PATH at
+  MNEMOSYNE_BIN_DIR/mnemosyne (default ~/.local/bin/mnemosyne, matching this
+  operator's own real machine convention -- confirmed by hand:
+  ~/.local/bin/{codex,graphify,swarm-memory,node,...} are all real symlinks
+  into their real install locations before writing any code). The link step
+  itself is idempotent/safe: `ln -sf` re-points an existing symlink in
+  place, but if MNEMOSYNE_BIN_DIR/mnemosyne already exists as something OTHER
+  than a symlink, the script leaves it untouched and prints instructions
+  instead of overwriting a real, unrelated file. Prints, but never runs,
+  `mnemosyne agent init` as the explicit next step, plus one line naming
+  exactly what it does (registers the MCP server, installs skills for Claude
+  Code) -- per design-discussion.md §1.2's "two separate, operator-confirmed
+  actions" requirement. MNEMOSYNE_REPO_URL/MNEMOSYNE_INSTALL_DIR/
+  MNEMOSYNE_BIN_DIR overrides added cleanly for isolated testing (the script
+  had no such override before this ticket; real installs never need to set
+  them). scripts/install.sh is a REAL symlink (`ln -sf ../docs/install.sh`,
+  git mode 120000) to docs/install.sh, not a wrapper -- verified
+  byte-identical by construction and by an explicit content-equality
+  assertion in the new test. README.md's Quickstart gained the curl line as
+  its literal first line; the existing gh-repo-clone/npm-install/npm-test
+  block is preserved, unmodified, directly underneath as the manual/dev-clone
+  alternative (verified: nothing removed, curl line strictly precedes it).
+
+  Real default-location collision found and avoided BEFORE picking a
+  default, not after: this operator's own real machine already has
+  ~/.local/share/mnemosyne/ in live use as the running Mnemosyne service's
+  OWN data directory (a real mnemosyne.log with live "GET /health -> 200"
+  entries, and a real notes/ tree with 70+ real persona-draft/smoke-test
+  files) -- confirmed by hand (`ls -la ~/.local/share/mnemosyne/`,
+  `head -c 300 mnemosyne.log`) before choosing a default clone location.
+  Defaulting the install script's clone target directly to that path would
+  have collided with real, in-use, non-git content on first run (the
+  refuse-to-overwrite guard would have caught it safely rather than
+  corrupting anything, but the operator's first real run would have hit a
+  confusing "already exists and is not a git clone" error against their OWN
+  real, unrelated directory). Fixed by nesting the default one level deeper,
+  at ~/.local/share/mnemosyne/repo/ (a fresh subdirectory, never colliding
+  with mnemosyne.log or notes/) -- documented inline in docs/install.sh's own
+  header comment so a future editor doesn't "simplify" it back to the
+  colliding path. ~/.mnemosyne/ (a different, also real, also
+  already-in-use directory -- level0-rules.md) was checked too and is
+  unrelated to this script's default (never used by it).
+
+  Real, independently-verified bug caught and fixed during this ticket's own
+  testing (not self-reported, actually hit): bin/mnemosyne's HERE resolution
+  used `HERE="$(cd "$(dirname "$0")/.." && pwd)"` -- correct only when the
+  script is invoked by its real path. Once this ticket's install script
+  started symlinking bin/mnemosyne onto PATH (exactly what design-discussion
+  §1.2 specifies, and exactly this operator's own real
+  ~/.local/bin/{codex,graphify,...} convention), invoking the symlinked
+  `mnemosyne agent status` failed hard with `Error: Cannot find module
+  '<bin-dir>/mnemosyne-agent.mjs'` (MODULE_NOT_FOUND) -- `dirname "$0"`
+  resolved to the SYMLINK's own directory (MNEMOSYNE_BIN_DIR), not the real
+  script's directory, silently pointing every subcommand at the wrong repo
+  root. This was caught by actually running the freshly-installed,
+  freshly-symlinked `mnemosyne` command end to end during this ticket's own
+  testing, not assumed. Fixed with a portable manual symlink-resolution loop
+  (BASH_SOURCE + a `[ -h "$SOURCE" ]` while-loop resolving one hop at a time,
+  re-basing relative link targets against the symlink's own directory) --
+  deliberately NOT `readlink -f` (GNU-only, not guaranteed portable across
+  every platform this dispatcher might run on, even though it happened to
+  work on this machine's macOS). Re-ran test/agent-cli.mjs (unrelated to this
+  fix's trigger path, invokes bin/mnemosyne directly, never through a
+  symlink) after the fix -- still 100% pass, confirming the fix is additive
+  and doesn't change the non-symlinked invocation path aha-01/aha-02's own
+  tests already cover.
+
+  New test/install-script.mjs: real subprocess-level test, run TWICE against
+  the SAME isolated MNEMOSYNE_INSTALL_DIR/MNEMOSYNE_BIN_DIR (fresh mkdtemp()
+  dirs, never this operator's real ~/.local/share/mnemosyne or
+  ~/.local/bin), with MNEMOSYNE_REPO_URL pointed at a `file://` URL for THIS
+  repo's own working tree root (fast, deterministic, no network flakiness,
+  and -- critically -- clones a commit that actually HAS
+  bin/mnemosyne-agent.mjs, unlike the real https://github.com/mdostal/mnemosyne
+  main today, which does not yet have aha-01/aha-02 merged, so a real-URL
+  clone right now could install+link successfully but `mnemosyne agent
+  status` would 404 on a subcommand that doesn't exist there yet -- this
+  would be a false-positive "it works" if not accounted for). First run:
+  proves a real clone (.git present), a real `npm install` (node_modules
+  present), a real bin symlink pointing at the clone's own bin/mnemosyne, and
+  -- independently, via PATH (bare `mnemosyne` command name, not an
+  absolute-path workaround, to literally satisfy "reachable on PATH") --
+  that `mnemosyne agent status` genuinely runs end to end (exit 0, real
+  per-harness output), using an isolated HOME/CODEX_HOME for that
+  verification call too (belt-and-suspenders on top of the call being
+  read-only by the CLI's own design). Second run against the SAME target:
+  proves idempotency -- "existing clone found ... updating" (not a fresh
+  "cloning ... into"), the symlink still resolves to the same real path
+  (never duplicated), and `agent status` still reports "NOT registered",
+  independently proving the install script's own two runs never triggered
+  `agent init` as a side effect (not just that the script's stdout claims
+  not to have). Separately proves scripts/install.sh (byte-identical
+  content, asserted directly) also runs a full clone+install+link end to end
+  against a THIRD isolated target. Confirms README's Quickstart structure
+  (curl line first, gh-repo-clone block preserved directly below, unmodified).
+  A final SAFETY block snapshots this operator's REAL
+  ~/.local/bin/mnemosyne (lstat + readlink if present) both before ANY test
+  code runs and after the entire test (including its own cleanup) completes,
+  and asserts the two snapshots are identical -- on this machine, both
+  snapshots report "does not exist" (confirmed by hand before writing this
+  ticket's code: this operator has never installed Mnemosyne via this
+  script), so the assertion is currently "absent stays absent"; the same
+  check would catch a real symlink's target changing if one existed. Wired
+  into package.json's `test` chain (after test/agent-cli.mjs, matching this
+  epic's own convention) and given its own `test:install-script` script.
+
+  Verification performed independently this session (this ticket's install
+  script clones+npm-installs+symlinks on a real machine -- held to the same
+  scrutiny as aha-01/aha-02's own harness-config-mutating work):
+    - Read the full aha-03 ticket YAML, design-discussion.md §1.2/§1.3 (and
+      §0/§2/§3 for context), research-brief.md §2 (confirmed still holds by
+      independently re-checking: `.github/workflows/` has only ci.yml and
+      promote.yml, neither deploys anything to gh-pages; README.md and
+      docs/index.html already reference https://mdostal.github.io/mnemosyne/
+      as a live site with no separate publish workflow anywhere in the repo),
+      README.md's real current Quickstart, and bin/mnemosyne's real dispatch
+      pattern before writing any code.
+    - Manually ran `bash docs/install.sh` end to end against an isolated temp
+      target (MNEMOSYNE_INSTALL_DIR/MNEMOSYNE_BIN_DIR under this session's
+      scratchpad, MNEMOSYNE_REPO_URL=file://<this worktree>) TWICE before
+      writing the automated test, by hand, reading every line of output --
+      first run: real clone + real npm install + real symlink + the exact
+      printed next-step text; second run: "existing clone found ...
+      updating" + "Already up to date." + re-linked, zero duplication. Ran
+      the resulting `<bindir>/mnemosyne agent status` directly (hit the
+      HERE-resolution bug on the FIRST attempt, fixed it, re-ran
+      successfully) and confirmed exit 0 with real per-harness output both
+      after run 1 and run 2 (still "NOT registered" both times -- proves no
+      auto-registration).
+    - Manually ran `bash scripts/install.sh` (the symlink path) end to end
+      against a separate isolated target -- identical successful behavior.
+    - `node test/install-script.mjs` standalone: all checks pass (see test
+      file's own header comment for the full AC-to-check mapping).
+    - `node test/agent-cli.mjs` standalone (unrelated to this ticket's own
+      new file, but exercises bin/mnemosyne's dispatch path this ticket's
+      HERE-resolution fix touches): still 100% pass after the fix.
+    - `npm install` (node_modules absent in this fresh worktree) then
+      `npm test`: the chain (`&&`-joined) stops at test/http-api.mjs's 3
+      already-documented pre-existing POST /remember failures (ok:true,
+      layer:file default, provenance -- unrelated to this diff: confirmed by
+      `git diff --stat 6679665` showing this ticket's full diff touches only
+      README.md, bin/mnemosyne, docs/install.sh, package.json,
+      scripts/install.sh -- none of which test/http-api.mjs or its
+      dependencies (src/server.mjs, lib/mnemosyne/*) reference at all, so no
+      separate stash/re-run comparison was needed beyond aha-01/aha-02's own
+      already-established baseline for the identical 3 failures). With the
+      chain's own remainder run by hand past that point (matching
+      aha-01/aha-02's own documented convention): `node
+      test/single-layer-config.mjs`, `node test/git-hooks.mjs`, `node
+      test/install-git-hooks.mjs`, `node test/lifecycle-compliance-audit.mjs`,
+      `node test/persona-cli.mjs`, `node test/agent-cli.mjs`, `node
+      test/install-script.mjs` -- all pass. `npx vitest run lib/mnemosyne
+      lib/minerva benchmarks src/planning src/config src/runners`: 54 test
+      files / 727 tests, all pass. `npx tsc --noEmit`: clean, zero output.
+    - Ran test/ui-shell.mjs as extra diligence (not part of npm test's
+      chain, matching this epic's own established convention): 22 failures,
+      identical count to aha-01/aha-02's own documented pre-existing
+      baseline -- this ticket touches no ui/ file at all.
+  No new failures anywhere beyond the two already-documented pre-existing
+  gaps (http-api.mjs's 3 POST /remember failures, ui-shell.mjs's 22
+  failures).
+
+  Worktree/branch provenance note (environment-integrity finding, reported
+  for traceability, same class of issue aha-02 documented for its own
+  dispatch): this ticket's dispatched worktree
+  (.claude/worktrees/wf_f8213154-d3e-1) was, at task start, checked out on
+  branch `worktree-wf_f8213154-d3e-1` at commit f73f542 (a `dev`-tip commit
+  -- the just-released mnemosyne-ui-redesign v0.12.0 merge -- NOT 6679665/
+  aha-02 as the dispatch instructions stated).
+  `.pHive/epics/mnemosyne-agent-harness-install/` did not exist there, and
+  bin/mnemosyne had no `agent` subcommand. The real
+  `feat/mnemosyne-agent-harness-install` branch at 6679665 was confirmed to
+  exist both locally (checked out in this repo's own primary working
+  directory, /Users/mdostal/Documents/work/pantheon/mnemosyne) and on
+  origin, with the expected aha-01+aha-02 content. Rather than proceeding
+  against the wrong base or touching the primary working directory's
+  already-checked-out branch (the sandbox's own worktree-isolation
+  enforcement structurally refuses any `git -C <primary-checkout-path>`
+  command from this session, confirmed by hand when attempted), created a
+  new branch `feat/aha-03-install-script` off the real 6679665 tip, inside
+  this same dispatched worktree, and did all work there. Committed (2
+  commits: implementation, then the test) and pushed to
+  origin/feat/aha-03-install-script.
+
+  SAFETY REQUIREMENT -- explicit, independent confirmation (not just the
+  automated test's own claim) that this ticket's testing never touched this
+  operator's real machine state outside the isolated test target:
+    - Every install-script run during this ticket's work (manual and
+      automated) used MNEMOSYNE_INSTALL_DIR/MNEMOSYNE_BIN_DIR pinned to
+      fresh mkdtemp()/scratchpad directories under the OS temp dir --
+      confirmed by re-reading every invocation's env vars above; the
+      script's real defaults (~/.local/share/mnemosyne/repo,
+      ~/.local/bin/mnemosyne) were never exercised with a live write during
+      this session.
+    - `ls -la ~/.local/bin/` (real, default $HOME), run both near the start
+      of this session (to confirm the pre-existing convention this ticket's
+      symlink choice matches) and again after all testing completed: BOTH
+      listings are identical -- the same 17 real, pre-existing entries
+      (claude, codex, corepack, graphify, graphify-mcp, hive, node, npm, npx,
+      pantheon-keepalive.sh, pantheon-start-svc.sh, pnpm, pnpx, swarm-memory,
+      yarn, yarnpkg -- and hive/pantheon-*.sh as real files), same
+      timestamps, same symlink targets. No "mnemosyne" entry exists there
+      now or at any point during this session.
+    - `ls -la ~/.local/share/mnemosyne/` (real, default $HOME), same
+      before/after check: identical -- only mnemosyne.log and notes/ (the
+      real running service's own data), no "repo" subdirectory ever created.
+    - `ls ~/.claude/skills/` (real $HOME): no mnemosyne-standalone or
+      mnemosyne-persona-interview entries -- this ticket never ran `agent
+      init` against a real HOME.
+    - `claude mcp get mnemosyne` run from a neutral cwd (/tmp, not this
+      repo, sidestepping the repo's own pre-existing project-scoped
+      .mcp.json -- see bin/mnemosyne-agent.mjs's own header comment):
+      "No MCP server named \"mnemosyne\"" among this operator's real
+      user-scope configured servers. (Separately, `claude mcp get mnemosyne`
+      run from THIS repo's own root does report a "mnemosyne" entry --
+      confirmed this is the repo's OWN pre-existing, git-tracked,
+      project-scoped .mcp.json, committed in 04a8011 well before this
+      ticket, not anything this ticket's testing created; `git show
+      HEAD:.mcp.json` and `git log -- .mcp.json` both confirm.)
+    - `codex mcp list` (real, default $CODEX_HOME): shows exactly this
+      operator's 2 real, pre-existing servers (portunus, posthog) -- no
+      "mnemosyne" entry, matching aha-02's own already-documented baseline
+      exactly.
+  This operator's real machine state -- ~/.local/bin/, ~/.local/share/, real
+  Claude Code / Codex CLI harness config, and the primary
+  /Users/mdostal/Documents/work/pantheon/mnemosyne checkout -- is genuinely
+  untouched by this ticket's work.
+
+  Independent verification (orchestrating session, before merge): found a
+  third genuinely real bug in this ticket (after aha-01's .mcp.json/CWD
+  collision and aha-02's silent-overwrite discovery) -- bin/mnemosyne's
+  `dirname "$0"` resolution broke when invoked through the very symlink
+  docs/install.sh itself creates (resolves relative to the symlink's own
+  directory, not the real script's), which the builder caught by actually
+  running their own install script end-to-end rather than testing it in
+  isolation, and fixed with a portable manual symlink-resolution loop. Ran
+  my own, independent manual end-to-end verification before trusting the
+  formal test suite: (1) a real install run against an isolated temp
+  target (MNEMOSYNE_INSTALL_DIR/MNEMOSYNE_BIN_DIR overrides, cloning from
+  this local worktree rather than the network) -- real clone, real npm
+  install, real symlink, and `mnemosyne agent status` genuinely ran
+  through that symlink and produced real output, confirming the
+  dirname-resolution fix actually works; (2) a second run against the
+  same target -- confirmed idempotent (detected the existing clone,
+  `git pull`ed, "Already up to date", no re-clone, no duplicate symlink).
+  Then ran the ticket's own formal test/install-script.mjs suite: all
+  checks pass, including its own real safety assertion that this
+  operator's actual /Users/mdostal/.local/bin/mnemosyne was genuinely
+  unchanged (didn't exist before, didn't exist after). Ran the full suite
+  separately: tsc clean, 54/54 vitest files, 727/727 tests, .mjs suite
+  clean except the 3 pre-existing POST /remember failures. README.md diff
+  confirmed purely additive (new curl line above the fully-preserved
+  existing gh-clone block). scripts/install.sh confirmed byte-identical
+  to docs/install.sh via a real symlink, not a content fork that could
+  drift.
+
+description: |
+  Implements design-discussion.md §1.2/§1.3. A real, git-clone-based
+  install script (Mnemosyne is "private": true in package.json -- no
+  package-registry install exists, per research-brief.md §2) committed at
+  docs/install.sh so it's immediately fetchable at
+  https://mdostal.github.io/mnemosyne/install.sh once merged to main (this
+  repo's GitHub Pages already serves /docs off main with no separate
+  deploy step -- confirmed, not assumed). A thin scripts/install.sh
+  wrapper points at the same file for anyone browsing the repo directly.
+  README's Quickstart gains the curl command as its new first line; the
+  existing manual gh-repo-clone block stays underneath as the dev-clone
+  alternative.
+
+acceptance_criteria:
+  - "Given `curl -fsSL <raw-content-url-for-docs/install.sh> | bash` run against a real temp $HOME/workdir, when it completes, then a real, working `mnemosyne` command is reachable on PATH, cloned from this repo, with node_modules installed"
+  - "Given the script is run a SECOND time against the same target location, then it detects the existing clone and updates/re-links rather than erroring or duplicating -- idempotent, matching aha-01's own established convention for this epic"
+  - "Given the script completes, then it prints (does not run) the `mnemosyne agent init` command as an explicit next step -- installing and registering stay two separate, operator-confirmable actions per design-discussion.md §1.2, never silently chained"
+  - "Given docs/install.sh exists on this branch, then scripts/install.sh also exists and is either a symlink to it or a one-line wrapper that execs it -- both paths must produce identical behavior, verified by actually running both"
+  - "Given README.md, when this ticket ships, then its Quickstart section's first line is the real curl command (pointing at the real, correct URL), and the existing gh-repo-clone/npm-install/npm-test block is preserved below it, not removed or replaced"
+
+steps:
+  - id: implement
+    description: >
+      Write docs/install.sh: shallow git clone (idempotent re-run
+      behavior), npm install, link bin/mnemosyne onto PATH (check how
+      this operator's own machine already does this for a sibling tool --
+      e.g. ~/.local/bin -- and match that convention rather than
+      inventing a new one). Prints the `mnemosyne agent init` next-step
+      command at the end. Add scripts/install.sh as a symlink/wrapper.
+      Update README.md's Quickstart per this ticket's own acceptance
+      criteria.
+    agent: developer
+  - id: test
+    description: >
+      Run the real script against a real, isolated temp directory (never
+      overwriting any real existing Mnemosyne clone on this machine) --
+      twice, to prove idempotency. Confirm the resulting `mnemosyne`
+      command actually runs and produces real output.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: >
+      Confirm the script never writes outside its intended target
+      directory. Confirm the printed next-step command is exactly
+      correct (copy-pasteable, real). Confirm the README diff is
+      additive (nothing real removed).
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: README.md
+      purpose: "Real current Quickstart section (gh-repo-clone-based) -- this ticket adds the curl line above it, doesn't replace it."
+    - path: docs/index.html
+      purpose: "Confirms /docs is the real, live GitHub Pages root for this repo already -- docs/install.sh lands at the right URL with no new deploy work."
+
+files_to_modify:
+  - file: docs/install.sh
+    change: "New: git-clone-based install script."
+  - file: scripts/install.sh
+    change: "New: symlink/wrapper pointing at docs/install.sh."
+  - file: README.md
+    change: "New curl command as Quickstart's first line; existing manual block preserved below."
+
+design_decisions:
+  - decision: "Committed at docs/install.sh (not a separate gh-pages branch/sync step)."
+    rationale: "research-brief.md §2 confirms this repo's GitHub Pages already serves /docs off main directly -- no new CI/deploy work needed, unlike Portunus's own separate-gh-pages-root approach."
+  - decision: "The script prints, but never runs, `mnemosyne agent init`."
+    rationale: "design-discussion.md §1.2 -- install and harness-registration are different blast-radius actions, kept as two explicit steps."
+
+cross_cutting: []
+risks: []
+
+references:
+  - path: .pHive/epics/mnemosyne-agent-harness-install/docs/design-discussion.md
+    relevant_excerpt: |
+      "§1.2... The script clones the repo... then prints (does not
+      auto-run) the `mnemosyne agent init` command as the next step..."

@@ -6,9 +6,29 @@
 #        bin/mnemosyne persona sync --repo <path> --tier <tier> --scope-id <id> [--dry-run]
 #        bin/mnemosyne persona seed [--root <path>] [--scope-id <id>]
 #        bin/mnemosyne persona show <tier> <scope-id>
+#        bin/mnemosyne agent init   [--harness claude|codex]
+#        bin/mnemosyne agent status [--harness claude|codex]
 set -euo pipefail
 export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"
-HERE="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Resolve $0 through any symlink chain before computing HERE -- required
+# since aha-03 (mnemosyne-agent-harness-install) links this script onto PATH
+# as a symlink (e.g. ~/.local/bin/mnemosyne -> <clone>/bin/mnemosyne,
+# matching this operator's own machine convention for codex/graphify/etc).
+# `dirname "$0"` alone resolves relative to the SYMLINK's own directory
+# (e.g. ~/.local/bin), not the real script's directory, which silently
+# pointed every subcommand at the wrong repo root and broke with
+# MODULE_NOT_FOUND -- caught for real running `mnemosyne agent status`
+# through a fresh ~/.local/bin/mnemosyne symlink while testing aha-03's
+# install script. Portable manual symlink-resolution loop (works without
+# GNU-only `readlink -f`, which isn't guaranteed on every platform).
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+HERE="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
 
 if [ "${1:-}" = "reindex" ]; then
   shift
@@ -22,6 +42,13 @@ if [ "${1:-}" = "persona" ]; then
   # not plain node, since noEmit:true means there is no build step to import
   # a .ts module without it (see bin/mnemosyne-persona.mjs's own doc comment).
   exec node "$HERE/node_modules/.bin/tsx" "$HERE/bin/mnemosyne-persona.mjs" "$@"
+fi
+
+if [ "${1:-}" = "agent" ]; then
+  shift
+  # Plain node, like reindex.mjs (not tsx like persona.mjs) -- agent.mjs
+  # imports no lib/mnemosyne/*.ts modules, only node:child_process/fs/os.
+  exec node "$HERE/bin/mnemosyne-agent.mjs" "$@"
 fi
 
 exec node "$HERE/src/server.mjs"

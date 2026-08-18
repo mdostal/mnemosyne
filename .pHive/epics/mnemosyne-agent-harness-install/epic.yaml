@@ -1,0 +1,47 @@
+name: mnemosyne-agent-harness-install
+title: "mnemosyne agent init/status -- harness detection, MCP registration, skill install, and a top-and-forefront UI banner"
+target_codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+methodology: classic
+version_bump: minor
+
+description: |
+  Operator ask (verbatim): "every agent, harness, etc that uses this needs a
+  way to install and interact with it -- it should be top and foreward so
+  people can see when installing and working and what to feed the agent or
+  harness to get interactivity." Mirrors Portunus's own real, shipped
+  `agent init`/`agent status` pattern (harness detection for Claude Code /
+  Codex CLI, MCP server registration, skill install to ~/.claude/skills/,
+  a real curl-able install.sh, README top-line) -- adapted to Mnemosyne's
+  real current shape: an MCP server that already exists (bin/mnemosyne-mcp.mjs),
+  2 real existing skills (not Portunus's 4), and a private (unpublished)
+  npm package, meaning the install script is git-clone-based, not a
+  package-registry install.
+
+  Also ships a new, real UI banner in the just-shipped standalone shell
+  (v0.12.0, mnemosyne-ui-redesign) -- placed between <header> and the
+  jump-chip nav (the real first available slot, the most literal reading
+  of "top and forefront"), showing the actual install/connect commands,
+  collapsible but never fully removed (a reopen control always stays
+  reachable).
+
+stories:
+  - id: aha-01-agent-init-status-claude
+    title: "mnemosyne agent init/status -- Claude Code harness (MCP registration + skill install)"
+    complexity: medium
+    depends_on: []
+  - id: aha-02-agent-init-status-codex
+    title: "mnemosyne agent init/status -- Codex CLI harness (MCP registration)"
+    complexity: medium
+    depends_on: [aha-01-agent-init-status-claude]
+  - id: aha-03-install-script-and-readme
+    title: "docs/install.sh (git-clone-based) + README top-line curl command"
+    complexity: low
+    depends_on: [aha-01-agent-init-status-claude]
+  - id: aha-04-ui-connect-banner
+    title: "Top-and-forefront, collapsible 'connect an agent/harness' UI banner"
+    complexity: medium
+    depends_on: [aha-03-install-script-and-readme]
+  - id: aha-05-release
+    title: "Full-suite regression + version bump + release note"
+    complexity: low
+    depends_on: [aha-02-agent-init-status-codex, aha-04-ui-connect-banner]

@@ -1,0 +1,83 @@
+id: aha-05-release
+epic: mnemosyne-agent-harness-install
+title: "Full-suite regression + version bump + release note"
+status: complete
+complexity: low
+methodology: classic
+depends_on: [aha-02-agent-init-status-codex, aha-04-ui-connect-banner]
+
+note_on_completion: >
+  Carried out directly in the main working tree (not dispatched -- matches
+  ui-06's own established precedent this session for a low-complexity
+  closing ticket). Ran tsc --noEmit (clean) and the full suite against the
+  epic's final merged state (commit d6fb6da): 54/54 vitest files, 727/727
+  tests; .mjs suite clean except the 3 already-documented pre-existing
+  POST /remember failures and test/ui-shell.mjs's 22 pre-existing failures
+  (not part of npm test's own chain). One real gap caught and fixed before
+  it could hide a regression: the main working tree's node_modules didn't
+  yet have aha-04's new playwright devDependency, so the first full-suite
+  pass showed test/connect-banner.mjs failing with ERR_MODULE_NOT_FOUND --
+  ran npm install and confirmed all 64 of its checks genuinely pass, not a
+  real regression. No other new failures anywhere. Version bumped 0.12.0
+  -> 0.13.0 (minor, matching epic.yaml's version_bump -- new CLI surface +
+  a new public install path + a new UI feature, more than a patch).
+  CHANGELOG.md 0.13.0 entry added covering all 5 tickets: agent init/status
+  for both harnesses (with the 2 real bugs found and fixed -- the
+  .mcp.json/CWD collision, Codex's silent-overwrite-on-add behavior), the
+  install script (with its own real bug found and fixed -- the
+  symlink/dirname resolution break), and the UI banner (with its real
+  fail-open verification). This closes the mnemosyne-agent-harness-install
+  epic (aha-01 through aha-05, all complete) on its own feature branch --
+  merge to dev/main follows immediately per the operator's own standing
+  go-ahead this session.
+
+description: |
+  Closes the mnemosyne-agent-harness-install epic (aha-01 through
+  aha-05), mirroring this session's established closing-ticket
+  convention (pf-08, ui-06): a real full-suite regression pass, a
+  version bump, and a CHANGELOG entry.
+
+acceptance_criteria:
+  - "Given the full npm test script (vitest + .mjs subprocess suite) plus tsc --noEmit, when run on this epic's final state, then it completes with only the already-documented pre-existing failures (the 3 POST /remember assertions; test/ui-shell.mjs's 22 failures, confirmed pre-existing this session) -- no NEW failures anywhere"
+  - "Given any NEW failure found, then it is fixed before this ticket completes"
+  - "Given package.json's version field, then it reflects a real minor bump from the version at epic start (0.12.0 -> 0.13.0, matching epic.yaml's version_bump -- new CLI capability + a new public install surface + a new UI feature is more than a patch)"
+  - "Given this ticket's completion note, then it includes the real full test-run output summary and a real confirmation that the shipped README curl command / UI banner commands are byte-identical to what docs/install.sh and bin/mnemosyne-agent.mjs actually do"
+
+steps:
+  - id: implement
+    description: >
+      Run the full npm test + tsc --noEmit against this epic's final
+      state; fix any new failure. Bump package.json/package-lock.json to
+      0.13.0. Write a CHANGELOG.md entry covering the real deliverable:
+      mnemosyne agent init/status (Claude + Codex), the install script,
+      and the UI connect banner.
+    agent: developer
+  - id: review
+    description: >
+      Start the real standalone server, load /ui in a real browser
+      (Playwright), confirm the banner genuinely renders top-and-forefront
+      with real commands, and confirm collapse/reopen works for real.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: .pHive/epics/mnemosyne-ui-redesign/stories/ui-06-release.yaml
+      purpose: "Direct template for this closing ticket's rigor and shape."
+
+files_to_modify:
+  - file: package.json
+    change: "Version bump 0.12.0 -> 0.13.0."
+  - file: package-lock.json
+    change: "Version bump, matching package.json."
+  - file: CHANGELOG.md
+    change: "New entry covering agent init/status, the install script, and the UI banner."
+
+design_decisions: []
+cross_cutting: []
+risks: []

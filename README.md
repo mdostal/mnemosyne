@@ -107,6 +107,19 @@ Mnemosyne fills the **memory capability slot** in Pantheon: one god per capabili
 ## Quickstart
 
 ```bash
+curl -fsSL https://mdostal.github.io/mnemosyne/install.sh | bash
+```
+
+Clones this repo, `npm install`s it, and links `bin/mnemosyne` onto your
+`PATH`. Prints (does not run) `mnemosyne agent init` as a separate next
+step, which registers Mnemosyne as an MCP server with Claude Code / Codex
+CLI and installs its usage skills — see `mnemosyne agent status` to preview
+state first. Safe to re-run (updates the existing clone instead of
+re-cloning).
+
+Manual / dev-clone alternative:
+
+```bash
 gh repo clone mdostal/mnemosyne
 cd mnemosyne
 npm install

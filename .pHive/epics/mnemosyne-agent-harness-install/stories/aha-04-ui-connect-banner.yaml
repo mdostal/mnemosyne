@@ -1,0 +1,297 @@
+id: aha-04-ui-connect-banner
+epic: mnemosyne-agent-harness-install
+title: "Top-and-forefront, collapsible 'connect an agent/harness' UI banner"
+status: complete
+complexity: medium
+methodology: classic
+depends_on: [aha-03-install-script-and-readme]
+
+note_on_completion: >
+  Worktree/branch provenance note (same class of finding aha-02/aha-03
+  documented for their own dispatches): this ticket's dispatched worktree
+  (.claude/worktrees/wf_6c7a3c11-7aa-1) was, at task start, checked out on
+  branch worktree-wf_6c7a3c11-7aa-1 at commit f73f542 (a dev-tip commit --
+  the mnemosyne-ui-redesign v0.12.0 merge -- not 13eb3fc/aha-03 as the
+  dispatch instructions stated; f73f542 IS an ancestor of 13eb3fc, so this
+  was a base-lag, not a divergent/wrong lineage). Created a new branch
+  feat/aha-04-quickstart-banner directly off the real 13eb3fc tip (`git
+  checkout -b feat/aha-04-quickstart-banner 13eb3fc`, inside this same
+  dispatched worktree, never touching the primary checkout) and did all
+  work there. Committed (1 commit, b6fd8ca) and pushed to
+  origin/feat/aha-04-quickstart-banner.
+
+  Implements design-discussion.md §1.4. Banner section added to
+  ui/index.html between </header> and <nav id="jump-chips"> -- confirmed by
+  reading the real, post-v0.12.0-redesign structure first (research-brief.md
+  §3's claim: header -> jump-chips -> main, no existing banner/callout
+  region above the nav, holds exactly as described). Real, copy-pasteable
+  commands in <pre><code id="connect-banner-cmd-install">/
+  <code id="connect-banner-cmd-agent-init"> blocks -- byte-identical to
+  README.md's real Quickstart curl line (aha-03) and to the real
+  `mnemosyne agent init` invocation (bin/mnemosyne's own usage comment,
+  docs/install.sh's own printed next-step line, bin/mnemosyne-agent.mjs) --
+  never hand-typed placeholders. One line names what agent init does
+  (registers the MCP server, installs skills for Claude Code), quoting
+  docs/install.sh's own real printed description rather than paraphrasing
+  independently. A visible #connect-banner-collapse button and an
+  always-DOM-present (never removed, only `hidden`-toggled)
+  #connect-banner-reopen slim strip satisfy "the affordance is NEVER fully
+  removed from the page."
+
+  ui/app.js: confirmed zero pre-existing `localStorage` usage before adding
+  the first one (research-brief.md §3's own finding -- re-verified directly
+  via `data.count('localStorage')` on the raw file bytes, since this
+  repo's `grep` alias is itself ugrep with `-I` (binary-file skip) and
+  silently reports zero matches on this file for an unrelated reason -- see
+  "incidental finding" below). New CONNECT_BANNER_STORAGE_KEY-backed
+  collapse/expand IIFE is fail-open by construction: ui/index.html's own
+  static markup already renders #connect-banner-main fully visible (no
+  `hidden` attribute) and #connect-banner-reopen already `hidden` -- the
+  IIFE only ever ADDS a collapsed state, and only from a real,
+  successfully-read, exact `"1"` stored value; every localStorage access
+  (both the initial read and every write) is in its own try/catch, and the
+  whole init routine is wrapped in a further try/catch, so a missing
+  element or any other unexpected error also just leaves the safe expanded
+  default in place. ui/style.css's new banner rules use only the existing
+  --accent/--bg/--panel-bg/--border/--text/--muted tokens (verified by
+  extracting the new CSS block and regex-scanning every `var(--...)`
+  reference against that allow-list in the automated test below -- found
+  zero disallowed tokens, zero new hardcoded color literals).
+
+  Incidental finding, out of this ticket's scope, reported for
+  traceability (not fixed): ui/app.js contains one literal NUL byte (0x00)
+  at byte offset 56701, inside personaRowKey()'s template literal
+  (`${tier}\x00${scopeId}` where a `\0` escape sequence was almost
+  certainly intended) -- pre-existing before this ticket (confirmed:
+  present in the file as checked out at 13eb3fc, before any edit here).
+  This makes this repo's own `grep` shell function (aliased to ugrep with
+  `-I`, which skips files it detects as binary) silently report zero
+  matches for ANY string in ui/app.js, including plain substrings like
+  "localStorage" or "syncJumpChips" that visibly exist in the file --
+  caught by hand when a `grep -n "syncJumpChips" ui/app.js` returned
+  nothing despite `tail -60 ui/app.js` showing the literal text moments
+  earlier, then confirmed via a raw Python byte-level scan
+  (`b'\x00' in data` -> True). Every source-content check in this ticket's
+  own work (both interactive research and the automated test below) used
+  Node's `readFile()`/regex or Python's raw-byte reads instead of the
+  shell `grep` alias specifically because of this, so this ticket's own
+  conclusions are unaffected -- flagged here only so a future ticket
+  touching personaRowKey() (or anyone's `grep` on ui/app.js) isn't
+  surprised by it.
+
+  New test/connect-banner.mjs (playwright added as a real devDependency,
+  ^1.62.1, package-lock.json regenerated via `npm install` so it's not a
+  phantom entry): 64 checks, all real. Section 0 derives every EXPECTED
+  command string fresh from the real on-disk README.md/docs/install.sh/
+  bin/mnemosyne/bin/mnemosyne-agent.mjs (never a copy pasted into the test
+  by hand) before any comparison runs, so the test cannot pass against a
+  silently-drifted banner just by agreeing with itself. Section 1 (fetch +
+  regex against the real served ui/index.html/ui/style.css, matching
+  test/jump-chip-nav-status-wiring.mjs's established convention) proves
+  real DOM placement order (</header> index < #connect-banner index <
+  <nav id="jump-chips"> index -- structural, not CSS-order), byte-identical
+  embedded commands, the one-line explainer's real content, and token
+  reuse. Section 2 strips the <script> tag out of the served HTML entirely
+  and confirms both real commands are still present and #connect-banner-main
+  is still not `hidden` -- the fail-open/no-JS proof at the markup level.
+  Section 5 (real chromium via the `playwright` package -- the acceptance
+  criteria's own explicit "verified by actually reloading the page in a
+  real browser, not just checking the JS logic in isolation" requirement,
+  which no fetch/regex/new-Function technique can satisfy for a
+  localStorage-persistence claim) proves, all with a real browser engine:
+  first-load expanded with zero prior localStorage state (5a); collapse ->
+  a REAL page.reload() -> stays collapsed -> reopen strip is reachable
+  (proven via the container's own real getBoundingClientRect() PLUS
+  document.elementFromPoint() at that rect's center resolving back to the
+  reopen element itself, per this ticket's own measurement-artifact
+  warning -- never a bare isolated-child-rect claim alone) -> clicking
+  reopen re-expands and a SECOND real reload confirms that direction
+  persists too (5b); a real page with `window.localStorage` overridden via
+  page.addInitScript() to throw SecurityError on every access (the closest
+  a Chromium-based test can get to reproducing Safari private-browsing's
+  real documented behavior without Safari installed) still renders fully
+  expanded with zero uncaught page errors, and the in-memory collapse
+  toggle still works for that page view even though it can't persist
+  (5c); a real page with the actual /ui/app.js network request aborted via
+  page.route() (closest real-browser equivalent of "the script fails to
+  load") still renders both real commands fully expanded from static
+  markup alone, with zero JS having executed at all (5d).
+
+  Verification performed independently this session (held to aha-01/02/03's
+  own established scrutiny):
+    - Read aha-04's full ticket YAML, design-discussion.md §1.4,
+      research-brief.md §3 before writing any code. Read ui/index.html's
+      real current structure (confirmed the exact </header>/<nav
+      id="jump-chips"> insertion point), ui/app.js in full (confirmed zero
+      localStorage usage, and independently discovered the NUL-byte
+      grep-blindspot above), README.md's real Quickstart (confirmed the
+      exact curl text), and bin/mnemosyne/bin/mnemosyne-agent.mjs's real
+      CLI surface (confirmed the exact `mnemosyne agent init`/`mnemosyne
+      agent status` invocation text) before writing the banner markup.
+    - `node test/connect-banner.mjs` standalone: 64/64 checks pass.
+    - Manually drove a real, separately-launched chromium instance via the
+      Playwright MCP tool (independent of the automated test's own
+      chromium instance) against a manually-started `PORT=8611 node
+      src/server.mjs`: confirmed via page.evaluate() real rendered rects
+      (header.bottom <= banner.top <= banner.bottom <= nav.top, using the
+      real DOM/CSSOM, not a structural-only claim) that the banner
+      genuinely renders between the header and the jump-chip nav on
+      screen; confirmed a real click on #connect-banner-collapse hides the
+      body and writes "1" to real localStorage; confirmed, after a real
+      page.goto() reload, the collapsed state and a real, reachable
+      reopen strip (document.elementFromPoint at the strip's own rendered
+      center resolves back to the strip itself); confirmed clicking reopen
+      re-expands and writes "0".
+    - `npm install` (fresh worktree, node_modules absent) then `npm test`:
+      the chain (`&&`-joined) stops at test/http-api.mjs's 3
+      already-documented pre-existing POST /remember failures
+      (ok:true/layer:file default/has provenance) -- confirmed unrelated to
+      this diff by diffing test/http-api.mjs itself against 13eb3fc: byte-
+      identical, this ticket never touched it or its dependencies
+      (src/server.mjs, lib/mnemosyne/*). With the chain's remainder run by
+      hand past that point (matching aha-01/02/03's own documented
+      convention): test/single-layer-config.mjs, test/git-hooks.mjs,
+      test/install-git-hooks.mjs, test/lifecycle-compliance-audit.mjs,
+      test/persona-cli.mjs, test/agent-cli.mjs, test/install-script.mjs --
+      all pass. `npx vitest run lib/mnemosyne lib/minerva benchmarks
+      src/planning src/config src/runners`: 54 test files / 727 tests, all
+      pass. `npx tsc --noEmit`: clean, zero output.
+    - Ran test/jump-chip-nav-status-wiring.mjs as regression diligence
+      (this ticket's new banner sits directly above that nav bar): still
+      100% pass, confirming the insertion didn't disturb the nav's own
+      placement/wiring checks.
+    - Ran test/ui-shell.mjs as extra diligence (not part of npm test's
+      chain, matching this epic's own established convention): 22
+      failures, identical count to aha-01/02/03's own documented
+      pre-existing baseline.
+  No new failures anywhere beyond the two already-documented pre-existing
+  gaps (http-api.mjs's 3 POST /remember failures, ui-shell.mjs's 22
+  failures).
+
+  Known, accepted risk (per this ticket's own risks: block, restated for
+  traceability): the two commands are hardcoded strings in ui/index.html,
+  duplicated from README.md/docs/install.sh/bin/mnemosyne rather than
+  templated from a single source (no build step exists in this zero-build
+  app to do that cleanly) -- test/connect-banner.mjs's Section 0 is the
+  mitigation, cross-checking the banner's literal text against those real
+  files' actual content on every test run, so any future drift between the
+  banner and the real commands fails the test loudly rather than going
+  unnoticed.
+
+  Independent verification (orchestrating session, before merge): noted the
+  builder added a real new devDependency (playwright ^1.62.1) rather than
+  relying only on static assertions -- a deliberate, well-justified choice
+  given this ticket's own acceptance criteria explicitly require a real
+  page reload and real localStorage persistence, neither provable by
+  regex/fetch alone; confirmed test/connect-banner.mjs's own header comment
+  states this reasoning explicitly, not just assumed it. Ran
+  test/connect-banner.mjs myself in full: all checks pass, including the
+  real page.reload() persistence proof, a real elementFromPoint
+  reachability check on the reopen control, and two separate real fail-open
+  proofs (localStorage throwing, and /ui/app.js aborted entirely). Ran the
+  full suite: tsc clean, 54/54 vitest files, 727/727 tests, .mjs suite
+  clean except the 3 pre-existing POST /remember failures. Did my own
+  additional real browser check via a fresh server + Playwright: confirmed
+  live geometry (header bottom 86.55px == banner top 86.55px == banner
+  bottom 336.49px == nav top 336.49px -- genuinely contiguous, no gap, no
+  overlap) and confirmed the rendered command text is byte-identical to the
+  real curl/agent-init commands.
+
+description: |
+  Implements design-discussion.md §1.4. A new, real banner section in
+  ui/index.html, placed between </header> and <nav id="jump-chips"> (the
+  real first available slot below the title bar, above even navigation --
+  research-brief.md §3 confirms this is genuinely new territory, no
+  existing banner/callout region to repurpose). Shows the real curl
+  install command (aha-03) and the real `mnemosyne agent init` command in
+  a copy-pasteable code block, plus one line naming what agent init does.
+  Collapsible, but the collapse control always stays reachable -- a
+  persistent localStorage-backed state, never a one-time dismiss that
+  deletes the affordance.
+
+acceptance_criteria:
+  - "Given a first-time page load (no localStorage state), when the page renders, then the banner is expanded and visible, positioned between the header and the jump-chip nav -- the literal first thing below the title bar"
+  - "Given the banner's real content, then it shows the ACTUAL curl command from aha-03's docs/install.sh (not a placeholder/example URL) and the actual `mnemosyne agent init` command, both in a real copy-pasteable <code>/<pre> block"
+  - "Given the operator clicks the banner's collapse control, when the page is reloaded afterward, then the banner starts collapsed (a slim, single-line reopenable strip) -- state persisted via localStorage, verified by actually reloading the page in a real browser, not just checking the JS logic in isolation"
+  - "Given the banner is collapsed, then a reopen control is still genuinely visible and clickable -- clicking it re-expands the banner and updates localStorage accordingly. The affordance is NEVER fully removed from the page, only ever collapsed to a slim strip."
+  - "Given the banner (expanded or collapsed), then it never depends on JavaScript for its BASIC content to be visible -- if the collapse/expand script fails to load or errors, the banner defaults to expanded (fail open, matching horizontal-plan's established cross-cutting rule from the ui-redesign epic: nothing in this shell may become invisible because of a JS failure)"
+  - "Given the banner's visual styling, then it reuses ui/style.css's existing --accent/--bg/--panel-bg/--border/--text tokens (post ui-01's amber-gold reconciliation) -- no new, uncoordinated color palette introduced"
+
+steps:
+  - id: research
+    description: >
+      Read ui/index.html's real current structure between </header> and
+      <nav id="jump-chips"> to confirm the exact insertion point. Read
+      ui/app.js to confirm zero existing localStorage usage (research-brief.md
+      §3) before adding the first one. Read docs/install.sh (aha-03) for
+      the exact, real command text to embed.
+    agent: researcher
+  - id: implement
+    description: >
+      Add the banner markup to ui/index.html (real commands, real copy
+      button if feasible, real collapse control). Add
+      localStorage-backed collapse/expand logic to ui/app.js, fail-open
+      by default (defaults to expanded if the script errors or
+      localStorage is unavailable -- e.g. private browsing). Add banner
+      styles to ui/style.css using existing tokens only.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: >
+      Real test proving: first-load expanded state; collapse persists
+      across a real page reload (via a real browser, not just unit logic);
+      reopen control stays reachable and functional when collapsed; the
+      banner's core content renders even with the collapse script
+      stripped/disabled (fail-open proof, matching this epic's own
+      established no-JS-dependency discipline from the ui-redesign epic).
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: >
+      Confirm placement is genuinely the first thing below the header
+      (not just visually appearing that way via CSS order while being
+      structurally elsewhere). Confirm the embedded commands are the
+      REAL ones from aha-03, not hardcoded placeholders that could drift.
+      Confirm fail-open behavior for the collapse script.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: ui/index.html
+      purpose: "Real current <header>/<nav id=\"jump-chips\"> structure (post v0.12.0) -- the exact insertion point for this ticket's new banner."
+    - path: ui/app.js
+      purpose: "Zero existing localStorage usage (confirmed) -- this ticket's collapse-state persistence is genuinely new, must be added carefully (fail-open on any error)."
+
+files_to_modify:
+  - file: ui/index.html
+    change: "New banner section between </header> and <nav id=\"jump-chips\">."
+  - file: ui/app.js
+    change: "New localStorage-backed collapse/expand logic, fail-open by default."
+  - file: ui/style.css
+    change: "New banner styles, reusing existing tokens only."
+
+design_decisions:
+  - decision: "Collapse persists via localStorage; the reopen control is always reachable, never a one-time dismiss."
+    rationale: "design-discussion.md §1.4's resolution of research-brief.md's open question 3 -- the more conservative, more recoverable reading of 'collapse it after the first time,' consistent with this session's established 'never make information un-reachable' bias from the ui-redesign epic."
+  - decision: "Fails open (defaults to expanded) if the collapse script errors or localStorage is unavailable."
+    rationale: "Matches the ui-redesign epic's own hard cross-cutting rule (horizontal-plan.md) that no panel/content's basic visibility may depend on JavaScript running -- this banner is the FIRST thing an operator sees and is exactly the wrong place to silently fail invisible."
+
+cross_cutting: []
+
+risks:
+  - severity: low
+    description: "Embedding the install command as a hardcoded string risks drifting from aha-03's real script if either changes independently later."
+    mitigation: "Note in the completion note exactly where the command is duplicated, as a known, accepted small risk (no dynamic cross-file templating exists in this zero-build-step app to avoid it cleanly) -- future edits to the install command must remember to update both."
+
+references:
+  - path: .pHive/epics/mnemosyne-agent-harness-install/docs/design-discussion.md
+    relevant_excerpt: |
+      "§1.4... Placement: between </header> and <nav id=\"jump-chips\">...
+      collapse persists across page loads once the operator has collapsed
+      it themselves... a manual reopen control is *always* reachable."

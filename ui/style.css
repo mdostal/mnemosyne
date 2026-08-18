@@ -71,6 +71,106 @@ h1 {
 #refresh-btn:hover { opacity: 0.9; }
 #refresh-btn:disabled { opacity: 0.5; cursor: default; }
 
+/* aha-04-ui-connect-banner (epic: mnemosyne-agent-harness-install): real
+   first slot below <header>, above even <nav id="jump-chips">
+   (ui/index.html). Token reuse only -- --accent/--bg/--panel-bg/--border/
+   --text/--muted, the exact same 6-token set every other panel already
+   draws from (post ui-01's amber-gold reconciliation) -- no new,
+   uncoordinated color palette introduced. Presentation only: nothing here
+   is `display: none` in the static stylesheet -- the expanded/collapsed
+   split is driven entirely by the `hidden` attribute ui/app.js's
+   initConnectBanner() toggles (or, with JS off/erroring, by
+   ui/index.html's own static default -- see that file's comment). */
+.connect-banner {
+  background: var(--panel-bg);
+  border-bottom: 1px solid var(--border);
+  padding: 1rem 1.5rem;
+}
+
+.connect-banner-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.connect-banner-header h2 {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+#connect-banner-body {
+  margin-top: 0.75rem;
+}
+
+#connect-banner-body p {
+  margin: 0 0 0.6rem;
+  color: var(--text);
+  font-size: 0.88rem;
+}
+
+#connect-banner-body pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.6rem 0.85rem;
+  margin: 0 0 0.6rem;
+  overflow-x: auto;
+}
+
+#connect-banner-body pre code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  color: var(--text);
+  white-space: pre;
+}
+
+#connect-banner-body p.connect-banner-hint {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.connect-banner-hint code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted);
+}
+
+#connect-banner-collapse {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#connect-banner-collapse:hover { color: var(--text); border-color: var(--accent); }
+
+/* Collapsed strip: a slim, ALWAYS-reachable one-line reopen control -- never
+   removed from the DOM (see ui/index.html's comment), only ever toggled
+   with #connect-banner-main via the `hidden` attribute so exactly one of
+   the two is visible at a time. */
+#connect-banner-reopen {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: var(--panel-bg);
+  color: var(--accent);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  padding: 0.5rem 1.5rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#connect-banner-reopen:hover,
+#connect-banner-reopen:focus-visible { color: var(--text); outline: none; }
+
 /* ui-03-jump-chip-nav-and-status-wiring: sticky jump-chip nav, directly
    under <header> (index.html). Every chip is a real <a href="#id"> anchor
    -- this block is presentation only, never `display: none` on anything a

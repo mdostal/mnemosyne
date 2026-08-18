@@ -1,6 +1,6 @@
 {
   "name": "mnemosyne",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "private": true,
   "description": "Pantheon's Memory god — thin HTTP service wrapping the swarm-memory engine over the Qdrant SSOT (recall / remember / scopes / health).",
   "type": "module",
@@ -18,7 +18,7 @@
   },
   "scripts": {
     "start": "node src/server.mjs",
-    "test": "node test/bundle.mjs && node test/inject.mjs && node test/write-through.mjs && node test/health-drift.mjs && node test/code-graph.mjs && node test/reindex.mjs && node test/vector.mjs && node test/parallel-keyword.mjs && node test/keyword-recall-regression.mjs && node test/recall-status-filtering.mjs && node test/layer1-mandate-hook.mjs && node test/review-auto-merge.mjs && node test/http-api.mjs && node test/single-layer-config.mjs && node test/git-hooks.mjs && node test/install-git-hooks.mjs && node test/lifecycle-compliance-audit.mjs && node test/persona-cli.mjs && vitest run lib/mnemosyne lib/minerva benchmarks src/planning src/config src/runners",
+    "test": "node test/bundle.mjs && node test/inject.mjs && node test/write-through.mjs && node test/health-drift.mjs && node test/code-graph.mjs && node test/reindex.mjs && node test/vector.mjs && node test/parallel-keyword.mjs && node test/keyword-recall-regression.mjs && node test/recall-status-filtering.mjs && node test/layer1-mandate-hook.mjs && node test/review-auto-merge.mjs && node test/http-api.mjs && node test/single-layer-config.mjs && node test/git-hooks.mjs && node test/install-git-hooks.mjs && node test/lifecycle-compliance-audit.mjs && node test/persona-cli.mjs && node test/agent-cli.mjs && node test/install-script.mjs && vitest run lib/mnemosyne lib/minerva benchmarks src/planning src/config src/runners",
     "smoke": "node test/smoke.mjs",
     "test:e2e": "tsx test/e2e.mjs",
     "test:hooks": "node test/hooks.mjs",
@@ -40,10 +40,13 @@
     "test:layer1-mandate-hook": "node test/layer1-mandate-hook.mjs",
     "test:reindex": "node test/reindex.mjs",
     "test:persona-cli": "node test/persona-cli.mjs",
+    "test:agent-cli": "node test/agent-cli.mjs",
+    "test:install-script": "node test/install-script.mjs",
     "test:parallel-keyword": "node test/parallel-keyword.mjs",
     "test:keyword-recall-regression": "node test/keyword-recall-regression.mjs",
     "test:ui": "node test/ui-shell.mjs",
     "test:jump-chip-nav": "node test/jump-chip-nav-status-wiring.mjs",
+    "test:connect-banner": "node test/connect-banner.mjs",
     "test:add-lane": "node test/add-lane.mjs",
     "test:lanes-route": "node test/lanes-route.mjs",
     "test:search-route": "node test/search-route.mjs",
@@ -64,6 +67,7 @@
     "@types/node": "^20.19.43",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
+    "playwright": "^1.62.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   },

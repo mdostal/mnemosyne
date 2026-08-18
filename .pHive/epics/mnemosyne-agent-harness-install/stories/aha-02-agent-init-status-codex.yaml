@@ -1,0 +1,333 @@
+id: aha-02-agent-init-status-codex
+epic: mnemosyne-agent-harness-install
+title: "mnemosyne agent init/status -- Codex CLI harness (MCP registration)"
+status: complete
+complexity: medium
+methodology: classic
+depends_on: [aha-01-agent-init-status-claude]
+
+note_on_completion: >
+  Extended bin/mnemosyne-agent.mjs (aha-01's real, shipped file -- not a new
+  file) with a parallel Codex CLI harness: codexMcpRegistered()/
+  registerMcpCodex()/initCodex()/statusCodex()/printCodexStatus(), wired into
+  the same runInit()/runStatus()/--harness dispatch aha-01 built. No skill
+  install for Codex (confirmed, research-brief.md §4: no analogous
+  skill-file mechanism) -- MCP registration only.
+
+  Unlike aha-01's own planning-time uncertainty about Codex, this ticket's
+  orchestrating session had ALREADY directly, hand-verified the real,
+  installed Codex CLI (codex-cli 0.143.0, already on PATH) before dispatch,
+  and this session independently re-verified that command surface by hand
+  before writing any code (`codex mcp --help`, `codex mcp add --help`,
+  `codex mcp get --help`, `codex mcp list --help`, and real calls against an
+  isolated $CODEX_HOME):
+    - `codex mcp add <NAME> -- <COMMAND>...` is real and registers a stdio
+      MCP server, same `--` separator shape as `claude mcp add`. One real,
+      material difference from Claude found by hand: unlike `claude mcp add`
+      (which errors non-zero on an already-registered name), `codex mcp add`
+      does NOT error on a second call for the same name -- it silently
+      OVERWRITES the existing entry's command/args. Confirmed by calling it
+      twice with different fake command paths and reading back `codex mcp
+      get` in between. This is not a "command shape mismatch" (the command
+      itself behaves exactly as documented) but it does change WHY the
+      check-before-write guard matters for Codex: not to avoid an error (as
+      for Claude) but to avoid a real, silent, redundant re-write on every
+      `init` run. Documented in bin/mnemosyne-agent.mjs's own header comment
+      and registerMcpCodex()'s doc comment so a future editor doesn't miss
+      it.
+    - `codex mcp get <NAME>` is the real, single-server targeted lookup
+      (exit 0 + prints command/args/scope when found; exit 1 + "No MCP
+      server named '<NAME>' found." when not) -- used as the ONLY
+      registration check, exactly per this ticket's acceptance criteria.
+      `codex mcp list` exists and works (confirmed) but is never invoked for
+      the check -- test/agent-cli.mjs's AC-codex-targeted block
+      independently re-verifies this by grepping codexMcpRegistered()'s own
+      function body in the real source (isolated by function-boundary
+      slicing, not just a whole-file regex) for `["mcp","get",` and asserts
+      `["mcp","list"` never appears anywhere in the file.
+    - $CODEX_HOME resolution confirmed by hand: `codex --help`'s own text
+      ("Layer $CODEX_HOME/<name>.config.toml on top of the base user
+      config") plus a real, direct test -- pointing $CODEX_HOME at a fresh
+      empty mkdtemp() directory produces a brand-new config.toml there
+      (`[mcp_servers.<name>]\ncommand = "..."\nargs = [...]`) with zero
+      interaction with the real ~/.codex/. Also confirmed, unlike Claude
+      Code's real project-scoped-.mcp.json/CWD bug (the exact bug aha-01's
+      own HARNESS_EXEC_CWD fix addresses): Codex's `mcp get`/`mcp add` do
+      NOT resolve anything from CWD -- ran `codex mcp get` from both a
+      throwaway tmp dir and this repo's own root against the same
+      $CODEX_HOME and got byte-identical output both times. HARNESS_EXEC_CWD
+      is still applied to Codex's execs for consistency with the Claude
+      side, not because Codex needs the fix.
+
+  No command-shape mismatch was found anywhere -- everything the epic's
+  design-discussion.md §2 flagged as "unverified, real risk" turned out to
+  match on direct, hand-run verification. The "loud failure, never silent"
+  requirement is still implemented as defensive code, not just documentation:
+  registerMcpCodex() wraps its `codex mcp add` call in try/catch and, on any
+  failure OTHER than what codexMcpRegistered()'s own prior check already
+  ruled out (i.e. any failure once the caller believes registration is
+  needed), rethrows a new Error naming the exact command
+  (`codex mcp add <name> -- node <path>`) and the real subprocess stderr, so
+  a future genuine command-shape divergence would surface as a specific,
+  non-zero-exit failure via main()'s own top-level catch -- never swallowed
+  into a generic "codex not available" skip. A harness genuinely ABSENT from
+  PATH (the normal, expected case, not a mismatch) is handled separately and
+  is never fatal, symmetric with aha-01's own Claude-side absent-binary
+  handling -- verified for real in this session (see below) via a real PATH
+  override excluding both `claude` and `codex`.
+
+  Extended test/agent-cli.mjs (not a new file) with real subprocess-level
+  Codex coverage, matching its own established pattern and $HOME-isolation
+  discipline but for Codex/$CODEX_HOME: AC-codex-targeted (source-level,
+  function-scoped `mcp get` vs `mcp list` proof), AC-codex-register
+  (first-run `agent init --harness codex` registers via the real installed
+  codex CLI, independently re-verified via a SEPARATE, direct `codex mcp
+  get` call reporting the real absolute bin/mnemosyne-mcp.mjs path),
+  AC-codex-idempotent (second run reports "already registered", makes zero
+  redundant writes -- $CODEX_HOME/config.toml byte-for-byte unchanged --
+  notable because this genuinely tests OUR check-before-write guard rather
+  than leaning on `codex mcp add`'s own idempotency, since it has none),
+  AC-codex-status (status before/after `agent init --harness codex`
+  genuinely differs, and a `status` call itself makes zero writes to
+  $CODEX_HOME -- config.toml snapshot identical before/after, plus an
+  independent re-check via a direct `codex mcp get` call), `--harness codex`
+  narrowing scope (both directions -- `--harness claude` mentions no codex
+  text, `--harness codex` mentions no claude harness-report line), and the
+  targeted-get-never-list requirement (grepped against codexMcpRegistered()'s
+  own isolated function body, not just the whole file, so a future codex
+  function that legitimately needs `mcp list` for an unrelated purpose
+  wouldn't false-fail this check). Also added AC-both-absent-ok: with a real
+  PATH override to an empty directory (confirmed containing neither `claude`
+  nor `codex` -- and confirmed FIRST, via a real sanity check, that this
+  machine's actual codex CLI genuinely resolves normally without the
+  override, so the "absent" branch is exercised via a deliberate override,
+  not because codex happens to be missing here), both `agent init` and
+  `agent status` (no --harness) exit 0 and print clear, honest per-harness
+  "binary not found on PATH" messages -- never a hard failure just because
+  both harnesses are absent.
+
+  CRITICAL, session-wide isolation fix made while writing these tests: once
+  Codex became a REAL (not placeholder) harness, aha-01's own existing
+  Claude-focused test blocks -- which call `agent init`/`agent status` with
+  no --harness flag -- now genuinely sweep Codex too. Before this ticket,
+  those blocks only ever set $HOME; if left unchanged, the default sweep
+  would have run the real `codex` CLI against whatever $CODEX_HOME the test
+  process inherited, i.e. THIS OPERATOR'S REAL ~/.codex/config.toml, on
+  every single existing Claude-focused test run -- a genuine, session-wide
+  regression risk this ticket introduced and then fixed. Fixed by changing
+  test/agent-cli.mjs's shared runCli() helper so $CODEX_HOME is now ALWAYS
+  set on every invocation -- explicitly, when a test block passes one, or
+  via an automatic fresh mkdtemp() fallback otherwise -- making it
+  structurally impossible for ANY test block (old or new) to fall through to
+  the real ~/.codex/. Verified directly, not just trusted: `codex mcp list`
+  and `codex mcp get mnemosyne`, run for real against this operator's actual
+  environment after the FULL test suite (including every pre-existing
+  Claude-focused block) had completed, show only the two real, pre-existing
+  servers (portunus, posthog) and report "No MCP server named 'mnemosyne'
+  found." -- zero leakage. Also re-confirmed `~/.claude/skills/` (Claude
+  side, aha-01's own concern, re-checked here since this ticket re-ran that
+  full suite too) has no mnemosyne-standalone/mnemosyne-persona-interview
+  entries, and `claude mcp get mnemosyne` from a neutral cwd (/tmp, not this
+  repo) reports no such server among this operator's real configured
+  servers.
+
+  Verification performed independently this session (this ticket touches
+  real machine state on TWO harnesses, held to the same highest scrutiny as
+  aha-01):
+    - Read the full aha-02 ticket YAML, aha-01's own completion note (for
+      expected depth), bin/mnemosyne-agent.mjs end to end (HARNESS_EXEC_CWD
+      comment, mcpRegistered()/registerMcp() for Claude, --harness flag
+      handling), and design-discussion.md/research-brief.md's Codex-specific
+      sections before writing any code.
+    - Hand-verified the real installed codex CLI's actual command surface
+      (`codex --help`, `codex mcp --help`, `codex mcp add/get/list --help`)
+      and its real, live behavior against a series of isolated
+      mkdtemp()-based $CODEX_HOME directories (add, get, get on a
+      nonexistent name, double-add overwrite behavior, CWD-independence,
+      detectBinary's ENOENT-vs-found distinction via a genuinely nonexistent
+      command) -- BEFORE implementing, per this ticket's own "research"
+      step, not after.
+    - Manually smoke-tested initCodex()/statusCodex() directly (via
+      `node -e` with process.env.HOME/CODEX_HOME pinned to fresh temp dirs)
+      before writing the full test file: first registration, independent
+      `codex mcp get` re-verification reporting the real absolute path, and
+      idempotent second run (config.toml mtime unchanged).
+    - `node test/agent-cli.mjs` run standalone: all checks pass (both
+      Claude and Codex sections).
+    - `npm install` (node_modules absent in this fresh worktree) then
+      `npm test`: the chain (`&&`-joined) stops at test/http-api.mjs's 3
+      already-documented pre-existing POST /remember failures before
+      reaching test/persona-cli.mjs, test/agent-cli.mjs, or the vitest
+      suite -- confirmed pre-existing and unrelated to this diff by
+      `git stash`-ing this ticket's changes and re-running
+      test/http-api.mjs directly against the unmodified base commit
+      (39245c1, aha-01's own merge commit): identical 3 failures, identical
+      assertions. With the stash restored, ran the remainder of npm test's
+      own chain directly: `node test/persona-cli.mjs` (all pass),
+      `node test/agent-cli.mjs` (all pass), and
+      `npx vitest run lib/mnemosyne lib/minerva benchmarks src/planning src/config src/runners`
+      (54 test files / 727 tests, all pass). Also ran test/ui-shell.mjs as
+      extra diligence (not part of npm test's chain, per this session's own
+      established convention): 22 failures, identical count to aha-01's own
+      documented pre-existing baseline, and this ticket touches no ui/ file
+      at all.
+    - `npx tsc --noEmit`: clean, zero output.
+  No new failures anywhere beyond the two already-documented pre-existing
+  gaps. Committed and pushed to a new branch (this worktree's original base
+  commit -- 39245c1 -- was aha-01's own real merge tip; see this ticket's own
+  worktree-provenance note below for why a fresh branch was created off it
+  rather than reusing feat/mnemosyne-agent-harness-install directly).
+
+  Worktree/branch provenance note (environment-integrity finding, reported
+  for traceability): this ticket's dispatched worktree
+  (.claude/worktrees/wf_31251815-194-1) was, at task start, actually checked
+  out on branch `worktree-wf_31251815-194-1` at commit f73f542 (a `dev`-tip
+  commit, NOT 39245c1/aha-01 as the dispatch instructions stated) --
+  `.pHive/epics/mnemosyne-agent-harness-install/` and bin/mnemosyne-agent.mjs
+  did not exist there. The real feat/mnemosyne-agent-harness-install branch
+  at 39245c1 was confirmed to exist (both locally, checked out in this
+  repo's own primary working directory, and on origin) with the expected
+  aha-01 content. Rather than proceeding against the wrong base or touching
+  the primary working directory's already-checked-out branch, created a new
+  branch `aha-02-agent-init-status-codex` off the real 39245c1 tip, inside
+  this same dispatched worktree, and did all work there.
+
+  Final CRITICAL safety check, done directly against this operator's REAL
+  machine (not just trusting the tests' own isolation claims), after the
+  full test run above:
+    - `codex mcp list` (real, default $CODEX_HOME) -> shows exactly this
+      operator's 2 real, pre-existing servers (portunus, posthog) -- no
+      "mnemosyne" entry.
+    - `codex mcp get mnemosyne` (real, default $CODEX_HOME) -> "Error: No
+      MCP server named 'mnemosyne' found." (exit 1) -- confirms the targeted
+      check itself, run for real outside any test, finds nothing leaked.
+    - `ls ~/.claude/skills/` -> no mnemosyne-standalone or
+      mnemosyne-persona-interview entries (only this operator's real,
+      unrelated pre-existing skills).
+    - `claude mcp get mnemosyne` (run from /tmp, a neutral cwd, not this
+      repo) -> "No MCP server named \"mnemosyne\"" among this operator's
+      real configured servers.
+  This operator's real Claude Code AND Codex CLI environments are genuinely
+  untouched.
+
+  Independent verification (orchestrating session, before merge): the
+  orchestrating session had already directly verified the real, installed
+  codex CLI's command surface on this machine before dispatch (codex-cli
+  0.143.0, `codex mcp add/get/list --help`) and handed the builder that
+  real syntax rather than letting them guess -- the builder's own
+  hand-verified findings (the "add silently overwrites, doesn't error"
+  behavior; $CODEX_HOME, not $HOME, drives config resolution; no CWD-based
+  project-scope bug unlike Claude's) were independently spot-checked here
+  and confirmed accurate. Read the real bin/mnemosyne-agent.mjs diff
+  directly: confirmed the targeted `codex mcp get` check (never `list`) is
+  real and commented, confirmed the check-before-write guard is genuinely
+  load-bearing for idempotency (not just error-avoidance, since `codex mcp
+  add` itself doesn't error on a dupe), confirmed loud-failure error
+  messaging names the exact command and real subprocess stderr on any
+  OTHER failure. Ran test/agent-cli.mjs's real subprocess suite myself: all
+  checks pass, including the explicit proof that the idempotent no-op on a
+  second `init` run is the check-before-write guard's own doing, not
+  something the underlying Codex CLI provides for free. Ran the full
+  suite: tsc clean, 54/54 vitest files, 727/727 tests, .mjs suite clean
+  except the 3 pre-existing POST /remember failures.
+
+  CRITICAL safety check, done directly against this operator's REAL
+  machine both before dispatch and again after this ticket's full test
+  run: `codex mcp list` shows only the real, pre-existing `portunus` and
+  `posthog` servers both times, byte-for-byte identical -- no leaked
+  "mnemosyne" entry from any test run. This operator's real Codex CLI
+  environment is genuinely untouched.
+
+description: |
+  Implements design-discussion.md §1.1/§2 for the Codex CLI harness --
+  the higher-risk half, since (per research-brief.md §4) nothing in this
+  repo or a locally-available reference confirms Codex CLI's exact
+  MCP-registration/targeted-lookup command shape. Extends
+  bin/mnemosyne-agent.mjs (built in aha-01) with Codex detection +
+  registration; no skill install for Codex (confirmed: Codex CLI has no
+  analogous skill-file mechanism).
+
+acceptance_criteria:
+  - "Given `mnemosyne agent init` (or `--harness codex`) run on a machine with the codex CLI on PATH, when it completes, then Codex's own MCP config genuinely lists mnemosyne's MCP server -- verified against the REAL installed codex CLI's real config output, not assumed from Claude's own command shape"
+  - "Given the codex CLI is NOT on PATH, when `mnemosyne agent init` runs with no --harness flag, then Claude Code registration (aha-01) still completes normally and Codex is skipped with a clear, honest message -- never a hard failure just because one of two possible harnesses is absent"
+  - "Given codex's real MCP-registration command differs from what this ticket assumed (a real risk per design-discussion.md §2's own named risk), then the failure is LOUD and specific (names the exact command that failed and why), never a silent no-op -- matching this repo's own SERVICE.md 'loud failure is a hard requirement' convention"
+  - "Given `mnemosyne agent status --harness codex`, then it reports real registration state via a targeted, single-server lookup (the Codex equivalent of `claude mcp get`, not a full-list health-check-everything equivalent) -- same anti-pattern avoidance as aha-01's Claude-side fix, applied to Codex specifically"
+  - "Given `mnemosyne agent init` run twice against a real Codex CLI, then the second run is a real no-op (idempotent), not a duplicate registration or an error"
+
+steps:
+  - id: research
+    description: >
+      Investigate the actually-installed codex CLI on this machine (if
+      present -- check `which codex`/`codex --help` for real, live
+      command surface) for its real MCP-registration and single-server
+      lookup command shape. If codex CLI is not installed on this
+      machine, document that gap explicitly and implement against the
+      operator's own reported Portunus precedent as a documented
+      best-effort, per design-discussion.md §2's risk mitigation --
+      do not silently skip Codex support or narrow scope without saying
+      so in the completion note.
+    agent: researcher
+  - id: implement
+    description: >
+      Extend bin/mnemosyne-agent.mjs with Codex detection, registration,
+      and status reporting, using the real command shape found in
+      research (or the documented best-effort if codex CLI wasn't
+      locally available to verify against). Loud, specific failure
+      messaging on any command-shape mismatch.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: >
+      Real subprocess test against the actual codex CLI if present on
+      this machine. If codex CLI is genuinely unavailable in this
+      sandbox, write the test to skip gracefully with a clear, logged
+      reason (never silently passing as if it ran) -- and say so
+      explicitly in the completion note rather than claiming full
+      coverage.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: >
+      Confirm the --harness claude/codex flag genuinely narrows scope for
+      both harnesses (not just Claude, per aha-01). Confirm failure
+      messaging is loud and specific, not swallowed. Confirm the
+      completion note is honest about what was/wasn't verifiable in this
+      environment.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: bin/mnemosyne-agent.mjs
+      purpose: "Built by aha-01 -- this ticket extends it with the Codex harness path, not a separate file."
+
+files_to_modify:
+  - file: bin/mnemosyne-agent.mjs
+    change: "Codex CLI detection, MCP registration, and status reporting."
+
+design_decisions:
+  - decision: "No skill install for Codex CLI."
+    rationale: "Confirmed no analogous skill-file mechanism exists for Codex, per research-brief.md §4 -- MCP registration only."
+  - decision: "Loud, specific failure on command-shape mismatch rather than a silent no-op."
+    rationale: "design-discussion.md §2's own named risk mitigation -- Codex's exact command surface is unverified locally, so a wrong assumption must fail visibly, not silently claim success."
+
+cross_cutting: []
+
+risks:
+  - severity: high
+    description: "Codex CLI's real command shape may differ from what's implemented here, since it could not be independently verified against Portunus's actual source (unavailable in the local checkout, per research-brief.md §1)."
+    mitigation: "Loud failure requirement above; document exactly what was/wasn't verified in this environment in the completion note, so a human can quickly confirm or correct the Codex-specific commands."
+
+references:
+  - path: .pHive/epics/mnemosyne-agent-harness-install/docs/design-discussion.md
+    relevant_excerpt: |
+      "§2... Codex CLI's exact MCP-registration and targeted-lookup command
+      shape is unverified locally... implement Codex support against the
+      operator's own reported Portunus pattern... with a loud, explicit
+      failure message... if the actual installed Codex CLI's command
+      surface differs."
