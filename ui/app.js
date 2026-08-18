@@ -1236,6 +1236,32 @@ function memoryLevelsCell(text) {
   return td;
 }
 
+// ui-01-accent-token-reconciliation: the Status column's real color-coded
+// cell -- a level the server reports as NOT configured (levels.ts's own
+// live existsSync/adapter-presence checks; see server.ts's "GET
+// /memory-levels" route) has no real store backing it right now, which is
+// a genuine health failure for that memory level, not a pending-review
+// state. It renders with .status-pill.degraded (red, var(--fail)) --
+// a distinct class from .status-pill.needs-review (amber), which this
+// table never uses at all; "needs review" belongs to a persona draft
+// awaiting human review elsewhere in this app, a different concern
+// entirely. A configured level renders .status-pill.live (green) instead.
+function memoryLevelStatusCell(level) {
+  const td = document.createElement("td");
+  const configured = !!(level && level.configured);
+  const pill = document.createElement("span");
+  pill.className = `status-pill ${configured ? "live" : "degraded"}`;
+  pill.textContent = configured ? "Active" : "Degraded";
+  td.appendChild(pill);
+  if (level && typeof level.activeInCascade === "boolean") {
+    const detail = document.createElement("span");
+    detail.className = "memory-level-cascade-detail";
+    detail.textContent = level.activeInCascade ? " active in cascade" : " inactive in cascade";
+    td.appendChild(detail);
+  }
+  return td;
+}
+
 // Renders a persona's parentRefs as pointer-only text ("tier: scopeId",
 // comma-separated), built entirely from fields already present on the
 // persona record itself -- this function never fetches anything. This is
@@ -2275,9 +2301,7 @@ async function loadMemoryLevels() {
       tr.appendChild(memoryLevelsCell(l && l.id != null ? String(l.id) : "?"));
       tr.appendChild(memoryLevelsCell(l && l.label ? String(l.label) : "?"));
       tr.appendChild(memoryLevelsCell(l && l.storeType ? String(l.storeType) : "?"));
-      const configured = l && l.configured ? "configured" : "not configured";
-      const active = l && typeof l.activeInCascade === "boolean" ? (l.activeInCascade ? ", active" : ", inactive") : "";
-      tr.appendChild(memoryLevelsCell(`${configured}${active}`));
+      tr.appendChild(memoryLevelStatusCell(l));
       memoryLevelsTbodyEl.appendChild(tr);
     });
     memoryLevelsTableEl.hidden = false;

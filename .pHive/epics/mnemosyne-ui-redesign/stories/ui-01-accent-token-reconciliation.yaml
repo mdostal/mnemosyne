@@ -1,10 +1,40 @@
 id: ui-01-accent-token-reconciliation
 epic: mnemosyne-ui-redesign
 title: "Migrate --accent to amber-gold + fix status-pill/graph-node color-semantics bugs"
-status: planned
+status: complete
 complexity: low
 methodology: classic
 depends_on: []
+
+note_on_completion: >
+  The dispatched builder agent completed the real work but died mid-response
+  on a transient API server error before it could commit -- the orchestrating
+  session found the real, complete, uncommitted diff still in the worktree
+  and independently verified + finished it rather than discarding good work.
+  Verified directly: --accent is #D8A84E in ui/style.css:14, with the only
+  remaining "7aa2f7" reference being an explanatory code comment (line 11),
+  confirmed via grep across ui/ that no live CSS/JS rule uses the old value.
+  .status-pill.degraded (red, var(--fail)) is genuinely distinct from
+  .status-pill.needs-review (amber) and is wired into a new
+  memoryLevelStatusCell() in ui/app.js that derives "Degraded" vs "Active"
+  from the real server-reported level.configured field -- never fabricated.
+  --node-selected/--node-focus alias to var(--fail)/var(--pass) with an
+  honest comment (ui/style.css:15) stating this is a deliberate operator
+  choice, not a disguised "fix" -- the exact overclaiming mistake round-2
+  review caught in the reference mockup is not repeated here.
+
+  tsc --noEmit clean. Full npm test suite (the real, documented acceptance
+  contract) re-run after `npm install` (the worktree's node_modules was
+  initially absent, a known fresh-worktree artifact from earlier this
+  session): only the 3 already-documented pre-existing POST /remember
+  failures, nothing new. Additionally ran test/ui-shell.mjs (NOT part of
+  npm test's actual script chain, run as extra diligence) -- found 22
+  failures, but confirmed via stash-and-reproduce against this story's own
+  unmodified base commit that the identical failure set (GET /config -> 500,
+  GET /ui/ trailing-slash 404, text/html content negotiation) already exists
+  before this diff -- pre-existing, unrelated to this story, out of its
+  contract, and left untouched rather than scope-creeping a fix into a
+  color-token ticket.
 
 description: |
   Implements horizontal-plan.md's H1. The shipped favicon (v0.11.1) is
