@@ -125,6 +125,32 @@ note_on_completion: >
   No new failures anywhere. Committed and pushed to
   feat/mnemosyne-agent-harness-install.
 
+  Independent verification (orchestrating session, before merge -- given
+  this ticket's real machine-state mutation risk, this got the highest
+  scrutiny of any ticket dispatched this session): read the real
+  bin/mnemosyne-agent.mjs source directly -- confirmed the targeted
+  `claude mcp get` check (never `list`) is real, confirmed
+  HARNESS_EXEC_CWD() pins every harness-CLI exec to homedir() (the fix for
+  the real, subtle bug the builder found and documented: this repo ships
+  its own project-scoped .mcp.json at the root, commit 04a8011, which
+  would otherwise make a cwd-under-this-repo test falsely detect "already
+  registered"). Ran test/agent-cli.mjs myself in full: all checks pass,
+  real subprocess-level, real isolated $HOME per test (mkdtemp, never this
+  operator's real ~/.claude/), byte-for-byte mtime/content verification
+  for idempotency, and independent re-verification via a raw `claude mcp
+  get` call outside the CLI under test. Ran the full suite myself: tsc
+  clean, 54/54 vitest files, 727/727 tests, .mjs suite clean except the 3
+  pre-existing POST /remember failures.
+
+  CRITICAL safety check, done directly against this operator's REAL
+  machine (not just trusting the test's own isolation claims): confirmed
+  `ls ~/.claude/skills/` has no mnemosyne-standalone or
+  mnemosyne-persona-interview entries, and `claude mcp get mnemosyne` (run
+  for real, outside any test) resolves only to this repo's own real,
+  pre-existing project-scoped .mcp.json (Project config, "shared via
+  .mcp.json") -- not a user-scope registration created by any test run.
+  This operator's real Claude Code environment is genuinely untouched.
+
 description: |
   Implements design-discussion.md §1.1 for the Claude Code harness (the
   certain, locally-verifiable half -- Codex is aha-02). New
