@@ -210,6 +210,34 @@ note_on_completion: >
   This operator's real Claude Code AND Codex CLI environments are genuinely
   untouched.
 
+  Independent verification (orchestrating session, before merge): the
+  orchestrating session had already directly verified the real, installed
+  codex CLI's command surface on this machine before dispatch (codex-cli
+  0.143.0, `codex mcp add/get/list --help`) and handed the builder that
+  real syntax rather than letting them guess -- the builder's own
+  hand-verified findings (the "add silently overwrites, doesn't error"
+  behavior; $CODEX_HOME, not $HOME, drives config resolution; no CWD-based
+  project-scope bug unlike Claude's) were independently spot-checked here
+  and confirmed accurate. Read the real bin/mnemosyne-agent.mjs diff
+  directly: confirmed the targeted `codex mcp get` check (never `list`) is
+  real and commented, confirmed the check-before-write guard is genuinely
+  load-bearing for idempotency (not just error-avoidance, since `codex mcp
+  add` itself doesn't error on a dupe), confirmed loud-failure error
+  messaging names the exact command and real subprocess stderr on any
+  OTHER failure. Ran test/agent-cli.mjs's real subprocess suite myself: all
+  checks pass, including the explicit proof that the idempotent no-op on a
+  second `init` run is the check-before-write guard's own doing, not
+  something the underlying Codex CLI provides for free. Ran the full
+  suite: tsc clean, 54/54 vitest files, 727/727 tests, .mjs suite clean
+  except the 3 pre-existing POST /remember failures.
+
+  CRITICAL safety check, done directly against this operator's REAL
+  machine both before dispatch and again after this ticket's full test
+  run: `codex mcp list` shows only the real, pre-existing `portunus` and
+  `posthog` servers both times, byte-for-byte identical -- no leaked
+  "mnemosyne" entry from any test run. This operator's real Codex CLI
+  environment is genuinely untouched.
+
 description: |
   Implements design-discussion.md §1.1/§2 for the Codex CLI harness --
   the higher-risk half, since (per research-brief.md §4) nothing in this
