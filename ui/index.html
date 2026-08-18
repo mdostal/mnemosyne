@@ -22,16 +22,30 @@
        ui/app.js's syncJumpChips() (called from refreshAll()'s completion
        path) ONLY for panels with a real, already-rendered .panel-status --
        never fabricated here or in script. See ui/app.js's
-       CHIP_STATUS_SOURCE comment for exactly which panels qualify and why. -->
+       CHIP_STATUS_SOURCE comment for exactly which panels qualify and why.
+
+       ui-05-accessibility-hardening: round-2's accessibility.md found the
+       ring's ONLY text equivalent in the rejected hybrid mockup was a bare
+       `title` attribute, which is not read in normal browse mode by any
+       major screen reader. Each chip below carries a real
+       <span class="sr-only" id="chip-status-<panelId>"> as its text
+       alternative -- reusing this file's existing .sr-only utility class
+       (ui/style.css, already used by #search-query/#search-scope's labels),
+       not a new/duplicate one. It starts empty (matching "loading"/no
+       status yet) and is populated ONLY by syncJumpChips() (ui/app.js),
+       from the exact same isPass/isFail read that drives the chip-pass/
+       chip-fail class right above it -- never a static/generic label, and
+       never populated for Search/Operations, which correctly carry no
+       status. See syncJumpChips()'s own comment for the exact text. -->
   <nav id="jump-chips" aria-label="jump to panel">
-    <a href="#liveliness"><span class="chip-dot"></span>Liveliness</a>
-    <a href="#settings"><span class="chip-dot"></span>Settings</a>
-    <a href="#lanes"><span class="chip-dot"></span>Lanes</a>
-    <a href="#search"><span class="chip-dot"></span>Search</a>
-    <a href="#graph"><span class="chip-dot"></span>Graph</a>
-    <a href="#operations"><span class="chip-dot"></span>Operations</a>
-    <a href="#personas"><span class="chip-dot"></span>Personas</a>
-    <a href="#memory-levels"><span class="chip-dot"></span>Memory Levels</a>
+    <a href="#liveliness"><span class="chip-dot"></span>Liveliness<span class="sr-only" id="chip-status-liveliness"></span></a>
+    <a href="#settings"><span class="chip-dot"></span>Settings<span class="sr-only" id="chip-status-settings"></span></a>
+    <a href="#lanes"><span class="chip-dot"></span>Lanes<span class="sr-only" id="chip-status-lanes"></span></a>
+    <a href="#search"><span class="chip-dot"></span>Search<span class="sr-only" id="chip-status-search"></span></a>
+    <a href="#graph"><span class="chip-dot"></span>Graph<span class="sr-only" id="chip-status-graph"></span></a>
+    <a href="#operations"><span class="chip-dot"></span>Operations<span class="sr-only" id="chip-status-operations"></span></a>
+    <a href="#personas"><span class="chip-dot"></span>Personas<span class="sr-only" id="chip-status-personas"></span></a>
+    <a href="#memory-levels"><span class="chip-dot"></span>Memory Levels<span class="sr-only" id="chip-status-memory-levels"></span></a>
   </nav>
 
   <main>

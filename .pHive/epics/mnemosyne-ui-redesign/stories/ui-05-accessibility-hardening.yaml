@@ -1,10 +1,170 @@
 id: ui-05-accessibility-hardening
 epic: mnemosyne-ui-redesign
 title: "Status-ring text alternative + full label-association audit"
-status: planned
+status: complete
 complexity: medium
 methodology: classic
 depends_on: [ui-02-inline-header-icon, ui-04-personas-draft-tools-collapse]
+
+note_on_completion: >
+  Worktree note: this dispatch's worktree was provisioned at commit 8a24edd
+  (dev tip, persona-files merged) on its own auto-generated branch, NOT at
+  feat/mnemosyne-ui-redesign's real tip (5362196, ui-01..ui-04 merged) as
+  the dispatch prompt described -- same provisioning mismatch pattern
+  ui-04's own note already documented for this repo. Branched this story's
+  own branch, ui-05-status-ring-labels, directly off the real 5362196 tip
+  (confirmed via `git log --oneline -5` showing ui-04's own merge commit
+  message) before touching anything.
+
+  Read round-2's accessibility.md in full (the story's own key_files
+  reference) before implementing, plus ui-01 through ui-04's own YAMLs to
+  scope exactly what each touched, per this story's own research step.
+
+  PART 1 -- status-ring text alternative. Read the REAL ui/app.js
+  syncJumpChips() (line 2432) and CHIP_STATUS_SOURCE (line 2423) as they
+  actually exist now, not from any older doc -- confirmed the map has
+  exactly 6 entries (liveliness/settings/lanes/graph/personas/
+  memory-levels) and deliberately excludes search/operations (no real,
+  unconditional refresh-time .panel-status for either). Read ui/style.css's
+  real chip-pass/chip-fail rules (lines 132-133, box-shadow rings on
+  .chip-dot) and confirmed .sr-only already exists (style.css:312) --
+  reused it verbatim, added zero new CSS. Added
+  <span class="sr-only" id="chip-status-<panelId>"></span> as the LAST
+  child of all 8 <a> chips in ui/index.html (not just the 6 ring-eligible
+  ones, for uniformity -- the 2 non-eligible ones' spans simply stay
+  permanently empty, which is itself the correct never-fabricate behavior).
+  Extended syncJumpChips() to set that span's textContent to ": pass" /
+  ": fail" / "" from the EXACT SAME isPass/isFail booleans that already
+  drive the chip-pass/chip-fail class toggle two lines above -- one read,
+  two consumers, so the visible ring and the announced text can never drift
+  apart. Deliberately used document.getElementById(`chip-status-${panelId}`)
+  rather than chip.querySelector(...): test/jump-chip-nav-status-wiring.mjs's
+  existing behavioral-proof harness extracts syncJumpChips() via regex and
+  runs it with `new Function()` against a hand-built FakeChip stub that
+  only implements getAttribute() -- calling chip.querySelector() on it
+  would have thrown and broken that test. getElementById() on the harness's
+  fakeDocument (which only knows the 6 real *-status ids, not the new
+  chip-status-* ids) safely returns null for every chip, and the `if
+  (statusTextEl)` guard no-ops -- confirmed by actually running the test,
+  not just reasoning about it (all 51 of its checks still pass, unmodified,
+  zero selector updates needed).
+
+  PART 2 -- label-association audit. Scoped exactly as the dispatch
+  narrowed it (not the YAML's broader "ui-01..ui-04" framing): header
+  (ui-02, lines 11-14), #jump-chips nav (ui-03, lines 26-35 pre-edit), and
+  #persona-tools plus everything inside it (ui-04, lines 335-481). Verified
+  the scoping itself first by reading ui-01's and ui-02's own YAMLs:
+  ui-01 is CSS-token-only (zero markup touched), ui-02 added only an <img>
+  inside <h1> (zero labels). Audit result: header and #jump-chips contain
+  ZERO <label> elements (confirmed via
+  `document.querySelectorAll('header label').length` /
+  `#jump-chips label` -> both 0, live in a real running page, not just
+  grep). #persona-tools contains exactly 8 <label>s (persona-tier,
+  persona-scope-id, persona-display-name, persona-scope,
+  persona-section-heading, persona-section-body, persona-repo,
+  persona-file-input) -- ALL 8 already carry a real for=/id pair whose id
+  exists exactly once in the document (checked programmatically: extracted
+  every for= and every id= in the whole file, confirmed each of the 8
+  targets resolves and that ui/index.html has zero duplicate ids anywhere).
+  Independently re-verified in a real running browser via the browser's OWN
+  native label-resolution API, not a string match: for each of the 8,
+  `document.getElementById(forId) === label.control` -- true for all 8.
+  This is a genuine, verified-clean finding, not an absence of effort: ZERO
+  label fixes were needed in the three in-scope regions. (ui-04's own
+  completion note already establishes why -- pw-17/pu-12's persona-form
+  fields were built id-first from the start, following add-lane-form's
+  established convention, and ui-04's later <details> wrap never touched
+  any label/input pair, only added an ancestor.) This is consistent with,
+  not contradicted by, round-2's actual finding: the 8 broken labels
+  accessibility.md found were unique to the REJECTED
+  collapsible-clusters-hardened.html mockup candidate, never in this real
+  repo's shipped ui/index.html.
+
+  Acceptance criterion 4 (Personas <details> keyboard-operable + state
+  exposed, verified not assumed): confirmed programmatically in a real
+  running browser -- summary.tabIndex === 0 (natively focusable), then
+  focused the real <summary> via .focus() and sent a REAL keyboard Enter
+  keypress (Playwright's page.keyboard.press, not a synthetic .click())
+  which flipped details.open from true to false, then confirmed the
+  reverse. This is the native, spec-standard <details>/<summary> mechanism
+  (zero ARIA, zero JS in this app's own markup) -- ui-04's own note already
+  found and documented the one real gotcha here (closed-<details>
+  descendants can report stale self-geometry via
+  getBoundingClientRect() without it affecting real layout), so this
+  story's own verification relied on details.open / tabIndex / the
+  keyboard event's real effect rather than re-deriving that trap.
+
+  Automated accessibility check + before/after comparison: no axe-core (or
+  any accessibility-testing package) exists in package.json's
+  dependencies/devDependencies, and per this ticket's own instruction, none
+  was added. Used Playwright's own accessibility-tree snapshot
+  (browser_snapshot) as the available automated check, run against the REAL
+  server (src/server.mjs, port 8590) twice -- once against `git stash`'d
+  pre-story markup (the true pre-epic baseline for THIS story, i.e.
+  ui-01..ui-04's already-merged state), once against this story's diff --
+  restoring the stash between runs, not just diffing markup by eye.
+  BEFORE: every one of the 8 #jump-chips links' accessible name was its
+  bare panel name only ("Personas", "Memory Levels", ...) even though 6 of
+  them carried a real chip-pass/chip-fail class in the live DOM after
+  refreshAll() completed (confirmed via
+  document.querySelectorAll('#jump-chips a.chip-pass, a.chip-fail').length
+  === 6) -- i.e. a real, live status signal with zero corresponding
+  accessible-name text, exactly the gap accessibility.md's excerpt
+  describes. AFTER: the same 6/8 real-status chips now have accessible
+  names "Liveliness: pass", "Settings: pass", "Lanes: pass", "Graph: pass",
+  "Personas: fail", "Memory Levels: fail" -- read directly off Playwright's
+  ARIA snapshot tree, not off the DOM/markup -- while Search and Operations
+  correctly keep their bare, unadorned names (no fabrication). Cross-
+  checked the announced text against the live chip-pass/chip-fail class on
+  the SAME elements at the SAME moment (a direct 1:1 table, all 8 chips):
+  every "chip-pass" -> ": pass", every "chip-fail" -> ": fail", both
+  non-eligible chips -> "" -- zero mismatches. Also confirmed the new span
+  is genuinely visually-hidden (getComputedStyle: position:absolute,
+  1px x 1px, overflow:hidden, clip:rect(0,0,0,0) -- .sr-only's real,
+  pre-existing rule, not display:none, which would also hide it from
+  assistive tech) while still appearing in the accessibility tree (proven
+  by the same browser_snapshot read above). No other change to the
+  accessibility snapshot was found anywhere else on the page between the
+  two runs (headings, landmarks, and every other panel's structure were
+  identical before/after) -- this story's diff is additive-only to the 8
+  chip links, confirming no new violation was introduced anywhere else on
+  the page.
+
+  Full test suite (after npm install; node_modules was absent in this
+  fresh worktree; approved the 3 pending native-module install scripts via
+  `npm approve-scripts` to let better-sqlite3/esbuild/fsevents build, then
+  `git checkout -- package.json` to revert the resulting allowScripts diff
+  before committing, matching ui-04's own established precedent): npm
+  test's own chained command stops at test/http-api.mjs's 3 already-
+  documented pre-existing POST /remember failures (ok:true / layer:file /
+  has provenance); ran every remaining chained command by hand to get a
+  complete picture: single-layer-config.mjs, git-hooks.mjs,
+  install-git-hooks.mjs, lifecycle-compliance-audit.mjs, persona-cli.mjs
+  all pass, then `vitest run lib/mnemosyne lib/minerva benchmarks
+  src/planning src/config src/runners` -- 54/54 files, 727/727 tests,
+  matching ui-03's and ui-04's own documented baseline exactly. Ran
+  test/jump-chip-nav-status-wiring.mjs directly (the story's own primary
+  regression surface): all 51 checks pass, UNMODIFIED, zero selector
+  updates needed -- confirmed the specific reason why in PART 1 above,
+  not just observed the green result. Ran all 5 named highest-risk Personas
+  test files individually (persona-draft-review-approve-ui.mjs,
+  persona-write-form.mjs, personas-panel-shell.mjs, persona-layer-stack.mjs,
+  persona-layer-stack-shell-integration.mjs): all pass, unmodified. tsc
+  --noEmit: clean, zero output. Verified the 3 POST /remember failures are
+  genuinely pre-existing via real stash-and-reproduce (not assumption):
+  `git stash` (reverting to the unmodified ui-04 tip), re-ran
+  test/http-api.mjs directly -- same 3 failures, identical messages,
+  reproduced byte-for-byte -- then `git stash pop` to restore this story's
+  diff before continuing.
+
+  Files touched: ui/index.html (8 lines changed -- one added <span> per
+  chip -- plus an explanatory doc comment) and ui/app.js (15 lines added
+  inside syncJumpChips(), 0 removed) -- exactly the 2 files
+  files_to_modify named, nothing else. No new CSS was added (reused the
+  existing .sr-only class verbatim, per this ticket's own instruction).
+  Committed as db-pending on branch ui-05-status-ring-labels (pushed to
+  origin) -- a dedicated branch off the real 5362196 tip, matching
+  ui-03/ui-04's own established worktree-to-branch pattern.
 
 description: |
   Implements horizontal-plan.md's H4. Closes the two concrete,
