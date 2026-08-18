@@ -216,6 +216,120 @@ function assembleSourceSummary(sourcesRead, sourcesMissing) {
  *     found (or, for the parent, not named / not resolvable) — useful for
  *     the skill's own step-9 summary report, never itself an error.
  */
+/**
+ * Default ceiling on how many explicit file paths a single
+ * crawlExplicitFiles() call will process (design-discussion.md OQ2 —
+ * roughly 2x pu-07's own 5-source fixed list, since an explicit list is
+ * operator/agent-directed rather than auto-selected, warranting some
+ * headroom, but never silently unbounded). Callers that genuinely need more
+ * pass an explicit `maxFiles` override; the cap is always real and enforced
+ * — see TooManyExplicitFilesError below.
+ */
+export const MAX_EXPLICIT_FILES = 10;
+
+/**
+ * Thrown by crawlExplicitFiles() when more than `maxFiles` (default
+ * MAX_EXPLICIT_FILES) file paths are supplied — a real, enforced ceiling,
+ * never a silent first-N truncation and never silent unbounded processing
+ * (pf-01-crawl-explicit-files.yaml acceptance criteria).
+ */
+export class TooManyExplicitFilesError extends Error {
+  constructor(count, max) {
+    super(
+      `crawlExplicitFiles: ${count} file path(s) were supplied, exceeding the maximum of ${max}. ` +
+        'Reduce the list, or pass an explicit maxFiles override if this call genuinely needs more.',
+    );
+    this.name = 'TooManyExplicitFilesError';
+    this.count = count;
+    this.max = max;
+  }
+}
+
+/**
+ * Reads one explicit, caller-supplied file path — resolved against
+ * `repoRoot` unless already absolute. Never throws: returns null (added to
+ * `sourcesMissing` by the caller) when the path does not exist or cannot be
+ * read, matching crawlBoundedContext()'s own non-blocking hard-fail
+ * philosophy for its named sources, extended here to an explicit list.
+ */
+function readExplicitSource(repoRoot, filePath) {
+  const resolved = path.isAbsolute(filePath) ? filePath : path.join(repoRoot, filePath);
+  if (!existsSync(resolved)) return null;
+  try {
+    const raw = readFileSync(resolved, 'utf8');
+    return { name: filePath, path: resolved, ...capExcerpt(raw) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * crawlExplicitFiles() — pf-01-crawl-explicit-files. A genuinely separate
+ * sibling to crawlBoundedContext() (design-discussion.md §1 Direction 1),
+ * not a parameterized rewrite of it: crawlBoundedContext() itself gets zero
+ * changes. Lets an operator or agent supply an explicit list of file paths
+ * as source material for a proposed persona draft, instead of pu-07's fixed
+ * 5-source auto-crawl list.
+ *
+ * Reuses capExcerpt() (per-file line/char caps), assembleSourceSummary()
+ * (whole-summary cap + assembly), and readParentPersonaSummary() (the SAME
+ * real `mnemosyne persona show` CLI-subprocess mechanism
+ * crawlBoundedContext() already uses for parent summaries — never a second,
+ * looser parent-read implementation) completely unchanged, directly from
+ * this module's own scope. Same caps apply uniformly regardless of which
+ * crawl function produced the sourceSummary.
+ *
+ * `filePaths` — an array of caller-supplied paths (relative to `repoRoot`,
+ * or absolute). More than `maxFiles` (default MAX_EXPLICIT_FILES) throws
+ * TooManyExplicitFilesError — a real, enforced ceiling, never a silent
+ * first-N truncation and never silent unbounded processing. A path that
+ * does not exist or cannot be read is treated as missing (non-blocking),
+ * matching crawlBoundedContext()'s own philosophy for its named sources —
+ * it never blocks the whole crawl.
+ *
+ * `repoRoot`, `parentRef`, `home` — same meaning as crawlBoundedContext().
+ *
+ * Returns `{ sourceSummary, sourcesRead }` — the same shape
+ * crawlBoundedContext() returns (design-discussion.md §1 Direction 1).
+ */
+export async function crawlExplicitFiles({ filePaths, repoRoot, parentRef, home, maxFiles = MAX_EXPLICIT_FILES } = {}) {
+  if (!Array.isArray(filePaths)) {
+    throw new Error("crawlExplicitFiles: 'filePaths' is required — an array of caller-supplied file paths to crawl.");
+  }
+  if (typeof repoRoot !== 'string' || repoRoot.trim() === '') {
+    throw new Error("crawlExplicitFiles: 'repoRoot' is required — explicit relative file paths are resolved against it.");
+  }
+  if (filePaths.length > maxFiles) {
+    throw new TooManyExplicitFilesError(filePaths.length, maxFiles);
+  }
+
+  const sourcesRead = [];
+  const sourcesMissing = [];
+
+  for (const filePath of filePaths) {
+    const found = readExplicitSource(repoRoot, filePath);
+    if (found) sourcesRead.push(found);
+    else sourcesMissing.push(filePath);
+  }
+
+  if (parentRef && typeof parentRef.tier === 'string' && typeof parentRef.scopeId === 'string') {
+    const parentSummary = await readParentPersonaSummary(parentRef, { home });
+    if (parentSummary) {
+      sourcesRead.push(parentSummary);
+    } else {
+      sourcesMissing.push(`parent persona summary (${parentRef.tier}/${parentRef.scopeId})`);
+    }
+  } else {
+    sourcesMissing.push('parent persona summary (none named)');
+  }
+
+  const sourceSummary = assembleSourceSummary(sourcesRead, sourcesMissing);
+  return {
+    sourceSummary,
+    sourcesRead: sourcesRead.map((s) => s.name),
+  };
+}
+
 export async function crawlBoundedContext({ repoRoot, parentRef, home } = {}) {
   if (typeof repoRoot !== 'string' || repoRoot.trim() === '') {
     throw new Error("crawlBoundedContext: 'repoRoot' is required — the repo this bounded crawl reads against.");

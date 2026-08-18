@@ -2,7 +2,7 @@
 
 All notable changes to Mnemosyne are documented here.
 
-## [0.10.1] — 2026-08-17
+## [0.11.1] — 2026-08-17
 
 `mnemosyne-icon-selection` epic (`is-01`..`is-03`) — the standalone UI has a
 real favicon for the first time, chosen through an actual multi-agent design
@@ -50,6 +50,102 @@ the only failures anywhere are the 3 already-documented pre-existing
 `POST /remember` default-layer assertions (first flagged in `ml-04`'s
 completion note, unrelated to this epic) — confirmed unchanged from the
 pre-epic baseline.
+
+## [0.11.0] — 2026-08-17
+
+Full `mnemosyne-persona-files` epic (`pf-01`..`pf-08`) — operator ask
+(verbatim): "we need a way to create the personas with files and things as
+well at some point, so that may just be the agent installing, but we may
+also want some of that in the UI." Follow-up: "Both, same priority." Adds
+two new ways to get real file content into a proposed persona draft's
+`sourceSummary`, both reusing `mnemosyne-persona-ux`'s already-shipped
+draft store, draft HTTP routes, and draft-review-approve UI completely
+unchanged as the write/review surface. Every ticket independently verified
+with real tests (real subprocesses, real HTTP calls, real disk read-backs,
+two full propose → review → approve → real-commit end-to-end regressions)
+before merging — zero regressions found across the epic (see Verification
+below).
+
+### Added
+
+- **`crawlExplicitFiles()`** (`skills/mnemosyne-persona-interview/crawl-context.mjs`,
+  pf-01) — a sibling to the existing `crawlBoundedContext()`, for a fixed,
+  operator/agent-chosen file list rather than a directory walk. Reuses the
+  same per-file cap/excerpt and `assembleSourceSummary()` machinery
+  unchanged, so a file-driven `sourceSummary` is produced by the identical
+  capping logic the bounded-crawl path already uses.
+- **`mnemosyne persona draft propose-from-files` CLI verb** (pf-02) — an
+  agent-side path that takes an explicit list of files, crawls them via
+  pf-01's `crawlExplicitFiles()`, and proposes a draft through the
+  existing, unmodified `persona draft propose` write path — no new draft
+  store, route, or review surface.
+- **Slice 1 end-to-end regression** (pf-03) — a real subprocess proof of
+  the full agent-side loop: CLI propose-from-files → the real on-disk
+  draft → review → approve → a real committed persona file, plus the real
+  `remember()` landing on approval.
+- **Client-side cap-twin** (`ui/app.js`, pf-04) — `capExcerpt()` and
+  `assembleSourceSummary()` ported to the browser, byte-for-byte verified
+  against the server-side originals via a parity test, so a
+  UI-attached file produces the identical excerpt/summary shape a
+  server-side crawl would.
+- **Real file-attachment input on `#persona-form`** (`ui/index.html`,
+  `ui/app.js`, pf-05) — a human filling out the existing persona-draft form
+  can now attach one or more files; their content is capped client-side
+  (pf-04's twin) and folded into the same `sourceSummary` field the
+  existing draft-propose `POST` already accepts, unchanged.
+- **A third, honest provenance label** (`isAgentProposedDraft()`, pf-06) —
+  drafts now resolve to one of three states instead of two:
+  agent-proposed (with `sourceSummary`), plain human-typed (no
+  `sourceSummary`), or human-typed-with-attachments (human-authored, but
+  carrying a real `sourceSummary` from pf-05's attachments) — never
+  mislabeling a human-attached draft as agent-proposed, and never
+  dropping its real source material from view.
+- **Slice 2 end-to-end regression** (pf-07) — a real subprocess proof of
+  the full UI-side loop: file-attachment → propose → review (confirming
+  the "human-attached" label from pf-06) → approve → a real committed
+  persona file.
+
+### Verification
+
+- Full suite (`npm test`'s vitest + `.mjs` subprocess composition, run
+  file-by-file since `test/http-api.mjs` intentionally exits non-zero on
+  its 3 known pre-existing failures and would otherwise halt the `&&`
+  chain) and `npx tsc --noEmit` run clean on this epic's final state, in
+  the long-lived, already-verified worktree that carried the epic's entire
+  build-out: `.mjs` subprocess suites all green except the 3 pre-existing,
+  already-documented `test/http-api.mjs` `POST /remember` default-layer
+  assertions (`ok:true` / `layer:file (default)` / `has provenance`,
+  159/162 checks passing — first flagged in `ml-04`'s completion note,
+  route's real default is `'vector'`, predates this epic entirely);
+  `vitest lib/mnemosyne lib/minerva benchmarks src/planning src/config
+  src/runners` — 727/727 passing (54/54 files); `tsc --noEmit` clean.
+- Stash-and-reproduce proof: checked out this branch's merge-base with
+  `main` (commit `d203115`, which already carries `main`'s own
+  stale-test-assertion fix) into a **fresh** `git worktree add` + fresh
+  `npm install`. That fresh worktree surfaced 15 additional `.mjs`
+  failures (`write-through.mjs`, `test/http-api.mjs`'s further
+  `remember()`-chain assertions, `single-layer-config.mjs`,
+  `persona-cli.mjs`) plus 13 vitest failures (`VectorLayerAdapter.test.ts`'s
+  `remember` suite, `persona-interview-crawl-and-feed.test.ts`'s `pw-13`
+  proofs, `persona-interview-draft-output.test.ts`'s `pu-08` proof,
+  `persona-interview-global-full-answers-e2e.test.ts`'s `pw-14` proof) —
+  none present in the long-lived worktree. Investigated rather than
+  dismissed, following `pu-15`'s own precedent: every one of these
+  failures traces to a single root cause, `flight-status auto-detection
+  failed: cwd is in a detached-HEAD (or otherwise branch-less) git state`
+  (a `git worktree add <commit>` checks out detached HEAD by default),
+  which rejects `remember()`'s write-through and cascades into every test
+  that exercises a real `remember()` call. A second fresh worktree at this
+  epic's own tip (commit `987164e`), same detached-HEAD setup, same fresh
+  `npm install`, reproduced the byte-for-byte **identical** 15 `.mjs` +
+  13 vitest failures — proving this is a fresh-worktree/detached-HEAD
+  artifact affecting the pre-epic baseline and this epic's own tip
+  identically, not a regression this epic introduced. Confirmed via a
+  scripted diff of both fresh worktrees' full check-by-check output: zero
+  differences. Both throwaway comparison worktrees were removed after the
+  proof; the long-lived, branch-attached worktree (clean except the same 3
+  pre-existing `POST /remember` failures already known from `ml-04`) is
+  the real, ship-relevant state.
 
 ## [0.9.0] — 2026-08-16
 

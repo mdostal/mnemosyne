@@ -1488,6 +1488,22 @@ function isAgentProposedDraft(draft) {
   return typeof draft.sourceSummary === "string" && draft.sourceSummary.trim() !== "";
 }
 
+// pf-06 (design-discussion.md OQ3): once pf-05 shipped, a human-typed draft
+// can carry a real sourceSummary too (from attached files), which
+// isAgentProposedDraft()'s binary "real sourceSummary => agent-proposed"
+// signal alone would mislabel -- a human who attached files is not an
+// agent. This sibling function makes the full 3-way label decision
+// explicit, reusing isAgentProposedDraft()'s existing "real, non-empty
+// sourceSummary" signal for whether ANY source material is present at all,
+// then layering proposedBy on top to decide WHO attached it.
+// isAgentProposedDraft() itself stays unchanged -- so its own callers (the
+// list-row snippet gate below, and any other consumer of that raw boolean)
+// are untouched by this addition.
+function draftProvenanceLabel(draft) {
+  if (!isAgentProposedDraft(draft)) return "manual";
+  return draft.proposedBy === "agent" ? "agent-proposed" : "human-attached";
+}
+
 // One-line snippet rendered directly under a collapsed agent-proposed row
 // (selection.md/synthesized option-2.md §1: "a one-line sourceSummary
 // snippet renders directly under any agent-proposed row, truncated to
@@ -1603,14 +1619,20 @@ function renderPersonas() {
       tr.tabIndex = -1;
 
       const displayNameTd = personaCell(row.displayName == null || row.displayName === "" ? "—" : row.displayName);
-      // pu-12: one-line sourceSummary snippet under any agent-proposed row,
-      // visible without expanding anything (selection.md/synthesized
-      // option-2.md §1) -- NEVER rendered for a human-typed draft (no
-      // sourceSummary), so no fabricated provenance signal appears where
-      // none exists.
+      // pu-12: one-line sourceSummary snippet under any row with a real
+      // sourceSummary, visible without expanding anything (selection.md/
+      // synthesized option-2.md §1) -- NEVER rendered for a draft with no
+      // sourceSummary, so no fabricated provenance signal appears where
+      // none exists. pf-06: the snippet itself still renders for EITHER an
+      // agent-proposed OR a human-attached draft (real material is real
+      // material either way) -- draftProvenanceLabel() only decides the CSS
+      // hook used to style it, never whether it renders.
       if (row.draft && isAgentProposedDraft(row.draft)) {
         const snippet = document.createElement("div");
-        snippet.className = "persona-source-snippet";
+        const snippetProvenance = draftProvenanceLabel(row.draft);
+        snippet.className = snippetProvenance === "agent-proposed"
+          ? "persona-source-snippet"
+          : "persona-source-snippet persona-source-snippet--human-attached";
         snippet.textContent = sourceSummarySnippet(row.draft.sourceSummary);
         displayNameTd.appendChild(snippet);
       }
@@ -1688,7 +1710,13 @@ function personaCompareBlock(label, record) {
 function buildPersonaDraftDetailRow(row) {
   const { tier, scopeId, draft, live } = row;
   const identityKey = personaRowKey(tier, scopeId);
-  const agentProposed = isAgentProposedDraft(draft);
+  // pf-06: the 3-way provenance decision (agent-proposed / human-attached /
+  // manual). agentProposed below is derived FROM this, not directly from
+  // isAgentProposedDraft()'s raw sourceSummary-only signal -- so a human who
+  // attached files via pf-05 is never mislabeled "agent-proposed" just
+  // because a real sourceSummary happens to exist.
+  const provenance = draftProvenanceLabel(draft);
+  const agentProposed = provenance === "agent-proposed";
 
   const tr = document.createElement("tr");
   tr.id = draftDetailRowId(tier, scopeId);
@@ -1703,8 +1731,10 @@ function buildPersonaDraftDetailRow(row) {
   let focusTarget = null;
 
   // Source summary -- ONLY rendered, and ONLY labeled agent-proposed, when
-  // draft.sourceSummary is a real, non-empty string (design_decisions:
-  // "never fabricated or implied for a human-typed draft").
+  // draft.sourceSummary is a real, non-empty string AND proposedBy ===
+  // 'agent' (design_decisions: "never fabricated or implied for a
+  // human-typed draft"; pf-06: never conflated with a human-attached one
+  // either).
   if (agentProposed) {
     const h4 = document.createElement("h4");
     h4.tabIndex = -1;
@@ -1720,17 +1750,40 @@ function buildPersonaDraftDetailRow(row) {
     summaryP.className = "persona-draft-source-summary";
     summaryP.textContent = draft.sourceSummary;
     panel.appendChild(summaryP);
+  } else if (provenance === "human-attached") {
+    // pf-06 (design-discussion.md OQ3): real source material attached by a
+    // human via pf-05 -- honestly surfaced (never silently dropped down to
+    // the no-sourceSummary "Manually created" label), but never labeled
+    // "agent-proposed" either.
+    const h4 = document.createElement("h4");
+    h4.tabIndex = -1;
+    h4.textContent = "Attached source material";
+    const badge = document.createElement("span");
+    badge.className = "persona-draft-source-label";
+    badge.textContent = "human-attached";
+    h4.appendChild(badge);
+    panel.appendChild(h4);
+    focusTarget = h4;
+
+    const summaryP = document.createElement("p");
+    summaryP.className = "persona-draft-source-summary";
+    summaryP.textContent = draft.sourceSummary;
+    panel.appendChild(summaryP);
   }
 
   // Provenance line -- always visible text, never inferred/tooltip-only
-  // (§4.3.2). "Manually created" for a human-typed draft -- never "Proposed
-  // by agent" when there is no real sourceSummary behind it.
+  // (§4.3.2). "Manually created" for a draft with no sourceSummary at all;
+  // "Includes attached source material" (pf-06) for a real sourceSummary
+  // attached by a human; "Proposed by agent" only when proposedBy ===
+  // 'agent'.
   const provenanceP = document.createElement("p");
   provenanceP.className = "persona-draft-provenance";
   const proposedAt = typeof draft.proposedAt === "string" && draft.proposedAt ? draft.proposedAt : "unknown time";
   provenanceP.textContent = agentProposed
     ? `Proposed by agent · ${proposedAt}`
-    : `Manually created · ${proposedAt}`;
+    : provenance === "human-attached"
+      ? `Includes attached source material · ${proposedAt}`
+      : `Manually created · ${proposedAt}`;
   panel.appendChild(provenanceP);
   if (!focusTarget) {
     provenanceP.tabIndex = -1;
@@ -2052,6 +2105,15 @@ async function loadPersonas() {
 // loadDrafts() (pu-12's new function, NOT loadPersonas() -- proposing or
 // editing a draft never touches the real persona store; only an explicit
 // Approve, wired below, does that).
+//
+// pf-05-ui-file-attachment: personaFileInputEl (#persona-file-input) is this
+// same form's new, real <input type="file" multiple> field. The handler
+// below reads each attached file's text via File.text(), caps it via
+// pf-04's ported capExcerpt()/assembleSourceSummary() (see the
+// pf-04-client-cap-twin section further down this file), and folds the
+// result into the SAME candidate object as candidate.sourceSummary --
+// additive only. Zero files attached -> candidate is untouched -> the
+// request body is byte-for-byte identical to pu-12's own shipped behavior.
 const personaForm = document.getElementById("persona-form");
 const personaFormStatusEl = document.getElementById("persona-form-status");
 const personaTierFieldEl = document.getElementById("persona-tier");
@@ -2061,6 +2123,7 @@ const personaScopeFieldEl = document.getElementById("persona-scope");
 const personaSectionHeadingFieldEl = document.getElementById("persona-section-heading");
 const personaSectionBodyFieldEl = document.getElementById("persona-section-body");
 const personaRepoFieldEl = document.getElementById("persona-repo");
+const personaFileInputEl = document.getElementById("persona-file-input");
 
 personaForm.addEventListener("submit", async (evt) => {
   evt.preventDefault();
@@ -2082,6 +2145,24 @@ personaForm.addEventListener("submit", async (evt) => {
     sections: [{ heading: sectionHeading, body: sectionBody }],
   };
   if (repo) candidate.repo = repo;
+
+  // pf-05-ui-file-attachment: fold any attached files' capped content into
+  // THIS SAME candidate object, before the single fetch() below -- never a
+  // second request. Reads real file content via File.text() (no files
+  // attached -> attachedFiles is empty -> candidate is left untouched, so
+  // the request body stays byte-for-byte identical to pu-12's own shipped
+  // behavior). capExcerpt()/assembleSourceSummary() are pf-04's ported
+  // cap-twin functions, defined further down this file (function
+  // declarations are hoisted, so calling them here is safe).
+  const attachedFiles = personaFileInputEl && personaFileInputEl.files ? Array.from(personaFileInputEl.files) : [];
+  if (attachedFiles.length > 0) {
+    const sourcesRead = [];
+    for (const file of attachedFiles) {
+      const raw = await file.text();
+      sourcesRead.push({ name: file.name, ...capExcerpt(raw) });
+    }
+    candidate.sourceSummary = assembleSourceSummary(sourcesRead, []);
+  }
 
   setStatus(personaFormStatusEl, "loading", "saving draft…");
   submitBtn.disabled = true;
@@ -2206,6 +2287,74 @@ async function loadMemoryLevels() {
   }
 }
 // ==================== end ml-05-memory-levels-ui ====================
+
+// ==================== pf-04-client-cap-twin (epic mnemosyne-persona-files) ====================
+// Client-side twin of skills/mnemosyne-persona-interview/crawl-context.mjs's
+// capExcerpt()/assembleSourceSummary() -- ported verbatim (same constants,
+// same truncation logic, same TRUNCATION_MARKER text) so the browser-side
+// file attachment (pf-05, personaForm's submit handler above) enforces the
+// identical truncation behavior before content ever leaves the browser,
+// rather than trusting a server-side re-check alone (the existing 4MB
+// readJsonBody() cap on lib/mnemosyne/server.ts remains the hard backstop
+// regardless).
+// See test/persona-files-cap-twin-parity.mjs for the running, byte-for-byte
+// proof that this twin matches the Node original exactly, and
+// test/persona-write-form.mjs for pf-05's proof that personaForm's submit
+// handler actually calls these on attached files.
+//
+// pf-05-ui-file-attachment wired these in (personaForm's submit handler,
+// above) -- no longer additive-only/uncalled.
+
+/** Cap 1/3 -- at most this many lines are read from the top of any one file source. */
+const MAX_LINES_PER_SOURCE = 40;
+/** Cap 2/3 -- a hard character ceiling per source's excerpt, applied after the line cap. */
+const MAX_CHARS_PER_SOURCE = 1200;
+/** Cap 3/3 -- a hard ceiling on the assembled sourceSummary string as a whole. */
+const MAX_SOURCE_SUMMARY_CHARS = 4000;
+
+const TRUNCATION_MARKER = " …[capped]";
+
+/**
+ * Applies both file-level caps (MAX_LINES_PER_SOURCE, then
+ * MAX_CHARS_PER_SOURCE) to one source's raw text. Deterministic, no I/O --
+ * ported verbatim from crawl-context.mjs's own capExcerpt().
+ */
+function capExcerpt(raw) {
+  const lines = String(raw).split(/\r?\n/);
+  const truncatedByLines = lines.length > MAX_LINES_PER_SOURCE;
+  let excerpt = lines.slice(0, MAX_LINES_PER_SOURCE).join("\n");
+
+  const truncatedByChars = excerpt.length > MAX_CHARS_PER_SOURCE;
+  if (truncatedByChars) {
+    excerpt = excerpt.slice(0, MAX_CHARS_PER_SOURCE);
+  }
+
+  const truncated = truncatedByLines || truncatedByChars;
+  return { excerpt: truncated ? excerpt + TRUNCATION_MARKER : excerpt, truncated };
+}
+
+/**
+ * Assembles a final sourceSummary string from whatever sources were read,
+ * applying MAX_SOURCE_SUMMARY_CHARS as a last, whole-string cap. Ported
+ * verbatim from crawl-context.mjs's own (module-private) assembleSourceSummary().
+ */
+function assembleSourceSummary(sourcesRead, sourcesMissing) {
+  if (sourcesRead.length === 0) {
+    return (
+      "Bounded crawl found none of the named sources present " +
+      `(checked: ${sourcesMissing.join(", ")}). No repo/manifest/agent-file/parent-persona context available ` +
+      "for this interview — proceeding with questions alone."
+    );
+  }
+
+  const parts = sourcesRead.map((s) => `## ${s.name}\n${s.excerpt}`);
+  let summary = parts.join("\n\n");
+  if (summary.length > MAX_SOURCE_SUMMARY_CHARS) {
+    summary = summary.slice(0, MAX_SOURCE_SUMMARY_CHARS) + TRUNCATION_MARKER;
+  }
+  return summary;
+}
+// ==================== end pf-04-client-cap-twin ====================
 
 async function refreshAll() {
   refreshBtn.disabled = true;

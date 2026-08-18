@@ -1,0 +1,80 @@
+id: pf-06-provenance-label-extension
+epic: mnemosyne-persona-files
+title: "isAgentProposedDraft(): add the third 'includes attached source material' state"
+status: complete
+complexity: low
+methodology: tdd
+depends_on: [pf-05-ui-file-attachment]
+
+note_on_completion: >
+  Merged 2026-08-17 (commit 52eecf5). Independently verified: read the full
+  ui/app.js diff -- confirmed isAgentProposedDraft() itself is untouched,
+  the new draftProvenanceLabel() sibling function layers proposedBy on top
+  of its existing "real sourceSummary" signal, and the third state's DOM
+  branch is a genuinely additive else-if, never modifying the original
+  if (agentProposed) branch body. Reran test/persona-draft-review-approve-
+  ui.mjs myself in both the builder's worktree and the merged integration
+  worktree (75/75 both times), specifically confirming the literal-string
+  checks for the two pre-existing states ("Manually created" ternary
+  branch, "Why the agent proposed this" heading) still appear exactly once,
+  unmodified. Investigated a transient ECONNREFUSED failure the builder
+  flagged in persona-write-form.mjs (port 31417) -- reran it myself twice,
+  both times 100% clean with zero failures, confirming it was flake/timing
+  noise, not a real issue (consistent with other transient port-contention
+  flakes already documented earlier this session). tsc --noEmit clean both
+  times. All acceptance criteria met.
+
+description: |
+  Resolves design-discussion.md OQ3: once pf-05 ships, a human-typed draft
+  can carry a real sourceSummary for the first time (from attached files),
+  which isAgentProposedDraft()'s current binary check (sourceSummary present
+  => label "agent-proposed") would mislabel -- a human who attached files is
+  not an agent. This story adds a third, honest label state without
+  weakening the existing two.
+
+acceptance_criteria:
+  - "Given a draft with NO sourceSummary, when rendered, then it shows 'Manually created' -- unchanged from pu-12's existing behavior"
+  - "Given a draft with a real sourceSummary AND proposedBy === 'agent', when rendered, then it shows 'Agent-proposed' -- unchanged from pu-12's existing behavior"
+  - "Given a draft with a real sourceSummary but proposedBy is absent or not 'agent' (a human attached files via pf-05), when rendered, then it shows a distinct label -- 'Includes attached source material' -- never mislabeled as agent-proposed, never silently falling back to the no-sourceSummary label either"
+  - "Given the existing persona-draft-review-approve-ui.mjs test file's own isAgentProposedDraft()-related assertions, when this story ships, then they still pass unmodified for the two pre-existing cases -- this is a genuinely additive third branch, not a rewrite of the existing two"
+
+steps:
+  - id: research
+    description: Read isAgentProposedDraft() and its 2 call sites (list-row snippet, detail-view provenance line) in ui/app.js in full, plus test/persona-draft-review-approve-ui.mjs's existing assertions for both.
+    agent: researcher
+  - id: test-spec
+    description: Write failing tests for the new third label state, alongside re-asserting the two existing states remain unchanged.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: Extend the labeling logic at both call sites with the third state. Keep isAgentProposedDraft() itself (the boolean gate) unchanged if possible, or introduce a small sibling function for the 3-way label decision -- whichever keeps the existing boolean check's own call sites (approve-gating logic, if any) untouched.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the two pre-existing label states are genuinely unchanged (a real diff against pu-12's shipped behavior, not an assumption). Confirm the new state never appears for a draft that has no real sourceSummary.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: ui/app.js
+      purpose: "isAgentProposedDraft() and its 2 render call sites -- the exact logic this story extends with a third state."
+    - path: test/persona-draft-review-approve-ui.mjs
+      purpose: "pu-12's own existing tests for the two current label states -- must still pass unmodified after this story."
+
+files_to_modify:
+  - file: ui/app.js
+    change: "Extend labeling logic at both isAgentProposedDraft() call sites with a third state."
+  - file: test/persona-draft-review-approve-ui.mjs
+    change: "New assertions for the third label state."
+
+design_decisions:
+  - decision: "A new, distinct label rather than overloading 'agent-proposed'."
+    rationale: "design-discussion.md OQ3: keeps 'agent-proposed' honestly meaning what it already means, while still surfacing that real material informed a human-typed draft -- never conflating the two."
+
+cross_cutting: []

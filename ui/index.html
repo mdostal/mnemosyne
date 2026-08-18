@@ -318,7 +318,19 @@
            row's Edit/Review-then-edit control pre-fills these same fields
            (populatePersonaForm(), ui/app.js) rather than building a second
            form. A single "knows" section (heading + body) remains the v1
-           minimum viable write path, not a full multi-section editor. -->
+           minimum viable write path, not a full multi-section editor.
+
+           pf-05-ui-file-attachment: a real <input type="file" multiple>
+           field (#persona-file-input), a plain form-row like every other
+           field here -- no special gating, keyboard-reachable via normal
+           Tab order like any other control. ui/app.js's submit handler
+           reads each selected file's text via File.text(), applies
+           pf-04's client-side cap-twin (capExcerpt/assembleSourceSummary),
+           and folds the result into the SAME JSON body already being built
+           as candidate.sourceSummary -- additive only, never a second POST
+           call, never a new backend route. When no files are attached the
+           candidate object is untouched, so the request body pu-12 already
+           produces is byte-for-byte unchanged. -->
       <form id="persona-form">
         <h3>Propose / edit persona draft</h3>
         <div class="form-row">
@@ -354,6 +366,10 @@
         <div class="form-row">
           <label for="persona-repo">Repo (optional — required for code-architect)</label>
           <input id="persona-repo" name="repo" type="text" placeholder="e.g. /path/to/repo -- only required for the code-architect tier" />
+        </div>
+        <div class="form-row">
+          <label for="persona-file-input">Attach files (optional — context for this draft)</label>
+          <input id="persona-file-input" name="files" type="file" multiple />
         </div>
         <button type="submit">Save draft</button>
         <p class="panel-status" id="persona-form-status"></p>

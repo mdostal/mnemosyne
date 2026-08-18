@@ -1,0 +1,116 @@
+id: pf-08-full-suite-regression-release
+epic: mnemosyne-persona-files
+title: Full-suite regression pass + version bump + release note
+status: complete
+complexity: low
+methodology: tdd
+depends_on: [pf-03-slice1-regression, pf-07-slice2-regression]
+
+note_on_completion: >
+  Closes the mnemosyne-persona-files epic (pf-01..pf-08). Ran the full
+  npm test composition file-by-file (test/http-api.mjs intentionally
+  exits non-zero on its own known failures, which would otherwise halt
+  the && chain) plus npx tsc --noEmit against this branch's long-lived,
+  already-verified worktree: all .mjs suites clean except the 3
+  pre-existing, already-documented POST /remember default-layer
+  assertions first flagged in ml-04's completion note (159/162 checks in
+  test/http-api.mjs); vitest lib/mnemosyne lib/minerva benchmarks
+  src/planning src/config src/runners -- 727/727 passing (54/54 files);
+  tsc --noEmit clean. Reconfirmed after the version bump with an
+  identical second run -- same result.
+
+  Stash-and-reproduce proof: found the real merge-base with main
+  (commit d203115, confirmed to already carry main's own
+  stale-test-assertion fix as the task expected), checked it out into a
+  FRESH git worktree with its own fresh npm install. This surfaced 15
+  additional .mjs failures (write-through.mjs, further
+  test/http-api.mjs remember()-chain assertions, single-layer-config.mjs,
+  persona-cli.mjs) plus 13 vitest failures (VectorLayerAdapter.test.ts's
+  remember suite, persona-interview-crawl-and-feed.test.ts's pw-13
+  proofs, persona-interview-draft-output.test.ts's pu-08 proof,
+  persona-interview-global-full-answers-e2e.test.ts's pw-14 proof) not
+  present in the long-lived worktree. Investigated rather than dismissed,
+  per pu-15's own precedent: every failure traces to one root cause --
+  `flight-status auto-detection failed: cwd is in a detached-HEAD (or
+  otherwise branch-less) git state` (git worktree add <commit> checks
+  out detached HEAD by default), which rejects remember()'s
+  write-through and cascades into every test exercising a real
+  remember() call. Cross-checked with a second fresh worktree at this
+  epic's own tip (commit 987164e), same detached-HEAD setup, same fresh
+  npm install: byte-for-byte IDENTICAL 15 .mjs + 13 vitest failures
+  (confirmed via a scripted diff of both worktrees' full check-by-check
+  output -- zero differences), proving this is a fresh-worktree/
+  detached-HEAD artifact affecting the pre-epic baseline and this
+  epic's own tip identically, not a regression this epic introduced.
+  Both throwaway comparison worktrees removed after the proof.
+
+  Version bumped 0.10.0 -> 0.11.0 (minor, per epic.yaml) in package.json
+  and package-lock.json (an incidental allowScripts block npm added to
+  package.json during a fresh `npm install` in this worktree was
+  stripped before committing, per the pu-05 precedent for the same
+  noise). Release note added to CHANGELOG.md covering both real
+  deliverables -- crawlExplicitFiles()/`persona draft propose-from-files`
+  (agent-side) and the UI file-attachment surface with its client-side
+  cap-twin and third "human-attached" provenance label (UI-side) -- both
+  reusing pu-15's draft store/routes/review-UI completely unchanged. All
+  acceptance criteria met.
+
+  Independently re-verified by the coordinating session before merging:
+  reran tsc --noEmit (clean), the full contract vitest suite (727/727,
+  54/54 files), and all 6 of the epic's own new/extended test files
+  (persona-cli.mjs, persona-files-cap-twin-parity.mjs, persona-write-
+  form.mjs, persona-draft-review-approve-ui.mjs, persona-files-slice1-
+  e2e.mjs, persona-files-slice2-e2e.mjs) directly -- all clean. Confirmed
+  test/http-api.mjs's 3 failures are exactly the known-benign POST
+  /remember default-layer assertions, nothing else. Also found and fixed
+  one real factual error in the CHANGELOG.md entry this ticket wrote:
+  crawlExplicitFiles() was cited at the wrong path
+  (lib/mnemosyne/layer1/crawl-context.mjs, which does not exist) --
+  corrected to its real location, skills/mnemosyne-persona-interview/
+  crawl-context.mjs, in a small fixup commit merged alongside this one.
+
+description: |
+  Closes the epic (pf-01 through pf-08), mirroring pu-15's own precedent
+  (mnemosyne-persona-ux's closing ticket): a real full-suite regression
+  proof, a version bump per epic.yaml's version_bump designation, and a
+  release note.
+
+acceptance_criteria:
+  - "Given the full npm test script (vitest suite + the .mjs subprocess suite) plus this epic's own new test files, when run on this epic's final state, then it completes with only pre-existing, already-documented-as-unrelated failures (the generic POST /remember default-layer assertions first documented in ml-04's completion note) -- no NEW failures anywhere"
+  - "Given those pre-existing failures, when this epic's full changeset is stashed out (via a real checkout of the branch's merge-base with main) and the suite is re-run against the clean tree, then the same failures reproduce identically -- proving they predate this epic and are not caused by it"
+  - "Given tsc --noEmit, when run, then it completes clean with zero new type errors"
+  - "Given package.json's version field, when this ticket completes, then it reflects the version bump epic.yaml specifies from the version at epic start"
+  - "Given this ticket's completion note, when read, then it includes the actual full test-run output summary and the actual stashed-tree comparison result, matching pu-15's own completion-note detail level"
+
+steps:
+  - id: research
+    description: Confirm the current version in package.json and the exact current pre-existing-failure set by running the full suite once before this epic's final story lands.
+    agent: researcher
+  - id: implement
+    description: Run the full npm test + tsc --noEmit against this epic's final state; if any NEW failure appears, fix it (a regression-fixing step, not a new-feature step) before proceeding.
+    agent: developer
+    depends_on: [research]
+  - id: review
+    description: Perform the real stash-and-reproduce proof against this branch's merge-base with main -- run in a FRESH worktree with its own npm install, and if that fresh-worktree run itself shows unrelated remember()/swarm-memory-backed failures not present in the long-lived development worktree, cross-check with a second fresh worktree at the epic's own tip before concluding whether a failure is a real regression or a fresh-worktree/live-backend artifact (mnemosyne-persona-ux's own pu-15 completion note documents exactly this investigation pattern and its resolution -- read it first).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Bump version per epic.yaml's version_bump field, write the release note summarizing the epic's real deliverables, commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: .pHive/epics/mnemosyne-persona-ux/stories/pu-15-full-suite-regression-release.yaml
+      purpose: "Direct template for this story's expected verification rigor, completion-note detail level, and the exact fresh-worktree-artifact investigation pattern to reuse if the same class of remember()/swarm-memory-backed noise reappears."
+
+files_to_modify:
+  - file: package.json
+    change: "Version bump per epic.yaml's version_bump field."
+  - file: package-lock.json
+    change: "Version bump, matching package.json."
+  - file: CHANGELOG.md
+    change: "New entry covering the epic's real deliverables."
+
+cross_cutting: []

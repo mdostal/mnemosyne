@@ -691,6 +691,14 @@ main {
   font-style: italic;
 }
 
+/* pf-06: same snippet, distinct visual hook for a human-attached (not
+   agent-proposed) draft's real source material -- no color/text change
+   required by spec, just a style seam for future differentiation. */
+.persona-source-snippet--human-attached {
+  border-left: 2px solid var(--border);
+  padding-left: 0.4rem;
+}
+
 .persona-draft-detail-row td {
   padding: 0;
   border-bottom: 1px solid var(--border);
@@ -743,6 +751,22 @@ main {
   border-radius: 4px;
   background: var(--accent);
   color: #10131a;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* pf-06: the third, honest provenance label -- deliberately NOT styled like
+   .persona-draft-agent-label (var(--accent)), so a human-attached draft is
+   never visually conflated with an agent-proposed one. */
+.persona-draft-source-label {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: var(--border);
+  color: var(--muted);
   font-size: 0.7rem;
   font-weight: 600;
   text-transform: uppercase;

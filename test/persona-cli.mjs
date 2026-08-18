@@ -99,6 +99,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+// pf-02-cli-propose-from-files: `draft propose-from-files`'s own max-file
+// ceiling tests assert against the SAME real constant crawlExplicitFiles()
+// enforces -- plain ESM, no tsx-boundary issue importing it directly into
+// this plain-`node`-run test file (crawl-context.mjs imports nothing from
+// lib/mnemosyne/layer1/*.ts).
+// eslint-disable-next-line import/extensions
+import { MAX_EXPLICIT_FILES } from "../skills/mnemosyne-persona-interview/crawl-context.mjs";
 
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -958,6 +965,168 @@ async function main() {
     await rm(contentDir, { recursive: true, force: true });
   }
 
+  // --- AC-propose-from-files: successful multi-file propose (global tier), verified by a DIRECT
+  //     filesystem read of the resulting draft -- sourceSummary genuinely contains the real fixture
+  //     files' content, not a placeholder (pf-02) --------------------------------------------------
+  {
+    const home = await makeFakeHome();
+    const contentDir = await makeTempDir("mnemosyne-persona-cli-pff-content-");
+
+    const fileA = path.join(contentDir, "notes.md");
+    const fileB = path.join(contentDir, "design.md");
+    await writeFile(fileA, "PFF_NOTES_MARKER — real scratch notes, not a placeholder.", "utf8");
+    await writeFile(fileB, "PFF_DESIGN_MARKER — real design intent, not a placeholder.", "utf8");
+
+    const propose = await runCli(
+      ["draft", "propose-from-files", "--tier", "company-director", "--scope-id", "pff-global-scope", "--file", fileA, "--file", fileB],
+      { home },
+    );
+    ok(propose.code === 0, `draft propose-from-files (multi-file, global tier) -> exit 0 (got ${propose.code}, stderr=${short(propose.stderr)})`);
+    ok(/proposed/.test(propose.stdout), `draft propose-from-files reports the write -> ${short(propose.stdout)}`);
+    ok(/notes\.md/.test(propose.stdout) && /design\.md/.test(propose.stdout), `draft propose-from-files reports the crawled sources -> ${short(propose.stdout)}`);
+
+    // Direct filesystem read of the resulting draft file -- not `draft show`'s rendering.
+    const writtenDraft = await readFile(
+      path.join(home, ".mnemosyne", "persona-drafts", "company-director", "pff-global-scope.yaml"),
+      "utf8",
+    );
+    ok(writtenDraft.includes("PFF_NOTES_MARKER"), "the draft file's sourceSummary genuinely contains notes.md's real content");
+    ok(writtenDraft.includes("PFF_DESIGN_MARKER"), "the draft file's sourceSummary genuinely contains design.md's real content");
+    ok(
+      !/Bounded crawl found none of the named sources/i.test(writtenDraft),
+      "the draft's sourceSummary is the real crawl output, not the empty-crawl placeholder text",
+    );
+    ok(writtenDraft.includes("tier: company-director"), "the draft carries the requested tier");
+    ok(writtenDraft.includes("pff-global-scope"), "the draft carries the requested scopeId");
+
+    // `draft show` also surfaces the same real content (not just the raw file on disk).
+    const shown = await runCli(["draft", "show", "company-director", "pff-global-scope"], { home });
+    ok(shown.code === 0, `draft show (after propose-from-files) -> exit 0 (got ${shown.code}, stderr=${short(shown.stderr)})`);
+    ok(shown.stdout.includes("PFF_NOTES_MARKER"), `draft show prints the real crawled sourceSummary (notes.md) -> ${short(shown.stdout)}`);
+    ok(shown.stdout.includes("PFF_DESIGN_MARKER"), `draft show prints the real crawled sourceSummary (design.md) -> ${short(shown.stdout)}`);
+
+    await rm(home, { recursive: true, force: true });
+    await rm(contentDir, { recursive: true, force: true });
+  }
+
+  // --- AC-propose-from-files: --repo routing for code-architect drafts, matching `draft propose`'s
+  //     own existing --repo handling exactly (pf-02) -----------------------------------------------
+  {
+    const home = await makeFakeHome();
+    const repo = await makeTempDir("mnemosyne-persona-cli-pff-repo-");
+    await writeFile(path.join(repo, "context.md"), "PFF_REPO_CONTEXT_MARKER — real repo-local source file.", "utf8");
+
+    // Relative --file path, resolved against --repo (not the CLI process's own cwd).
+    const propose = await runCli(
+      ["draft", "propose-from-files", "--tier", "code-architect", "--scope-id", "pff-repo-scope", "--repo", repo, "--file", "context.md"],
+      { home },
+    );
+    ok(propose.code === 0, `draft propose-from-files (code-architect, --repo) -> exit 0 (got ${propose.code}, stderr=${short(propose.stderr)})`);
+
+    ok(
+      !(await stat(path.join(repo, ".mnemosyne", "personas", "pff-repo-scope.yaml")).then(() => true).catch(() => false)),
+      "draft propose-from-files did NOT write anything into the repo's REAL repo-local persona store",
+    );
+
+    const shown = await runCli(["draft", "show", "code-architect", "pff-repo-scope", "--repo", repo], { home });
+    ok(shown.code === 0, `draft show (code-architect, after propose-from-files) -> exit 0 (got ${shown.code}, stderr=${short(shown.stderr)})`);
+    ok(shown.stdout.includes("PFF_REPO_CONTEXT_MARKER"), `draft show (repo-local) prints the real crawled sourceSummary -> ${short(shown.stdout)}`);
+
+    // Matches `draft propose`'s own --repo handling: without --repo, the same identity is invisible
+    // (repo-local drafts are scoped by repoRoot).
+    const shownNoRepo = await runCli(["draft", "show", "code-architect", "pff-repo-scope"], { home });
+    ok(shownNoRepo.code !== 0, `draft show (repo-local identity, --repo omitted) -> non-zero exit (got ${shownNoRepo.code})`);
+
+    await rm(home, { recursive: true, force: true });
+    await rm(repo, { recursive: true, force: true });
+  }
+
+  // --- AC-propose-from-files: the max-files error case -- CLI exits non-zero with a clear error
+  //     naming the limit, never silently processing a subset (pf-02) --------------------------------
+  {
+    const home = await makeFakeHome();
+    const contentDir = await makeTempDir("mnemosyne-persona-cli-pff-maxfiles-");
+
+    // Default ceiling (MAX_EXPLICIT_FILES) exceeded, no --max-files override given.
+    const tooManyFiles = [];
+    for (let i = 0; i < MAX_EXPLICIT_FILES + 1; i++) {
+      const p = path.join(contentDir, `f${i}.md`);
+      await writeFile(p, `PFF_TOOMANY_${i}_MARKER`, "utf8");
+      tooManyFiles.push(p);
+    }
+    const fileArgs = tooManyFiles.flatMap((f) => ["--file", f]);
+    const overDefault = await runCli(
+      ["draft", "propose-from-files", "--tier", "top-orchestrator", "--scope-id", "pff-too-many-default", ...fileArgs],
+      { home },
+    );
+    ok(overDefault.code !== 0, `draft propose-from-files with more --file flags than the default ceiling -> non-zero exit (got ${overDefault.code})`);
+    ok(
+      new RegExp(`exceeding the maximum of ${MAX_EXPLICIT_FILES}`).test(overDefault.stderr),
+      `draft propose-from-files (default ceiling exceeded) -> clear stderr message naming the limit (${MAX_EXPLICIT_FILES}) -> ${short(overDefault.stderr)}`,
+    );
+    const noDraftAfterDefault = await stat(
+      path.join(home, ".mnemosyne", "persona-drafts", "top-orchestrator", "pff-too-many-default.yaml"),
+    ).then(() => true).catch(() => false);
+    ok(noDraftAfterDefault === false, "draft propose-from-files (default ceiling exceeded) did NOT write a partial draft to disk");
+
+    // An explicit --max-files override, itself exceeded by the --file count given.
+    const fileA = path.join(contentDir, "small-a.md");
+    const fileB = path.join(contentDir, "small-b.md");
+    await writeFile(fileA, "PFF_SMALL_A_MARKER", "utf8");
+    await writeFile(fileB, "PFF_SMALL_B_MARKER", "utf8");
+    const overOverride = await runCli(
+      [
+        "draft", "propose-from-files",
+        "--tier", "top-orchestrator", "--scope-id", "pff-too-many-override",
+        "--max-files", "1",
+        "--file", fileA, "--file", fileB,
+      ],
+      { home },
+    );
+    ok(overOverride.code !== 0, `draft propose-from-files with more --file flags than an explicit --max-files override -> non-zero exit (got ${overOverride.code})`);
+    ok(
+      /exceeding the maximum of 1/.test(overOverride.stderr),
+      `draft propose-from-files (--max-files 1 exceeded) -> clear stderr message naming the limit (1) -> ${short(overOverride.stderr)}`,
+    );
+    ok(!/silently|subset/i.test(overOverride.stdout), "no partial-processing report is printed to stdout on the max-files error path");
+
+    await rm(home, { recursive: true, force: true });
+    await rm(contentDir, { recursive: true, force: true });
+  }
+
+  // --- AC-propose-from-files: argument parsing -- missing --tier/--scope-id/--file, invalid --tier,
+  //     invalid --max-files (pf-02) -------------------------------------------------------------
+  {
+    const home = await makeFakeHome();
+
+    const missingTierScope = await runCli(["draft", "propose-from-files", "--file", "whatever.md"], { home });
+    ok(missingTierScope.code !== 0, `draft propose-from-files missing --tier/--scope-id -> non-zero exit (got ${missingTierScope.code})`);
+    ok(
+      /--tier.*--scope-id.*required/i.test(missingTierScope.stderr),
+      `draft propose-from-files missing --tier/--scope-id -> clear stderr message -> ${short(missingTierScope.stderr)}`,
+    );
+
+    const invalidTier = await runCli(
+      ["draft", "propose-from-files", "--tier", "not-a-real-tier", "--scope-id", "x", "--file", "whatever.md"],
+      { home },
+    );
+    ok(invalidTier.code !== 0, `draft propose-from-files invalid --tier -> non-zero exit (got ${invalidTier.code})`);
+    ok(/invalid --tier/i.test(invalidTier.stderr), `draft propose-from-files invalid --tier -> clear stderr message -> ${short(invalidTier.stderr)}`);
+
+    const noFile = await runCli(["draft", "propose-from-files", "--tier", "top-orchestrator", "--scope-id", "x"], { home });
+    ok(noFile.code !== 0, `draft propose-from-files with no --file -> non-zero exit (got ${noFile.code})`);
+    ok(/at least one --file/i.test(noFile.stderr), `draft propose-from-files with no --file -> clear stderr message -> ${short(noFile.stderr)}`);
+
+    const badMaxFiles = await runCli(
+      ["draft", "propose-from-files", "--tier", "top-orchestrator", "--scope-id", "x", "--file", "whatever.md", "--max-files", "not-a-number"],
+      { home },
+    );
+    ok(badMaxFiles.code !== 0, `draft propose-from-files with a non-numeric --max-files -> non-zero exit (got ${badMaxFiles.code})`);
+    ok(/--max-files must be a positive integer/i.test(badMaxFiles.stderr), `draft propose-from-files with a bad --max-files -> clear stderr message -> ${short(badMaxFiles.stderr)}`);
+
+    await rm(home, { recursive: true, force: true });
+  }
+
   // --- AC-draft-approve: success path -- byte-for-byte identical to what `create` would write,
   //     draft archived (never deleted), `draft show` afterward reports none (pu-04) -------------
   {
@@ -1248,6 +1417,7 @@ async function main() {
     ok(/show <tier> <scope-id>/.test(helpText), `persona --help mentions the show subcommand -> ${short(helpText)}`);
     ok(/create --file/.test(helpText), `persona --help mentions the create subcommand -> ${short(helpText)}`);
     ok(/draft propose/.test(helpText), `persona --help mentions the draft propose subcommand -> ${short(helpText)}`);
+    ok(/draft propose-from-files/.test(helpText), `persona --help mentions the draft propose-from-files subcommand -> ${short(helpText)}`);
     ok(/draft show/.test(helpText), `persona --help mentions the draft show subcommand -> ${short(helpText)}`);
     ok(/draft approve/.test(helpText), `persona --help mentions the draft approve subcommand -> ${short(helpText)}`);
     ok(/draft discard/.test(helpText), `persona --help mentions the draft discard subcommand -> ${short(helpText)}`);

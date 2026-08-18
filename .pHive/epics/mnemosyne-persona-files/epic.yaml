@@ -1,0 +1,54 @@
+name: mnemosyne-persona-files
+title: Create personas from explicit files -- an agent-side CLI path and a UI-side attachment path
+target_codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+methodology: tdd
+version_bump: minor
+
+description: |
+  Operator ask (verbatim): "we need a way to create the personas with files
+  and things as well at some point, so that may just be the agent
+  installing, but we may also want some of that in the UI." Follow-up:
+  "Both, same priority."
+
+  Extends mnemosyne-persona-ux's already-shipped crawl-propose-review-approve
+  infrastructure (v0.10.0, main) with two new ways to get file content into a
+  proposed draft's sourceSummary -- an agent-side CLI path
+  (crawlExplicitFiles() + `draft propose-from-files`) and a UI-side file
+  attachment in the Personas panel's existing form -- reusing the existing
+  draft store, draft HTTP routes, and draft-review-approve UI completely
+  unchanged as the write/review surface. version_bump: minor, matching both
+  prior epics' convention for a real, backward-compatible feature addition.
+
+stories:
+  - id: pf-01-crawl-explicit-files
+    title: "crawlExplicitFiles(): sibling to crawlBoundedContext() for operator/agent-chosen files"
+    complexity: medium
+    depends_on: []
+  - id: pf-02-cli-propose-from-files
+    title: "CLI: mnemosyne persona draft propose-from-files"
+    complexity: medium
+    depends_on: [pf-01-crawl-explicit-files]
+  - id: pf-03-slice1-regression
+    title: "Slice 1 regression: explicit-file propose -> review -> approve -> real commit"
+    complexity: low
+    depends_on: [pf-02-cli-propose-from-files]
+  - id: pf-04-client-cap-twin
+    title: "Client-side cap-twin: port capExcerpt()/assembleSourceSummary() to ui/app.js, with a parity test"
+    complexity: medium
+    depends_on: []
+  - id: pf-05-ui-file-attachment
+    title: "#persona-form gains a real file-attachment input, wired into the existing draft-propose POST"
+    complexity: medium
+    depends_on: [pf-04-client-cap-twin]
+  - id: pf-06-provenance-label-extension
+    title: "isAgentProposedDraft(): add the third 'includes attached source material' state"
+    complexity: low
+    depends_on: [pf-05-ui-file-attachment]
+  - id: pf-07-slice2-regression
+    title: "Slice 2 regression: UI file attachment -> propose -> review -> approve -> real commit"
+    complexity: low
+    depends_on: [pf-06-provenance-label-extension]
+  - id: pf-08-full-suite-regression-release
+    title: Full-suite regression pass + version bump + release note
+    complexity: low
+    depends_on: [pf-03-slice1-regression, pf-07-slice2-regression]
