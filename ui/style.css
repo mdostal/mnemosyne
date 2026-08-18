@@ -7,7 +7,25 @@
   --muted: #9aa2b1;
   --pass: #4fd17a;
   --fail: #ff6b6b;
-  --accent: #7aa2f7;
+  /* ui-01-accent-token-reconciliation: migrated from the old blue
+     (#7aa2f7) to the shipped favicon's amber-gold -- see
+     .pHive/epics/mnemosyne-ui-redesign/docs/horizontal-plan.md H1 and
+     is-03's release note for the favicon this now matches. */
+  --accent: #D8A84E;
+  /* --node-selected/--node-focus intentionally alias var(--fail)/
+     var(--pass) directly -- this is NOT a new, non-colliding color pair,
+     and this comment must not claim otherwise. The operator explicitly
+     chose to keep the graph's original red/green selected/focus coloring
+     (this session, round 2 dispatch) over a dedicated third-color
+     treatment. Round 2's visual-identity-cohesion.md critique caught the
+     reference "hybrid" mockup's own header comment falsely claiming these
+     tokens were a real color fix ("dedicated tokens... to fix the color
+     reuse") when they resolve to byte-identical rendered pixels as the
+     raw var(--fail)/var(--pass) usage they replace -- this comment states
+     the real, honest reason (operator preference) instead of repeating
+     that overclaim. */
+  --node-selected: var(--fail);
+  --node-focus: var(--pass);
 }
 
 * { box-sizing: border-box; }
@@ -53,6 +71,67 @@ h1 {
 #refresh-btn:hover { opacity: 0.9; }
 #refresh-btn:disabled { opacity: 0.5; cursor: default; }
 
+/* ui-03-jump-chip-nav-and-status-wiring: sticky jump-chip nav, directly
+   under <header> (index.html). Every chip is a real <a href="#id"> anchor
+   -- this block is presentation only, never `display: none` on anything a
+   no-JS/JS-off/JS-error reader needs, and it never hides any .panel below. */
+nav#jump-chips {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.6rem 1.5rem;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+nav#jump-chips a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  text-decoration: none;
+  color: var(--muted);
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+  white-space: nowrap;
+}
+
+nav#jump-chips a:hover,
+nav#jump-chips a:focus-visible,
+nav#jump-chips a.current {
+  color: var(--text);
+  border-color: var(--accent);
+  outline: none;
+}
+
+nav#jump-chips a .chip-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
+}
+
+/* Status rings on the chip dot: real per-panel health, sourced from the
+   panel's own .panel-status element by ui/app.js's syncJumpChips() --
+   never fabricated at the nav level. A chip with neither class (Search,
+   Operations -- see syncJumpChips()'s CHIP_STATUS_SOURCE comment) keeps the
+   plain amber dot above with no ring at all, on purpose. box-shadow can't
+   take var(--pass)/var(--fail) directly with an added alpha, so these are
+   the same literal rgb() decomposition of those two tokens' hex values
+   already used for .status-pill.live/.status-pill.degraded above (lines
+   121, 133) -- not a new, uncoordinated color. */
+nav#jump-chips a.chip-pass .chip-dot { box-shadow: 0 0 0 3px rgba(79, 209, 122, 0.45); }
+nav#jump-chips a.chip-fail .chip-dot { box-shadow: 0 0 0 3px rgba(255, 107, 107, 0.55); }
+
 main {
   display: grid;
   grid-template-columns: 1fr;
@@ -71,6 +150,9 @@ main {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 1rem 1.25rem;
+  /* ui-03-jump-chip-nav-and-status-wiring: clears the sticky #jump-chips
+     bar when a chip's #anchor jump lands on this panel. */
+  scroll-margin-top: 4.5rem;
 }
 
 .panel h2 {
@@ -86,6 +168,39 @@ main {
 .panel-status.pass { color: var(--pass); }
 .panel-status.fail { color: var(--fail); }
 .panel-status.loading { color: var(--muted); }
+
+/* ui-01-accent-token-reconciliation: a real, distinct pill vocabulary --
+   NOT the single-class conflation round 2's visual-identity-cohesion.md
+   critique caught still live (a "Degraded" store rendered with the same
+   amber .needs-review class used for a pending-review state, because no
+   dedicated failure-state pill existed). */
+.status-pill {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.status-pill.live { background: rgba(79, 209, 122, 0.15); color: var(--pass); }
+
+/* .needs-review (amber) marks a pending-human-decision state -- e.g. a
+   persona draft awaiting review. It is NOT a stand-in for a genuine
+   health failure; .degraded below is the real, distinct class for that. */
+.status-pill.needs-review { background: rgba(216, 168, 78, 0.18); color: var(--accent); }
+
+/* Genuinely distinct from .needs-review above (different background,
+   different color, resolves to --fail not --accent) -- a real health
+   failure, never a pending-review state. Wired into the Memory Levels
+   table (loadMemoryLevels() in app.js) for a store that is not actually
+   configured/active right now. */
+.status-pill.degraded { background: rgba(255, 107, 107, 0.15); color: var(--fail); }
+
+.memory-level-cascade-detail {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin-left: 0.4rem;
+}
 
 .detail {
   white-space: pre-wrap;
@@ -424,12 +539,12 @@ main {
 }
 
 .graph-node.selected circle {
-  fill: var(--fail);
+  fill: var(--node-selected);
   r: 9;
 }
 
 .graph-node.focus circle {
-  stroke: var(--pass);
+  stroke: var(--node-focus);
   stroke-width: 3;
 }
 

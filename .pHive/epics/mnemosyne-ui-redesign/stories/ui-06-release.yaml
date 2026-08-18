@@ -1,0 +1,105 @@
+id: ui-06-release
+epic: mnemosyne-ui-redesign
+title: "Full-suite regression + version bump + release note"
+status: complete
+complexity: low
+methodology: classic
+depends_on: [ui-05-accessibility-hardening]
+
+note_on_completion: >
+  Carried out directly in the main working tree (not dispatched -- a
+  regression pass + version bump + changelog entry doesn't warrant a
+  separate builder round-trip, and the orchestrating session already had
+  full context on everything ui-01..ui-05 shipped). Ran tsc --noEmit
+  (clean) and the full suite against the epic's final merged state
+  (commit 669a1ea): 54/54 vitest files, 727/727 tests; .mjs suite clean
+  except the 3 already-documented pre-existing POST /remember failures
+  and test/ui-shell.mjs's 22 failures (not part of npm test's own script
+  chain; confirmed genuinely pre-existing via a real stash-and-reproduce
+  against the epic's own pre-ui-01 base commit, done during ui-01's own
+  verification earlier in this epic -- not re-litigated here, same root
+  cause, same unrelated scope). No new failures anywhere -- nothing to
+  fix. Version bumped 0.11.1 -> 0.12.0 (minor, matching epic.yaml's
+  version_bump and the real scope: shared visual/structural changes
+  across the whole UI surface, not a single-asset patch). CHANGELOG.md
+  0.12.0 entry added covering the real deliverable (reconciled amber-gold
+  identity, jump-chip nav with live status, inline header icon, Personas
+  collapse, accessibility hardening) and the two-round swarm-review
+  process that produced the confirmed direction. This closes the
+  mnemosyne-ui-redesign epic (ui-01 through ui-06, all complete) on its
+  own feature branch -- merge to dev/main follows immediately per the
+  operator's own standing go-ahead this session ("yeah, go for it, you
+  can merge keep going... plan,execute,verify,ship,repeat").
+
+description: |
+  Closes the mnemosyne-ui-redesign epic (ui-01 through ui-06), mirroring
+  this session's own established closing-ticket convention (pf-08, is-03):
+  a real full-suite regression pass against the epic's final state, a
+  version bump, and a CHANGELOG entry covering the real deliverable. Given
+  this epic touches shared shell files (ui/style.css, ui/index.html,
+  ui/app.js) that every other panel depends on -- including Personas,
+  already shipped and tested twice this session -- this closing pass
+  gets pf-08's full rigor (a real regression check against the pre-epic
+  baseline), not is-03's lighter scope.
+
+acceptance_criteria:
+  - "Given the full npm test script (vitest suite + the .mjs subprocess suite) plus tsc --noEmit, when run against this epic's final merged state, then it completes with only the already-documented, pre-existing failures (the 3 generic POST /remember default-layer assertions) -- no NEW failures anywhere, and specifically no regression in any Personas-panel test"
+  - "Given any NEW failure found, then it is fixed before this ticket completes -- a regression-fixing step, not deferred"
+  - "Given package.json's version field, when this ticket completes, then it reflects a real minor version bump (0.11.1 -> 0.12.0, matching epic.yaml's version_bump: minor -- a whole-shell visual/IA redesign is more than a patch-scale change, unlike the single-asset icon epic before it)"
+  - "Given this ticket's completion note, when read, then it includes the real full test-run output summary (real pass/fail counts) and a real before/after screenshot or description of the shipped UI, not just a text claim"
+  - "Given the standalone UI server running with this epic's final changes, when loaded in a real browser, then the confirmed direction (jump-chip nav, amber accent, inline header icon, Personas collapse) is genuinely visible and interactive -- a real, visual confirmation, not only an HTML-source-level assertion"
+
+steps:
+  - id: implement
+    description: >
+      Run the full npm test + tsc --noEmit against this epic's final
+      state; fix any new failure found, with particular attention to
+      Personas' own existing tests (the highest-risk regression surface
+      per horizontal-plan.md H5). Bump package.json/package-lock.json to
+      0.12.0. Write a CHANGELOG.md entry covering the real deliverable:
+      the redesigned shell (jump-chip nav, reconciled amber-gold accent,
+      inline header icon, Personas draft-tools collapse), the two-round
+      swarm-review process that produced it, and the accessibility
+      hardening pass.
+    agent: developer
+  - id: review
+    description: >
+      Start the real standalone UI server, load /ui in a real browser
+      (Playwright), confirm the shipped shell genuinely matches the
+      confirmed direction -- take a real screenshot for the completion
+      note.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: .pHive/epics/mnemosyne-persona-files/stories/pf-08-full-suite-regression-release.yaml
+      purpose: "Direct template for this closing ticket's rigor level -- this epic touches shared shell files at least as broadly as pf-08's, so it gets the same full regression treatment, not is-03's lighter scope."
+
+files_to_modify:
+  - file: package.json
+    change: "Version bump 0.11.1 -> 0.12.0."
+  - file: package-lock.json
+    change: "Version bump, matching package.json."
+  - file: CHANGELOG.md
+    change: "New entry covering the redesigned shell and the two-round swarm-review process behind it."
+
+design_decisions:
+  - decision: "Minor version bump (0.11.1 -> 0.12.0), not a patch."
+    rationale: "epic.yaml's version_bump: minor -- this epic changes shared visual/structural code across the whole UI surface, a materially larger change than the single-asset icon epic (0.10.1, patch) that preceded it."
+
+cross_cutting: []
+risks: []
+
+references:
+  - path: .pHive/epics/mnemosyne-ui-redesign/docs/horizontal-plan.md
+    relevant_excerpt: |
+      "H5 -- Regression/release layer... Personas' own already-shipped
+      tests are the highest-risk regression surface since this epic's
+      <details id=\"persona-tools\"> wrap touches markup those tests
+      assert against."

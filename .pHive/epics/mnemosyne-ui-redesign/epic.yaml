@@ -1,0 +1,62 @@
+name: mnemosyne-ui-redesign
+title: Full look-and-feel/UX redesign of the standalone UI shell
+target_codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+methodology: classic
+version_bump: minor
+
+description: |
+  Operator ask (verbatim, across the session): "the UI pass is on the
+  entirety of the UI planning etc -- ensure we are doing ALL of this with
+  plugin hive! no corners get cut" and "run it ALL through the passes...
+  the FIRST release is just the icon, then do the full thing in the
+  planning and execute." The favicon shipped first (mnemosyne-icon-selection,
+  v0.11.1); this epic is the full-thing follow-on.
+
+  Runs a real multi-agent swarm design review (mirroring mnemosyne-persona-ux's
+  pu-01 and mnemosyne-icon-selection's is-01) over the whole standalone UI
+  shell -- not one panel. Two review rounds: round 1 generated 3 genuinely
+  distinct structural directions as real rendered HTML mockups and
+  critiqued them across 7 lenses; round 2, after the operator flagged that
+  fixable implementation bugs were unfairly penalizing two directions,
+  hardened those bugs and re-judged all 4 real candidates (including an
+  operator-requested hybrid) adversarially -- catching a new regression
+  this session's own hardening pass introduced, a half-applied fix, and a
+  mislabeled "clean" baseline that wasn't. See
+  .pHive/design/mnemosyne-ui-redesign/{options,critiques,synthesized,round2}/
+  for the full record.
+
+  Confirmed direction (design-discussion.md §8, operator-confirmed
+  2026-08-18): a flat, always-visible document (structurally close to the
+  app's real current layout) with a sticky jump-chip nav bar carrying live
+  per-panel status rings, a real amber-gold accent reconciling the shipped
+  favicon identity with the running UI's chrome, the real favicon embedded
+  inline in the header, one narrowly-scoped collapse limited to Personas'
+  write-tooling tail, and the graph node's selected/focus states
+  deliberately kept on the original red/green values (an explicit,
+  documented operator preference, not an oversight).
+
+stories:
+  - id: ui-01-accent-token-reconciliation
+    title: "Migrate --accent to amber-gold + fix status-pill/graph-node color-semantics bugs"
+    complexity: low
+    depends_on: []
+  - id: ui-02-inline-header-icon
+    title: "Embed the real shipped favicon inline in the header"
+    complexity: low
+    depends_on: []
+  - id: ui-03-jump-chip-nav-and-status-wiring
+    title: "Sticky jump-chip navigation bar with live per-panel status rings"
+    complexity: medium
+    depends_on: [ui-01-accent-token-reconciliation]
+  - id: ui-04-personas-draft-tools-collapse
+    title: "Collapse Personas' write-tooling tail into a single <details> section"
+    complexity: low
+    depends_on: [ui-03-jump-chip-nav-and-status-wiring]
+  - id: ui-05-accessibility-hardening
+    title: "Status-ring text alternative + full label-association audit"
+    complexity: medium
+    depends_on: [ui-02-inline-header-icon, ui-04-personas-draft-tools-collapse]
+  - id: ui-06-release
+    title: "Full-suite regression + version bump + release note"
+    complexity: low
+    depends_on: [ui-05-accessibility-hardening]

@@ -9,9 +9,44 @@
 </head>
 <body>
   <header>
-    <h1>Mnemosyne <span class="subtitle">memory god — standalone shell</span></h1>
+    <h1><img src="/ui/favicon.png" alt="" width="28" height="28" style="width:28px;height:28px;vertical-align:middle;margin-right:0.5rem;" />Mnemosyne <span class="subtitle">memory god — standalone shell</span></h1>
     <button id="refresh-btn" type="button">Refresh</button>
   </header>
+
+  <!-- ui-03-jump-chip-nav-and-status-wiring: 8 plain #anchor links, one per
+       real top-level panel below, in the same document order. These are
+       real <a href="#id"> anchors -- click-to-jump works with zero JS, and
+       every linked <section> stays fully visible with zero JS (see each
+       section's static markup further below; nothing here is created or
+       unhidden by a script). chip-pass/chip-fail classes are added by
+       ui/app.js's syncJumpChips() (called from refreshAll()'s completion
+       path) ONLY for panels with a real, already-rendered .panel-status --
+       never fabricated here or in script. See ui/app.js's
+       CHIP_STATUS_SOURCE comment for exactly which panels qualify and why.
+
+       ui-05-accessibility-hardening: round-2's accessibility.md found the
+       ring's ONLY text equivalent in the rejected hybrid mockup was a bare
+       `title` attribute, which is not read in normal browse mode by any
+       major screen reader. Each chip below carries a real
+       <span class="sr-only" id="chip-status-<panelId>"> as its text
+       alternative -- reusing this file's existing .sr-only utility class
+       (ui/style.css, already used by #search-query/#search-scope's labels),
+       not a new/duplicate one. It starts empty (matching "loading"/no
+       status yet) and is populated ONLY by syncJumpChips() (ui/app.js),
+       from the exact same isPass/isFail read that drives the chip-pass/
+       chip-fail class right above it -- never a static/generic label, and
+       never populated for Search/Operations, which correctly carry no
+       status. See syncJumpChips()'s own comment for the exact text. -->
+  <nav id="jump-chips" aria-label="jump to panel">
+    <a href="#liveliness"><span class="chip-dot"></span>Liveliness<span class="sr-only" id="chip-status-liveliness"></span></a>
+    <a href="#settings"><span class="chip-dot"></span>Settings<span class="sr-only" id="chip-status-settings"></span></a>
+    <a href="#lanes"><span class="chip-dot"></span>Lanes<span class="sr-only" id="chip-status-lanes"></span></a>
+    <a href="#search"><span class="chip-dot"></span>Search<span class="sr-only" id="chip-status-search"></span></a>
+    <a href="#graph"><span class="chip-dot"></span>Graph<span class="sr-only" id="chip-status-graph"></span></a>
+    <a href="#operations"><span class="chip-dot"></span>Operations<span class="sr-only" id="chip-status-operations"></span></a>
+    <a href="#personas"><span class="chip-dot"></span>Personas<span class="sr-only" id="chip-status-personas"></span></a>
+    <a href="#memory-levels"><span class="chip-dot"></span>Memory Levels<span class="sr-only" id="chip-status-memory-levels"></span></a>
+  </nav>
 
   <main>
     <section id="liveliness" class="panel">
@@ -298,6 +333,22 @@
       </table>
       <p class="panel-status" id="personas-empty" hidden></p>
 
+      <!-- ui-04-personas-draft-tools-collapse: a single native <details>
+           wraps ONLY the write-oriented tail below -- the draft-propose
+           form (#persona-form), the Retrieval Layer Stack sub-section
+           (#persona-layer-stack, which already contains the Level 0
+           pointer), and nothing else. The identity table above (and
+           everything above it: personas-status, the glossary, the
+           toolbar, the aria-live region, #personas-table/#personas-tbody,
+           #personas-empty) stays a direct, always-visible sibling of this
+           <details>, outside it, exactly as it was before this story --
+           never wrapped, never hidden by default. Defaults open, so
+           first-paint length is unchanged; this is a relief valve for a
+           returning operator to collapse, not an automatic length
+           reduction (round-2 design-discussion.md §8 consensus). -->
+      <details id="persona-tools" open>
+        <summary>Draft tools &amp; retrieval layer stack</summary>
+
       <!-- pw-17-personas-panel-write-form, RETARGETED by
            pu-12-draft-review-approve-ui: same add-lane-form-derived
            convention (form-row divs, single submit button, panel-status
@@ -441,6 +492,8 @@
         </div>
       </section>
       <!-- ==================== end pu-11 re-homed section =============== -->
+      </details>
+      <!-- ============= end ui-04 persona-tools <details> wrapper ======== -->
     </section>
     <!-- ================================================================
          ml-05-memory-levels-ui (epic mnemosyne-memory-levels): Memory

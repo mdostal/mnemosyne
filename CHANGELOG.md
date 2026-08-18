@@ -2,6 +2,83 @@
 
 All notable changes to Mnemosyne are documented here.
 
+## [0.12.0] — 2026-08-18
+
+`mnemosyne-ui-redesign` epic (`ui-01`..`ui-06`) — a full look-and-feel/UX
+redesign of the standalone UI shell, driven by a real, two-round multi-agent
+design review rather than picked ad hoc. Every panel keeps its shipped shape;
+this epic is entirely a shell-level pass (navigation, visual identity,
+accessibility) on top of the already-shipped Personas work.
+
+### The review process
+
+Round 1 built 3 genuinely distinct structural directions as real, rendered,
+interactive HTML mockups (not markdown option docs) — grouped collapsible
+`<details>` clusters, a persistent sidebar with live status badges, and a
+flat document with a sticky jump-chip nav — and critiqued all 3 across 7
+lenses (navigation-wayfinding, glanceable-monitoring, accessibility,
+visual-identity-cohesion, consistency-with-existing-conventions,
+scale-realism, build-feasibility). The operator flagged that fixable
+implementation bugs (a missing collapse-time status signal, missing ARIA)
+were unfairly penalizing two directions rather than reflecting real design
+merit — round 2 hardened those bugs, added an operator-requested hybrid
+(status rings + a scoped Personas collapse + the operator's preferred
+original graph-node coloring), and adversarially re-judged all 4 real
+candidates. Round 2 caught a regression this session's own hardening pass
+introduced, a half-applied color fix, and a mislabeled "clean" baseline that
+wasn't — exactly the scrutiny the process exists to provide. Full record:
+`.pHive/design/mnemosyne-ui-redesign/{options,critiques,synthesized,round2}/`.
+
+### Added
+
+- **Reconciled amber-gold accent** (`ui/style.css`, `ui-01`) — `--accent`
+  migrated from the running UI's stale blue (`#7aa2f7`) to the shipped
+  favicon's real amber-gold (`#D8A84E`), fixing a visual-identity mismatch
+  that had gone unnoticed since the icon shipped. Fixed two real
+  color-semantics bugs alongside it: a distinct `.status-pill.degraded`
+  (red) separate from `.status-pill.needs-review` (amber, previously
+  double-booked for a genuine store failure and a routine pending draft),
+  and honestly-documented `--node-selected`/`--node-focus` graph tokens
+  (a deliberate operator choice to keep the original red/green node
+  coloring, not a silently-renamed non-fix).
+- **Real favicon inline in the header** (`ui/index.html`, `ui-02`) — the
+  shipped Ancient Urn mark now appears beside the `<h1>`, not only as a
+  browser-tab icon.
+- **Sticky jump-chip navigation with live per-panel status** (`ui/index.html`,
+  `ui/app.js`, `ui/style.css`, `ui-03`) — the real answer to "the ungodly
+  long list": one anchor per panel, each carrying a status ring sourced
+  only from that panel's own real, already-rendered status — never
+  fabricated for panels (Search, Operations) with no real status line.
+  Zero panel visibility depends on JavaScript; every chip degrades to a
+  plain working anchor if the (optional, progressively-enhancing)
+  scroll-spy script is absent or fails.
+- **Personas' write-tooling tail collapsed** (`ui/index.html`, `ui-04`) — a
+  single native `<details id="persona-tools">` now wraps only the
+  draft-propose form and the Retrieval Layer Stack sub-section; the
+  identity table stays a direct, always-visible sibling, untouched. The
+  highest-risk ticket in the epic (touching already-shipped, already-tested
+  Personas markup) shipped with zero regressions across all 7 of Personas'
+  own existing test files.
+- **Accessibility hardening** (`ui/index.html`, `ui/app.js`, `ui-05`) — the
+  jump-chip status rings now carry a real, visually-hidden text alternative
+  (e.g. "Liveliness: pass"), closing round-2's finding that a bare `title`
+  attribute isn't read by screen readers in normal browse mode. A full
+  label-association audit across every region `ui-01`–`ui-04` touched found
+  zero broken labels (the 8 broken labels round 2 found were unique to a
+  rejected mockup candidate, never present in this repo's real app).
+
+### Verification
+
+Full suite (`.mjs` subprocess suite + `vitest`) plus `tsc --noEmit` run clean
+on this epic's final state: 54/54 vitest files, 727/727 tests; the only
+failures anywhere are the 3 already-documented pre-existing `POST /remember`
+default-layer assertions (unrelated, predates this epic) and `test/ui-shell.mjs`'s
+22 failures (not part of `npm test`'s own script chain; confirmed pre-existing
+via stash-and-reproduce against the epic's own pre-`ui-01` base commit during
+this epic's first ticket). Every ticket in this epic was independently
+re-verified before merge — real diffs read, real tests re-run, real browser
+checks via Playwright — not merged on a builder's self-report alone.
+
 ## [0.11.1] — 2026-08-17
 
 `mnemosyne-icon-selection` epic (`is-01`..`is-03`) — the standalone UI has a

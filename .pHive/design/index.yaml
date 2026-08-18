@@ -117,3 +117,107 @@ topics:
     consumers:
       - is-02-operator-pick-and-assets
     date: 2026-08-17
+
+  - topic: mnemosyne-ui-redesign
+    output_dir: .pHive/design/mnemosyne-ui-redesign/
+    process: 3-real-html-mockup-generation -> 7-lens-review-panel -> 3-finalist-synthesis (real HTML) -> operator final pick (pending)
+    artifacts:
+      initial_options:
+        - .pHive/design/mnemosyne-ui-redesign/options/collapsible-clusters.html
+        - .pHive/design/mnemosyne-ui-redesign/options/sidebar-glanceable.html
+        - .pHive/design/mnemosyne-ui-redesign/options/minimal-jump-chips.html
+      lens_critiques:
+        - .pHive/design/mnemosyne-ui-redesign/critiques/navigation-wayfinding.md
+        - .pHive/design/mnemosyne-ui-redesign/critiques/glanceable-monitoring.md
+        - .pHive/design/mnemosyne-ui-redesign/critiques/accessibility.md
+        - .pHive/design/mnemosyne-ui-redesign/critiques/visual-identity-cohesion.md
+        - .pHive/design/mnemosyne-ui-redesign/critiques/consistency-with-existing-conventions.md
+        - .pHive/design/mnemosyne-ui-redesign/critiques/scale-realism.md
+        - .pHive/design/mnemosyne-ui-redesign/critiques/build-feasibility.md
+      synthesized_finalists:
+        - .pHive/design/mnemosyne-ui-redesign/synthesized/finalist-1.html
+        - .pHive/design/mnemosyne-ui-redesign/synthesized/finalist-2.html
+        - .pHive/design/mnemosyne-ui-redesign/synthesized/finalist-3.html
+    status: review-complete-awaiting-operator-pick
+    review_note: >
+      Unlike the icon-set review (10 options generated), this pass generated
+      3 genuinely distinct STRUCTURAL directions per design-discussion.md
+      §2.1's own requirement for real rendered mockups over prose: grouped
+      collapsible <details> clusters, a persistent sidebar with live status
+      badges + single-active-panel, and a flat document with a jump-chip
+      nav (no collapsing/hiding at all). All 3 synthesis agents,
+      independently, converged on minimal-jump-chips as the strongest base
+      (won 3 of 7 lenses outright -- glanceable-monitoring, accessibility,
+      consistency-with-existing-conventions -- never placed last on any),
+      then diverged on refinement: finalist-1 adds always-visible status
+      dots + an inline Approve/Discard draft-review block + a CSS-only
+      :target landing highlight; finalist-2 is the most conservative
+      (3 defect fixes + a progressive-enhancement scroll-spy, structure
+      otherwise untouched); finalist-3 adds status rings + a <details>
+      -collapsed Personas "tail" section (draft tools + layer stack only,
+      not the whole panel) + dedicated graph-node color tokens. sidebar-
+      glanceable and collapsible-clusters were NOT chosen as any finalist's
+      base -- both were independently found to have real, cited defects
+      (sidebar-glanceable hides 7/8 panels behind JS with no ARIA state;
+      collapsible-clusters bundles Liveliness+Settings+Operations behind
+      one collapse toggle with zero status signal when collapsed, and
+      ships fully open by default so it doesn't even solve its own stated
+      goal). No autonomous pick was made -- real HTML for all 3 finalists
+      is the deliverable; the operator's own pick is design-discussion.md
+      §3's hard, blocking checkpoint before any implement work touches
+      production ui/* files.
+    selection_mechanism: "3 real HTML finalists only -- final pick is a real, blocking operator touchpoint (design-discussion.md §3), never autonomous."
+    consumers:
+      - mnemosyne-ui-redesign build-out (H/V planning + stories, not yet written -- deferred until the operator's pick is known)
+    date: 2026-08-17
+    round2_rejudge:
+      trigger: >
+        Operator flagged that 2 of the 3 round-1 structural directions were
+        graded down partly on fixable implementation bugs (missing status
+        signal on collapse, missing ARIA) rather than pure design merit --
+        "you should have FIXED it and re-run with the panel." Also requested
+        a concrete hybrid (finalist-3's status rings/collapsed-Personas-tail
+        + finalist-2's original red/green graph-node coloring) and the real
+        shipped favicon embedded inline in each mockup's header, not only as
+        a browser tab icon.
+      candidates:
+        - .pHive/design/mnemosyne-ui-redesign/round2/candidates/collapsible-clusters-hardened.html
+        - .pHive/design/mnemosyne-ui-redesign/round2/candidates/sidebar-glanceable-hardened.html
+        - .pHive/design/mnemosyne-ui-redesign/round2/candidates/minimal-jump-chips-unchanged.html
+        - .pHive/design/mnemosyne-ui-redesign/round2/candidates/hybrid-rings-original-graph-colors.html
+      critiques:
+        - .pHive/design/mnemosyne-ui-redesign/round2/critiques/navigation-wayfinding.md
+        - .pHive/design/mnemosyne-ui-redesign/round2/critiques/glanceable-monitoring.md
+        - .pHive/design/mnemosyne-ui-redesign/round2/critiques/accessibility.md
+        - .pHive/design/mnemosyne-ui-redesign/round2/critiques/visual-identity-cohesion.md
+        - .pHive/design/mnemosyne-ui-redesign/round2/critiques/consistency-with-existing-conventions.md
+        - .pHive/design/mnemosyne-ui-redesign/round2/critiques/scale-realism.md
+        - .pHive/design/mnemosyne-ui-redesign/round2/critiques/build-feasibility.md
+      finding: >
+        The re-judge was genuinely adversarial, not a rubber stamp: it found
+        a NEW regression introduced by this session's own "hardening" pass
+        (8 broken form-label associations in collapsible-clusters-hardened),
+        confirmed one fix was real-but-incomplete (sidebar-glanceable's
+        review/fail badge was corrected at the nav layer but the matching
+        in-panel status line still reads "fail" in red for the identical
+        condition), corrected a mislabeling in this session's own round-2
+        framing (minimal-jump-chips-unchanged was called "needs no fixes"
+        but actually carries the same missing-<html-lang> and unguarded-
+        submit-button defects finalist-2/3 already fixed elsewhere), and
+        flagged that the hybrid's graph-node color "fix" is a variable
+        rename aliasing back to the identical --fail/--pass values (correct
+        behavior per the operator's explicit request, but the inherited
+        code comment overclaims and needs correcting).
+
+        Net: hybrid-rings-original-graph-colors wins outright on
+        glanceable-monitoring (the lens the whole review exists to
+        protect), is never structurally disqualified on any lens, and 4 of
+        its 5 claimed fixes were independently re-verified true against the
+        live markup. Recommended as the base direction for H/V planning,
+        pending the operator's own confirmation -- not an autonomous pick.
+      status: confirmed
+      operator_confirmation: >
+        "cool, go for it, now hive plan and execute and nail it fully" --
+        confirmed 2026-08-18. hybrid-rings-original-graph-colors is the
+        base direction for H/V planning and build-out.
+      date: 2026-08-18
