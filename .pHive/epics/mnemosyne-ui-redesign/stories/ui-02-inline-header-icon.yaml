@@ -1,10 +1,55 @@
 id: ui-02-inline-header-icon
 epic: mnemosyne-ui-redesign
 title: "Embed the real shipped favicon inline in the header"
-status: planned
+status: complete
 complexity: low
 methodology: classic
 depends_on: []
+
+note_on_completion: >
+  Real markup change in ui/index.html: added
+  <img src="/ui/favicon.png" alt="" width="28" height="28"
+  style="width:28px;height:28px;vertical-align:middle;margin-right:0.5rem;">
+  immediately inside the <h1>, before the "Mnemosyne" text node -- a plain
+  src reference to the already-committed, already-served ui/favicon.png
+  (is-02's real alpha PNG), not a re-encoded/base64 copy like the reference
+  mockup used. Sizing/inline-style values were read directly off the
+  confirmed mockup (round2/candidates/hybrid-rings-original-graph-colors.html
+  line 593) rather than guessed. Subtitle span and refresh button markup
+  were untouched.
+
+  Verified for real, not just by reading the diff: started the real
+  standalone server (`node src/server.mjs`, PORT=8899 since the harness's
+  default 8477 was already in use by another live session) and loaded
+  /ui in an actual Playwright-driven browser. Confirmed via
+  browser_network_requests that GET /ui/favicon.png really returns 200 (not
+  inferred from server.mjs's routing code). Screenshot confirms the Ancient
+  Urn icon renders inline at the left of "Mnemosyne", vertically centered
+  against the h1 text, with the subtitle still on its own line below and
+  the Refresh button still docked top-right -- no layout regression. The 8
+  console errors present on the page are pre-existing CORS failures against
+  a persona service on port 3141 that isn't running in this sandbox,
+  unrelated to this change (same errors reproduce on the unmodified page).
+
+  Full verification chain: worktree's base commit was fast-forwarded from
+  8a24edd to this epic's real tip (4e934c7) first, since the worktree had
+  been provisioned before the epic-planning commit landed (fast-forward
+  only -- no code, only .pHive planning/design docs were added, confirmed
+  via `git diff --stat` before merging). node_modules had never been
+  installed in this worktree; ran `npm install` + approved the 3 pending
+  native-module install scripts (better-sqlite3, esbuild, fsevents) to get
+  a real working tree, then reverted npm's incidental package.json
+  allowScripts edit since it's out of this ticket's scope. `npm test`:
+  every suite passed except test/http-api.mjs's 3 POST /remember
+  assertions (expects layer:"file" as the unconfigured default; the real
+  current default-layer cascade resolves to "vector" first, per
+  layers/config.ts's DEFAULT_LAYER_STACK_CONFIG and confirmed independently
+  by test/single-layer-config.mjs's own passing assertion of the same
+  "vector" default) -- confirmed pre-existing and unrelated to this change
+  by stashing the ui/index.html edit and reproducing the identical 3
+  failures on the unmodified tree. All 727 vitest tests passed (54 files).
+  `npx tsc --noEmit` -- clean, zero errors (no TS files touched by this
+  story anyway).
 
 description: |
   Implements horizontal-plan.md's H2 (icon portion only). The real
