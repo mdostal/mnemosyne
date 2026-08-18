@@ -14,6 +14,30 @@ note_on_completion: >
   same base commit either way, just a different branch name to avoid the
   two-worktrees-one-branch conflict.
 
+  Independent verification (orchestrating session, before merge): read the
+  real ui/app.js diff directly -- confirmed CHIP_STATUS_SOURCE genuinely
+  excludes search/operations (no real refresh-time .panel-status exists for
+  either) and genuinely includes graph, with a well-reasoned, explicitly
+  documented departure from this ticket's own text (which cited a stale
+  research-brief.md claim that Graph has no status line -- true of the
+  round-2 mockup, false of this repo's real app.js, where #graph-status is
+  real and unconditionally set by loadGraph() every refreshAll()). Ran the
+  new test/jump-chip-nav-status-wiring.mjs directly: all checks pass,
+  including the no-JS-dependency proof (script stripped, all 8 panels still
+  render) and the never-fabricate proof (search/operations status exists in
+  the DOM but never reaches their chips). Ran the full suite myself (after
+  npm install in this worktree): 54/54 vitest files, 727/727 tests, .mjs
+  suite clean except the 3 already-documented pre-existing POST /remember
+  failures. Started a real server (port 8579, avoiding a real, unrelated
+  Docker container squatting on the default 8477) and loaded /ui in a real
+  Playwright browser: all 8 chips present, liveliness/settings/lanes/graph
+  correctly chip-pass, search/operations correctly carry no status class,
+  personas/memory-levels correctly chip-fail (real, honest reflection of
+  this sandbox's expected CORS failures against the not-running-here
+  persona service on :3141 -- same known, pre-existing, unrelated pattern
+  already documented in ui-02's own completion note), and the scroll-spy's
+  "current" class genuinely applied to the in-view panel's chip.
+
   Added <nav id="jump-chips"> to ui/index.html directly under <header>, with
   exactly 8 real <a href="#id"> anchors (liveliness/settings/lanes/search/
   graph/operations/personas/memory-levels, real document order). Added
