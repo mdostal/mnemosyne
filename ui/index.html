@@ -13,6 +13,27 @@
     <button id="refresh-btn" type="button">Refresh</button>
   </header>
 
+  <!-- ui-03-jump-chip-nav-and-status-wiring: 8 plain #anchor links, one per
+       real top-level panel below, in the same document order. These are
+       real <a href="#id"> anchors -- click-to-jump works with zero JS, and
+       every linked <section> stays fully visible with zero JS (see each
+       section's static markup further below; nothing here is created or
+       unhidden by a script). chip-pass/chip-fail classes are added by
+       ui/app.js's syncJumpChips() (called from refreshAll()'s completion
+       path) ONLY for panels with a real, already-rendered .panel-status --
+       never fabricated here or in script. See ui/app.js's
+       CHIP_STATUS_SOURCE comment for exactly which panels qualify and why. -->
+  <nav id="jump-chips" aria-label="jump to panel">
+    <a href="#liveliness"><span class="chip-dot"></span>Liveliness</a>
+    <a href="#settings"><span class="chip-dot"></span>Settings</a>
+    <a href="#lanes"><span class="chip-dot"></span>Lanes</a>
+    <a href="#search"><span class="chip-dot"></span>Search</a>
+    <a href="#graph"><span class="chip-dot"></span>Graph</a>
+    <a href="#operations"><span class="chip-dot"></span>Operations</a>
+    <a href="#personas"><span class="chip-dot"></span>Personas</a>
+    <a href="#memory-levels"><span class="chip-dot"></span>Memory Levels</a>
+  </nav>
+
   <main>
     <section id="liveliness" class="panel">
       <h2>Liveliness</h2>

@@ -2380,6 +2380,72 @@ function assembleSourceSummary(sourcesRead, sourcesMissing) {
 }
 // ==================== end pf-04-client-cap-twin ====================
 
+// ==================== ui-03-jump-chip-nav-and-status-wiring ====================
+// Status-propagation layer (horizontal-plan.md H3): mirrors each panel's own
+// already-rendered .panel-status pass/fail state onto its matching
+// #jump-chips anchor as a chip-pass/chip-fail class. syncJumpChips() is
+// called once, from refreshAll()'s completion path below, AFTER every
+// load*() in that Promise.all(...) has already resolved and called its own
+// real setStatus() -- so every read here is of a class that's genuinely on
+// the DOM at that moment, never invented.
+//
+// CHIP_STATUS_SOURCE is deliberately NOT one entry per panel. It maps only
+// the panels whose real markup has a top-level .panel-status element that
+// setStatus() populates as a direct, unconditional part of refreshAll()
+// itself:
+//   - liveliness-status / settings-status / lanes-status / personas-status /
+//     memory-levels-status: each is the first <p class="panel-status"> in
+//     its <section>, and each panel's own load*() (loadLiveliness/
+//     loadSettings/loadLanes/loadPersonas/loadMemoryLevels) sets it to
+//     pass/fail unconditionally every refreshAll() call. Real signal ->
+//     real ring.
+//   - graph-status: same shape (loadGraph() -> pass/fail every refreshAll()
+//     call, per app.js above). NOTE this deliberately diverges from this
+//     story's own ticket text (which cites a claimed research-brief.md
+//     statement that Graph has no panel-status line): that claim is true of
+//     the round-2 design MOCKUP's Graph section (verified by inspection --
+//     it has no .panel-status anywhere) but NOT of this repo's real
+//     ui/index.html, where #graph-status is a real, first-child-of-<h2>
+//     status element loadGraph() sets every refresh. Suppressing a real,
+//     already-rendered status to match a stale/mis-cited doc would itself
+//     be a form of fabrication in the other direction, so Graph's chip IS
+//     wired here, sourced honestly from its own real element.
+//   - search-status and the Operations sub-forms' reindex-status /
+//     refresh-cache-status are deliberately EXCLUDED: search-status only
+//     gets set inside the search-form's own submit handler (a user action,
+//     never called from refreshAll()), and Operations has no top-level
+//     .panel-status at all -- reindex-status/refresh-cache-status are two
+//     separate sub-form statuses, each set only by its own submit/click
+//     handler, never by refreshAll(). Per H3's "no data, no ring" rule,
+//     mapping either would fabricate a ring where no real, refresh-time
+//     status exists, so Search and Operations are left out on purpose --
+//     their chips get neither chip-pass nor chip-fail.
+const CHIP_STATUS_SOURCE = {
+  liveliness: "liveliness-status",
+  settings: "settings-status",
+  lanes: "lanes-status",
+  graph: "graph-status",
+  personas: "personas-status",
+  "memory-levels": "memory-levels-status",
+};
+
+function syncJumpChips() {
+  document.querySelectorAll("#jump-chips a").forEach((chip) => {
+    const panelId = (chip.getAttribute("href") || "").slice(1);
+    const statusId = CHIP_STATUS_SOURCE[panelId];
+    const statusEl = statusId ? document.getElementById(statusId) : null;
+    // No mapped status element (Search/Operations, by design -- see the
+    // comment above) or the element hasn't rendered a real pass/fail yet
+    // (e.g. still mid-"loading") -> neither class. Never fabricate: a chip
+    // only ever gets the class that's REALLY on its real panel's element.
+    const isPass = !!statusEl && statusEl.classList.contains("pass");
+    const isFail = !!statusEl && statusEl.classList.contains("fail");
+    chip.classList.toggle("chip-pass", isPass);
+    chip.classList.toggle("chip-fail", isFail);
+  });
+}
+// ==================== end ui-03-jump-chip-nav-and-status-wiring (part 1) ====================
+
 async function refreshAll() {
   refreshBtn.disabled = true;
   try {
@@ -2395,6 +2461,7 @@ async function refreshAll() {
       loadPersonaLayerStack(),
       loadMemoryLevels(),
     ]);
+    syncJumpChips();
     lastRefreshedEl.textContent = `last refreshed ${new Date().toLocaleTimeString()}`;
   } finally {
     refreshBtn.disabled = false;
@@ -2402,6 +2469,39 @@ async function refreshAll() {
 }
 
 refreshBtn.addEventListener("click", refreshAll);
+
+// ==================== ui-03-jump-chip-nav-and-status-wiring (part 2) ====================
+// Optional progressive-enhancement scroll-spy: highlights whichever chip
+// corresponds to the panel currently scrolled into view. Purely cosmetic --
+// every chip is already a working <a href="#id"> anchor and every panel is
+// already fully visible from ui/index.html's static markup alone (no
+// display:none anywhere on .panel, no JS-gated visibility). The guard below
+// is the literal first line of this IIFE: if IntersectionObserver isn't
+// supported, or this whole <script> fails to load or throws, nothing above
+// (chip existence, click-to-jump, panel visibility, or the chip-pass/
+// chip-fail rings syncJumpChips() already applied) is affected in any way.
+(function initJumpChipScrollSpy() {
+  if (!("IntersectionObserver" in window)) return;
+  const chipsById = {};
+  document.querySelectorAll("#jump-chips a").forEach((a) => {
+    const id = (a.getAttribute("href") || "").slice(1);
+    if (id) chipsById[id] = a;
+  });
+  const io = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        const chip = chipsById[entry.target.id];
+        if (!chip) return;
+        document.querySelectorAll("#jump-chips a.current").forEach((c) => c.classList.remove("current"));
+        chip.classList.add("current");
+      });
+    },
+    { rootMargin: "-120px 0px -70% 0px", threshold: 0 },
+  );
+  document.querySelectorAll("main > .panel").forEach((p) => io.observe(p));
+})();
+// ==================== end ui-03-jump-chip-nav-and-status-wiring (part 2) ====================
 
 // Initial load on open. No auto-polling after this — manual refresh only.
 refreshAll();
