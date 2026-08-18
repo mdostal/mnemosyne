@@ -2,6 +2,96 @@
 // Zero third-party deps: vanilla fetch + DOM. Loads once on open, then only on
 // manual refresh — no auto-polling in v1 (see design-discussion.md).
 
+// ==================== aha-04-ui-connect-banner (epic:
+// mnemosyne-agent-harness-install) ====================
+// The FIRST thing in this file, deliberately: this banner's fail-open
+// contract (design-discussion.md §1.4 / horizontal-plan.md's cross-cutting
+// "nothing in this shell may become invisible because of a JS failure"
+// rule) must hold independent of whatever else in this file does or does
+// not run/throw later. ui/index.html's own static markup already renders
+// the banner fully EXPANDED with zero JS (#connect-banner-main has no
+// `hidden` attribute there; #connect-banner-reopen starts `hidden`) — this
+// IIFE only ever COLLAPSES it, and only from a real, successfully-read
+// localStorage value. Every localStorage access is inside its own try/catch
+// (private browsing -- e.g. Safari -- can make `localStorage` throw merely
+// on property access, not just on .getItem/.setItem calls), and the whole
+// init routine is wrapped in a further try/catch so a missing element or
+// any other unexpected error also just leaves the safe expanded default in
+// place rather than propagating.
+//
+// research-brief.md §3 confirmed zero pre-existing `localStorage` usage
+// anywhere in this file before this ticket — this is a genuinely new
+// persistence mechanism for this codebase's UI.
+const CONNECT_BANNER_STORAGE_KEY = "mnemosyne-connect-banner-collapsed";
+
+// Applies `collapsed` to the DOM only -- never touches localStorage itself,
+// so this is safe to call unconditionally from initConnectBanner() on first
+// paint (whether or not a stored value was readable).
+function setConnectBannerCollapsed(collapsed) {
+  const main = document.getElementById("connect-banner-main");
+  const reopenBtn = document.getElementById("connect-banner-reopen");
+  const collapseBtn = document.getElementById("connect-banner-collapse");
+  if (!main || !reopenBtn || !collapseBtn) return;
+  // The affordance is NEVER fully removed from the page (design-discussion.md
+  // §1.4) -- exactly one of #connect-banner-main / #connect-banner-reopen is
+  // `hidden` at a time, the other always stays genuinely visible and
+  // clickable.
+  main.hidden = collapsed;
+  reopenBtn.hidden = !collapsed;
+  collapseBtn.setAttribute("aria-expanded", String(!collapsed));
+  reopenBtn.setAttribute("aria-expanded", String(!collapsed));
+}
+
+// Best-effort persistence only. A throw here (private browsing, storage
+// quota, disabled storage) is swallowed -- the in-memory toggle this page
+// view just made via setConnectBannerCollapsed() above still stands, it
+// simply won't survive a reload, which is the correct fail-open outcome
+// rather than surfacing an error to the operator over a non-critical
+// preference write.
+function persistConnectBannerCollapsed(collapsed) {
+  try {
+    window.localStorage.setItem(CONNECT_BANNER_STORAGE_KEY, collapsed ? "1" : "0");
+  } catch {
+    // localStorage unavailable/throws -- nothing to do; see comment above.
+  }
+}
+
+(function initConnectBanner() {
+  try {
+    const collapseBtn = document.getElementById("connect-banner-collapse");
+    const reopenBtn = document.getElementById("connect-banner-reopen");
+    if (!collapseBtn || !reopenBtn) return; // static markup already fail-open
+
+    // Fail OPEN: only a real, successfully-read "1" collapses the banner.
+    // Any throw (e.g. Safari private browsing, where merely reading
+    // `window.localStorage` can throw a SecurityError) or any other stored
+    // value (missing key on first-ever load, or anything not exactly "1")
+    // leaves storedCollapsed false -- expanded, matching the static
+    // markup's own zero-JS default exactly.
+    let storedCollapsed = false;
+    try {
+      storedCollapsed = window.localStorage.getItem(CONNECT_BANNER_STORAGE_KEY) === "1";
+    } catch {
+      storedCollapsed = false;
+    }
+    setConnectBannerCollapsed(storedCollapsed);
+
+    collapseBtn.addEventListener("click", () => {
+      setConnectBannerCollapsed(true);
+      persistConnectBannerCollapsed(true);
+    });
+    reopenBtn.addEventListener("click", () => {
+      setConnectBannerCollapsed(false);
+      persistConnectBannerCollapsed(false);
+    });
+  } catch {
+    // Any unexpected error anywhere above (e.g. a future markup change)
+    // leaves ui/index.html's own static default on screen -- fully
+    // expanded, reopen strip hidden -- exactly as fail-open requires.
+  }
+})();
+// ==================== end aha-04-ui-connect-banner ====================
+
 const livelinessStatusEl = document.getElementById("liveliness-status");
 const livelinessDetailEl = document.getElementById("liveliness-detail");
 const settingsStatusEl = document.getElementById("settings-status");
