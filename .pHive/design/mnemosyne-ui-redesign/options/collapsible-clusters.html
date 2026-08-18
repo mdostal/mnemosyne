@@ -1,0 +1,877 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mnemosyne — Collapsible Clusters</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #0f1115;
+  --panel-bg: #171a21;
+  --border: #2a2f3a;
+  --text: #e6e8ec;
+  --muted: #9aa2b1;
+  --pass: #4fd17a;
+  --fail: #ff6b6b;
+  --accent: #D8A84E;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+h1 { font-size: 1.25rem; margin: 0; }
+
+.subtitle {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: normal;
+  color: var(--muted);
+  margin-top: 0.15rem;
+}
+
+#refresh-btn {
+  background: var(--accent);
+  color: #10131a;
+  border: none;
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+#refresh-btn:hover { opacity: 0.9; }
+
+/* ---------- structural direction: sticky cluster nav ---------- */
+#cluster-nav {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.1rem;
+  align-items: center;
+  padding: 0.6rem 1.5rem;
+  background: rgba(23, 26, 33, 0.94);
+  backdrop-filter: blur(6px);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+
+#cluster-nav .nav-label {
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-right: 0.25rem;
+}
+
+#cluster-nav a {
+  color: var(--text);
+  text-decoration: none;
+  padding: 0.3rem 0.65rem;
+  border-radius: 6px;
+  border: 1px solid transparent;
+}
+
+#cluster-nav a:hover,
+#cluster-nav a:focus-visible {
+  color: var(--accent);
+  border-color: var(--border);
+  outline: none;
+}
+
+#cluster-nav a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+#cluster-nav .nav-count {
+  color: var(--muted);
+  font-size: 0.75rem;
+  margin-left: 0.3rem;
+}
+
+main {
+  padding: 1.5rem;
+  max-width: 900px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+/* ---------- cluster (details/summary) ---------- */
+.cluster {
+  scroll-margin-top: 3.6rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #12151b;
+  overflow: hidden;
+}
+
+.cluster > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 0.9rem 1.25rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.cluster > summary::-webkit-details-marker { display: none; }
+
+.cluster > summary::before {
+  content: "▸";
+  display: inline-block;
+  color: var(--accent);
+  transition: transform 0.15s ease;
+  font-size: 0.85em;
+}
+
+.cluster[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.cluster > summary:hover,
+.cluster > summary:focus-visible {
+  color: var(--accent);
+}
+
+.cluster > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.cluster-tagline {
+  font-weight: normal;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.cluster-body {
+  padding: 0 1.25rem 1.25rem;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+@media (min-width: 760px) {
+  .cluster-body.grid-2 { grid-template-columns: 1fr 1fr; }
+}
+
+/* ---------- panel (unchanged shape from live app) ---------- */
+.panel {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+}
+
+.panel h3.panel-title {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.panel-status {
+  font-weight: 600;
+  margin: 0 0 0.75rem;
+}
+.panel-status.pass { color: var(--pass); }
+.panel-status.fail { color: var(--fail); }
+.panel-status.loading { color: var(--muted); }
+
+.detail {
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin: 0;
+}
+.detail .line-pass { color: var(--pass); }
+.detail .line-fail { color: var(--fail); }
+.detail .line-neutral { color: var(--muted); }
+
+.fields {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.35rem 0.75rem;
+  margin: 0;
+  font-size: 0.9rem;
+}
+.fields dt { color: var(--muted); }
+.fields dd {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-all;
+}
+
+.panel-wide { grid-column: 1 / -1; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+th, td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+td.mono, th.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.6rem;
+  max-width: 420px;
+}
+.form-row label { font-size: 0.8rem; color: var(--muted); }
+.form-row input, .form-row select, .form-row textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.45rem 0.6rem;
+  color: var(--text);
+  font-size: 0.9rem;
+  font-family: inherit;
+}
+.form-row textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  resize: vertical;
+}
+.form-row-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.6rem;
+  max-width: none;
+}
+
+button, .btn {
+  background: var(--accent);
+  color: #10131a;
+  border: none;
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+button:hover, .btn:hover { opacity: 0.9; }
+button:focus-visible, .btn:focus-visible,
+input:focus-visible, select:focus-visible, textarea:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.mode-toggle {
+  display: flex;
+  gap: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.mode-toggle label { display: flex; align-items: center; gap: 0.3rem; cursor: pointer; }
+
+.panel-hint {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin: 0 0 0.75rem;
+}
+.panel-hint-inline { font-weight: normal; color: var(--muted); font-size: 0.75rem; }
+
+h4.subhead {
+  margin: 0.75rem 0 0.35rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.op-block {
+  flex: 1 1 320px;
+  min-width: 260px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+}
+.op-block h4 { margin: 0 0 0.4rem; font-size: 0.9rem; color: var(--text); }
+#operations-body { display: flex; flex-wrap: wrap; gap: 1.25rem; }
+
+/* ---------- graph toolbar (7 real controls) ---------- */
+#graph-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+.graph-toolbar-label { font-size: 0.8rem; color: var(--muted); }
+#graph-search {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.4rem 0.6rem;
+  color: var(--text);
+  font-size: 0.85rem;
+  min-width: 160px;
+}
+#graph-depth {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.35rem 0.4rem;
+  color: var(--text);
+  font-size: 0.85rem;
+}
+#graph-toolbar button.tool {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.4rem 0.7rem;
+  color: var(--text);
+  font-size: 0.85rem;
+}
+#graph-toolbar button.tool:hover { border-color: var(--accent); opacity: 1; }
+#graph-search-go { background: var(--accent); color: #10131a; border: none; }
+
+#graph-body { display: flex; flex-wrap: wrap; gap: 1rem; }
+#graph-view {
+  flex: 2 1 380px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  min-height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+#graph-inspector { flex: 1 1 220px; min-width: 200px; }
+.graph-node-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.8rem;
+}
+.graph-node-list li { margin-bottom: 0.2rem; word-break: break-all; }
+.graph-node-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+/* ---------- personas: larger/denser, ~50% share ---------- */
+#personas-glossary {
+  margin: 0 0 0.75rem;
+  font-size: 0.85rem;
+}
+#personas-glossary summary { cursor: pointer; color: var(--accent); }
+#personas-glossary summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#personas-glossary .fields { margin-top: 0.5rem; }
+
+.persona-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+}
+.persona-toolbar label { color: var(--muted); }
+.persona-toolbar select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  color: var(--text);
+  font-size: 0.85rem;
+}
+
+.persona-group-header th {
+  background: var(--panel-bg);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-bottom: 1px solid var(--border);
+}
+
+.persona-action-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.3rem 0.6rem;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.persona-action-btn:hover { opacity: 0.85; }
+.persona-action-btn.destructive { color: var(--fail); }
+
+.persona-draft-panel {
+  padding: 0.75rem 1rem 1rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-top: 0.5rem;
+}
+.persona-draft-panel h5 { margin: 0.75rem 0 0.35rem; font-size: 0.85rem; color: var(--muted); }
+.persona-draft-panel h5:first-child { margin-top: 0; }
+.persona-draft-source-summary { margin: 0 0 0.5rem; font-size: 0.9rem; line-height: 1.4; }
+.persona-draft-agent-label {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #10131a;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.persona-draft-source-label {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: var(--border);
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.persona-draft-controls { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; }
+
+#persona-layer-stack {
+  border-top: 1px solid var(--border);
+  padding-top: 1.25rem;
+  margin-top: 1.5rem;
+}
+#persona-layer-stack h4 { margin: 0 0 0.5rem; font-size: 0.95rem; color: var(--text); }
+
+#persona-level0-pointer {
+  border-top: 1px solid var(--border);
+  padding-top: 0.85rem;
+  margin-top: 1rem;
+}
+#persona-level0-pointer h5 { margin: 0 0 0.4rem; font-size: 0.9rem; color: var(--text); }
+#persona-level0-path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+footer {
+  padding: 1rem 1.5rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+.badge-note {
+  display: inline-block;
+  margin: 0 0 1rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Mnemosyne <span class="subtitle">memory god — standalone shell</span></h1>
+  <button id="refresh-btn" type="button">Refresh</button>
+</header>
+
+<nav id="cluster-nav" aria-label="Cluster navigation">
+  <span class="nav-label">Jump to</span>
+  <a href="#cluster-system">System <span class="nav-count">3</span></a>
+  <a href="#cluster-memory">Memory <span class="nav-count">4</span></a>
+  <a href="#cluster-personas">Personas <span class="nav-count">1</span></a>
+</nav>
+
+<main>
+
+  <p class="badge-note">Structural option: 8 panels grouped into 3 collapsible clusters, native &lt;details&gt;/&lt;summary&gt;. No SPA routing — the nav above is plain anchor links to in-page ids.</p>
+
+  <!-- ============================== CLUSTER: SYSTEM ============================== -->
+  <details id="cluster-system" class="cluster" open>
+    <summary>System <span class="cluster-tagline">— health, config, and index/cache operations</span></summary>
+    <div class="cluster-body grid-2">
+
+      <section id="liveliness" class="panel">
+        <h3 class="panel-title">Liveliness</h3>
+        <p class="panel-status pass">OK — 6/6 checks passed</p>
+        <pre class="detail"><span class="line-pass">✓ qdrant reachable (247ms)</span>
+<span class="line-pass">✓ config.toml parsed (4 lanes)</span>
+<span class="line-pass">✓ persona service on :3141</span>
+<span class="line-pass">✓ graph store readable (1,842 nodes)</span>
+<span class="line-neutral">· embedder: text-embedding-3-small</span>
+<span class="line-pass">✓ last reindex: 11m ago</span></pre>
+      </section>
+
+      <section id="settings" class="panel">
+        <h3 class="panel-title">Settings</h3>
+        <p class="panel-status pass">Loaded from config.toml</p>
+        <dl class="fields">
+          <dt>qdrant_url</dt>
+          <dd>https://xyz-cluster.qdrant.io:6333</dd>
+          <dt>default_scope</dt>
+          <dd>mnemosyne</dd>
+          <dt>embedder</dt>
+          <dd>text-embedding-3-small</dd>
+          <dt>graph_backend</dt>
+          <dd>sqlite (local)</dd>
+          <dt>persona_port</dt>
+          <dd>3141</dd>
+        </dl>
+      </section>
+
+      <section id="operations" class="panel panel-wide">
+        <h3 class="panel-title">Operations</h3>
+        <p class="panel-hint">
+          Two distinct actions. <strong>Reindex</strong> shells out against the live Qdrant
+          Cloud store and writes real data. <strong>Refresh config cache</strong> is purely
+          local — it never touches Qdrant, <code>config.toml</code>, or the graph, and never
+          deletes anything. Neither action, nor anything in this app, can wipe or drop a
+          Qdrant collection.
+        </p>
+        <div id="operations-body">
+          <div class="op-block">
+            <h4>Reindex</h4>
+            <p class="panel-hint">
+              Chunk, embed and upsert the given path(s) into the selected lane's collection
+              (<code>swarm-memory index</code>, default pruning). Requires an explicit lane
+              and at least one path.
+            </p>
+            <div class="form-row">
+              <label for="reindex-lane">Lane (collection)</label>
+              <select id="reindex-lane" disabled>
+                <option>research (research_memory)</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label for="reindex-paths">Path(s)</label>
+              <textarea id="reindex-paths" rows="3" readonly>/Users/mdostal/notes/mnemosyne/design.md</textarea>
+            </div>
+            <button type="button">Reindex…</button>
+          </div>
+
+          <div class="op-block">
+            <h4>Refresh config cache</h4>
+            <p class="panel-hint">
+              Clears only this service's in-memory copy of <code>swarm-memory config</code>,
+              so the next load re-reads it fresh. Nothing is deleted.
+            </p>
+            <button type="button">Refresh config cache</button>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </details>
+
+  <!-- ============================== CLUSTER: MEMORY ============================== -->
+  <details id="cluster-memory" class="cluster" open>
+    <summary>Memory <span class="cluster-tagline">— lanes, search, graph, and the canonical level taxonomy</span></summary>
+    <div class="cluster-body">
+
+      <section id="lanes" class="panel">
+        <h3 class="panel-title">Lanes</h3>
+        <p class="panel-status pass">4 lanes configured</p>
+        <table>
+          <thead><tr><th>Lane</th><th>Collection</th><th>Ladder</th><th></th></tr></thead>
+          <tbody>
+            <tr><td class="mono">research</td><td class="mono">research_memory</td><td>knowledge, top</td><td><button type="button" class="persona-action-btn">Remove</button></td></tr>
+            <tr><td class="mono">code</td><td class="mono">code_memory</td><td>—</td><td><button type="button" class="persona-action-btn">Remove</button></td></tr>
+            <tr><td class="mono">ops</td><td class="mono">ops_memory</td><td>top</td><td><button type="button" class="persona-action-btn">Remove</button></td></tr>
+            <tr><td class="mono">personas</td><td class="mono">persona_memory</td><td>—</td><td><button type="button" class="persona-action-btn">Remove</button></td></tr>
+          </tbody>
+        </table>
+        <h4 class="subhead">Add lane</h4>
+        <div class="form-row"><label>Name</label><input placeholder="e.g. research" /></div>
+        <div class="form-row"><label>Collection</label><input placeholder="e.g. research_memory" /></div>
+        <div class="form-row"><label>Ladder (optional)</label><input placeholder="comma-separated, e.g. knowledge,top" /></div>
+        <button type="button">Add lane</button>
+      </section>
+
+      <section id="search" class="panel">
+        <h3 class="panel-title">Search</h3>
+        <div class="form-row-inline">
+          <input placeholder="query…" style="flex:1 1 220px;" />
+          <select><option>(default scope)</option></select>
+          <span class="mode-toggle" role="radiogroup" aria-label="search mode">
+            <label><input type="radio" name="mode-demo" checked /> Semantic (recall)</label>
+            <label><input type="radio" name="mode-demo" /> Keyword (grep)</label>
+          </span>
+          <button type="button">Search</button>
+        </div>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead>
+              <tr><th>Layer</th><th>Match</th><th>Score</th><th>File</th><th>Snippet</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="mono">research_memory</td>
+                <td>chunk</td>
+                <td class="mono">0.842</td>
+                <td class="mono">design.md:112</td>
+                <td class="snippet-cell" style="color:var(--muted);">"...flight-status-aware memory proposal reconciles the 3-tier..."</td>
+              </tr>
+              <tr>
+                <td class="mono">code_memory</td>
+                <td>chunk</td>
+                <td class="mono">0.771</td>
+                <td class="mono">graphify.ts:44</td>
+                <td class="snippet-cell" style="color:var(--muted);">"...adapter writes doc-index entries keyed by repo + path..."</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="graph" class="panel">
+        <h3 class="panel-title">Graph</h3>
+        <p class="panel-status pass">1,842 nodes / 5,109 edges</p>
+        <p class="panel-hint">Read-only impact graph — click a node to inspect its impact / deps and re-center the view on it. Drag to pan, Ctrl/Cmd+scroll (or the +/− buttons) to zoom.</p>
+        <div id="graph-body">
+          <div id="graph-toolbar">
+            <label class="graph-toolbar-label" for="graph-search">Focus node</label>
+            <input id="graph-search" type="text" placeholder="search a node…" />
+            <button id="graph-search-go" type="button" class="tool">Go</button>
+            <label class="graph-toolbar-label" for="graph-depth">Depth</label>
+            <select id="graph-depth"><option>1</option><option selected>2</option><option>3</option></select>
+            <button type="button" class="tool" title="Zoom in" aria-label="Zoom in">+</button>
+            <button type="button" class="tool" title="Zoom out" aria-label="Zoom out">−</button>
+            <button type="button" class="tool" title="Reset view">Reset view</button>
+            <button type="button" class="tool" title="Render every node — can be slow on a large graph">Show whole graph</button>
+          </div>
+          <div id="graph-view">[ node-link diagram — 640×480 viewBox ]</div>
+          <div id="graph-inspector">
+            <h4 class="subhead" style="margin-top:0;">Node inspector</h4>
+            <p class="graph-node-name">lib/mnemosyne/server.ts</p>
+            <h5 class="subhead">Impact <span class="panel-hint-inline">(what's affected)</span></h5>
+            <ul class="graph-node-list"><li>ui/app.js</li><li>lib/mnemosyne/graph.ts</li></ul>
+            <h5 class="subhead">Deps <span class="panel-hint-inline">(what this depends on)</span></h5>
+            <ul class="graph-node-list"><li>lib/mnemosyne/config.ts</li></ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="memory-levels" class="panel">
+        <h3 class="panel-title">Memory Levels (0-4)</h3>
+        <p class="panel-hint">
+          The 5 canonical memory-STORE-TYPE levels (0 = operator rules, 1 = repo agent
+          overlay, 2 = graph, 3 = vector, 4 = file doc store) — read-only introspection.
+        </p>
+        <table>
+          <thead><tr><th>Level</th><th>Label</th><th>Store type</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td>0</td><td>Operator rules</td><td class="mono">file</td><td class="mono">active</td></tr>
+            <tr><td>1</td><td>Repo agent overlay</td><td class="mono">file</td><td class="mono">active</td></tr>
+            <tr><td>2</td><td>Graph</td><td class="mono">sqlite</td><td class="mono">active</td></tr>
+            <tr><td>3</td><td>Vector</td><td class="mono">qdrant</td><td class="mono">active</td></tr>
+            <tr><td>4</td><td>File doc store</td><td class="mono">fs</td><td class="mono">active</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+    </div>
+  </details>
+
+  <!-- ============================== CLUSTER: PERSONAS ============================== -->
+  <details id="cluster-personas" class="cluster" open>
+    <summary>Personas <span class="cluster-tagline">— identity list, retrieval layer stack, and Level 0 pointer</span></summary>
+    <div class="cluster-body">
+
+      <section id="personas" class="panel panel-wide">
+        <p class="panel-status pass">9 personas (2 pending review)</p>
+        <p class="panel-hint">
+          Every existing persona (global tiers: <code>top-orchestrator</code>,
+          <code>company-director</code>, <code>project-orchestrator</code>) — fetched from
+          the persona service on port 3141. Rows with a pending draft (agent-proposed or
+          human-typed) are merged into the same list below.
+        </p>
+
+        <details id="personas-glossary">
+          <summary>What do these terms mean?</summary>
+          <dl class="fields">
+            <dt>tier</dt>
+            <dd>The four fixed levels a persona can sit at, in cascade order: <code>top-orchestrator</code>, <code>company-director</code>, <code>project-orchestrator</code>, <code>code-architect</code>.</dd>
+            <dt>scopeId</dt>
+            <dd>A human-assigned identity for this persona (a company/project/repo name) — never auto-detected.</dd>
+            <dt>Parent(s)</dt>
+            <dd>A pointer to where this persona's own content stops and a parent's begins ("query up, never copy down").</dd>
+            <dt>sourceSummary</dt>
+            <dd>What an agent read before proposing a draft — shown under "Why the agent proposed this" when reviewing a draft.</dd>
+          </dl>
+        </details>
+
+        <div class="persona-toolbar">
+          <span class="mode-toggle" role="radiogroup" aria-label="group personas by">
+            <label><input type="radio" name="pgroup-demo" checked /> Tier</label>
+            <label><input type="radio" name="pgroup-demo" /> Repo</label>
+            <label><input type="radio" name="pgroup-demo" /> Status</label>
+          </span>
+          <label for="personas-status-filter">status:</label>
+          <select id="personas-status-filter">
+            <option selected>All</option>
+            <option>Live</option>
+            <option>Needs review</option>
+            <option>History</option>
+          </select>
+        </div>
+
+        <table>
+          <thead>
+            <tr><th>Tier</th><th>Scope ID</th><th>Display name</th><th>Parent(s)</th><th>Status</th><th>Actions</th></tr>
+          </thead>
+          <tbody>
+            <tr class="persona-group-header"><th colspan="6">top-orchestrator</th></tr>
+            <tr>
+              <td class="mono">top-orchestrator</td>
+              <td class="mono">pantheon</td>
+              <td>Pantheon Top Orchestrator</td>
+              <td>—</td>
+              <td class="mono">live</td>
+              <td><button type="button" class="persona-action-btn">Edit</button></td>
+            </tr>
+            <tr class="persona-group-header"><th colspan="6">company-director</th></tr>
+            <tr>
+              <td class="mono">company-director</td>
+              <td class="mono">pantheon</td>
+              <td>Pantheon Director</td>
+              <td>top-orchestrator/pantheon</td>
+              <td class="mono">live</td>
+              <td><button type="button" class="persona-action-btn">Edit</button></td>
+            </tr>
+            <tr class="persona-group-header"><th colspan="6">project-orchestrator</th></tr>
+            <tr>
+              <td class="mono">project-orchestrator</td>
+              <td class="mono">mnemosyne</td>
+              <td>Mnemosyne Project Orchestrator</td>
+              <td>company-director/pantheon</td>
+              <td class="mono">live</td>
+              <td><button type="button" class="persona-action-btn">Edit</button></td>
+            </tr>
+            <tr>
+              <td class="mono">project-orchestrator</td>
+              <td class="mono">mnemosyne</td>
+              <td>Mnemosyne Project Orchestrator (draft)</td>
+              <td>company-director/pantheon</td>
+              <td class="mono">needs-review</td>
+              <td><button type="button" class="persona-action-btn">Review</button></td>
+            </tr>
+            <tr class="persona-draft-detail-row">
+              <td colspan="6">
+                <div class="persona-draft-panel">
+                  <h5>Why the agent proposed this <span class="persona-draft-agent-label">agent</span></h5>
+                  <p class="persona-draft-source-summary">Read project_layer_architecture_v2.md and noticed the la-01..la-10 ticket breakdown wasn't reflected in the orchestrator's scope description.</p>
+                  <div class="persona-draft-controls">
+                    <button type="button" class="persona-action-btn">Approve</button>
+                    <button type="button" class="persona-action-btn destructive">Discard</button>
+                  </div>
+                </div>
+              </td>
+            </tr>
+            <tr class="persona-group-header"><th colspan="6">code-architect</th></tr>
+            <tr>
+              <td class="mono">code-architect</td>
+              <td class="mono">mnemosyne</td>
+              <td>Mnemosyne Code Architect</td>
+              <td>project-orchestrator/mnemosyne</td>
+              <td class="mono">live</td>
+              <td><button type="button" class="persona-action-btn">Edit</button></td>
+            </tr>
+            <tr>
+              <td class="mono">code-architect</td>
+              <td class="mono">ui-redesign-review</td>
+              <td>UI Redesign Reviewer <span class="persona-draft-source-label">human</span></td>
+              <td>project-orchestrator/mnemosyne</td>
+              <td class="mono">needs-review</td>
+              <td><button type="button" class="persona-action-btn">Review</button></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h4 class="subhead" style="margin-top:1.25rem;">Propose / edit persona draft</h4>
+        <div class="form-row"><label>Tier</label>
+          <select disabled><option>select a tier…</option></select>
+        </div>
+        <div class="form-row"><label>Scope ID</label><input placeholder="e.g. mnemosyne" /></div>
+        <div class="form-row"><label>Display name</label><input placeholder="e.g. Mnemosyne Code Architect" /></div>
+        <div class="form-row"><label>Scope (one-line responsibility)</label><input placeholder="what this persona owns, one line" /></div>
+        <div class="form-row"><label>Section heading</label><input placeholder="e.g. What this persona knows" /></div>
+        <div class="form-row"><label>Section body</label><textarea rows="4" placeholder="the section's content…"></textarea></div>
+        <div class="form-row"><label>Repo (optional — required for code-architect)</label><input placeholder="e.g. /path/to/repo" /></div>
+        <div class="form-row"><label>Attach files (optional)</label><input type="file" multiple /></div>
+        <button type="button">Save draft</button>
+
+        <section id="persona-layer-stack">
+          <h4>Retrieval Layer Stack</h4>
+          <p class="panel-hint">
+            The current runtime <code>recall()</code>/<code>remember()</code> cascade order —
+            not the canonical 5-level memory-store-type model above, and not the persona list.
+          </p>
+          <table>
+            <thead><tr><th>#</th><th>Layer</th><th>Writable</th></tr></thead>
+            <tbody>
+              <tr><td>1</td><td class="mono">research_memory</td><td class="mono">yes</td></tr>
+              <tr><td>2</td><td class="mono">code_memory</td><td class="mono">yes</td></tr>
+              <tr><td>3</td><td class="mono">graph</td><td class="mono">no</td></tr>
+            </tbody>
+          </table>
+
+          <div id="persona-level0-pointer">
+            <h5>Level 0</h5>
+            <p class="panel-hint">Global rules file — view-only here. This UI never offers an edit form for it; edit the file directly on disk.</p>
+            <dl class="fields">
+              <dt>path</dt>
+              <dd id="persona-level0-path">~/.mnemosyne/level0-rules.md</dd>
+            </dl>
+          </div>
+        </section>
+      </section>
+
+    </div>
+  </details>
+
+</main>
+
+<footer>
+  <span>Last refreshed: 09:41:02 (mock data — structural mockup only)</span>
+</footer>
+
+</body>
+</html>
