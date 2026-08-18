@@ -153,6 +153,40 @@ note_on_completion: >
   worktree-to-branch pattern for exactly this two-worktrees-one-branch
   situation.
 
+  Independent verification (orchestrating session, before merge, highest
+  scrutiny given this ticket's own HIGH RISK flag): confirmed real
+  <details>/</details> balance by grepping every literal occurrence (not a
+  naive count, which false-positives on the file's own explanatory HTML
+  comments) -- exactly 2 real pairs, personas-glossary (pre-existing,
+  untouched) and the new persona-tools, both correctly closed. Re-ran all 7
+  real Personas test files myself: all pass. Ran the full suite (after npm
+  install): 54/54 vitest files, 727/727 tests, .mjs suite clean except the
+  3 pre-existing POST /remember failures. Discarded one unrelated stray
+  README.md modification (an auto-sync artifact, not part of this ticket's
+  real diff) found during verification.
+
+  Real browser verification surfaced a worth-documenting false alarm:
+  reading getBoundingClientRect()/offsetParent directly on #persona-form
+  and #persona-layer-stack (the <details>'s own children) continued to
+  report non-zero height/a truthy offsetParent even after confirming
+  details.open was genuinely false -- looking like a real collapse
+  failure. Cross-checked three independent ways before trusting that
+  reading: (1) the <details> element's OWN getBoundingClientRect().height
+  correctly collapsed to 19px (summary-only height); (2) the next real
+  sibling panel (#memory-levels) sat only 33px below that 19px box, not
+  the ~850px away it would be if the wrapped content still occupied real
+  layout space; (3) elementFromPoint() at the coordinates the form used to
+  occupy (per the pre-collapse open-state rect) found nothing there at
+  all. All three agree the collapse is genuinely correct in real document
+  flow -- the child-element geometry reads were themselves a measurement
+  artifact (closed-<details> descendants can report stale/as-if-still-laid-
+  out self-geometry via getBoundingClientRect() without that affecting
+  real page flow), not a functional bug. Documented here since it's a
+  non-obvious trap for any FUTURE verification of collapsible content in
+  this epic (ui-05, or anyone auditing this later) -- check the container's
+  own rect and real sibling positions, not a child's self-reported rect
+  alone, when confirming a <details>/collapse genuinely hides content.
+
 description: |
   Implements horizontal-plan.md's H2 (Personas collapse portion) /
   vertical-plan.md's Slice 4. Personas is confirmed to be ~50% of this
