@@ -178,6 +178,25 @@ note_on_completion: >
   banner and the real commands fails the test loudly rather than going
   unnoticed.
 
+  Independent verification (orchestrating session, before merge): noted the
+  builder added a real new devDependency (playwright ^1.62.1) rather than
+  relying only on static assertions -- a deliberate, well-justified choice
+  given this ticket's own acceptance criteria explicitly require a real
+  page reload and real localStorage persistence, neither provable by
+  regex/fetch alone; confirmed test/connect-banner.mjs's own header comment
+  states this reasoning explicitly, not just assumed it. Ran
+  test/connect-banner.mjs myself in full: all checks pass, including the
+  real page.reload() persistence proof, a real elementFromPoint
+  reachability check on the reopen control, and two separate real fail-open
+  proofs (localStorage throwing, and /ui/app.js aborted entirely). Ran the
+  full suite: tsc clean, 54/54 vitest files, 727/727 tests, .mjs suite
+  clean except the 3 pre-existing POST /remember failures. Did my own
+  additional real browser check via a fresh server + Playwright: confirmed
+  live geometry (header bottom 86.55px == banner top 86.55px == banner
+  bottom 336.49px == nav top 336.49px -- genuinely contiguous, no gap, no
+  overlap) and confirmed the rendered command text is byte-identical to the
+  real curl/agent-init commands.
+
 description: |
   Implements design-discussion.md §1.4. A new, real banner section in
   ui/index.html, placed between </header> and <nav id="jump-chips"> (the
