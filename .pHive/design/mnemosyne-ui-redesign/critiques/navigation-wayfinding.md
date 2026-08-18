@@ -1,0 +1,55 @@
+# Navigation & Wayfinding Critique — Mnemosyne UI Redesign Options
+
+**Lens:** Does this mockup actually solve the operator's complaint ("the ungodly long list")? Test case: an operator wants ONE specific panel — **Operations, the 6th of 8** (Liveliness, Settings, Lanes, Search, Graph, **Operations**, Personas, Memory Levels) — and needs to get there and see it fast, versus scroll-only baseline.
+
+Method: read both the rendered screenshot and the HTML source for each option (markup semantics, ARIA, actual JS/anchor behavior), evaluated independently, this lens only.
+
+---
+
+## 1. `collapsible-clusters`
+
+**Mechanism actually shipped:** a sticky top nav (`#cluster-nav`, lines 516–521) with exactly **3 links** — `#cluster-system`, `#cluster-memory`, `#cluster-personas` — each labeled with a panel *count* ("System 3", "Memory 4", "Personas 1"), not a panel name. The 8 panels are grouped into 3 native `<details open>` clusters (lines 528, 605, 714). Critically, **all three clusters ship `open` by default** (verified in source: `<details id="cluster-system" class="cluster" open>` etc.), so on first load there is no collapsing happening at all — the page is effectively the same total scroll length as the flat baseline, just re-chunked with cluster headers and (for System only) a 2-column grid (`.cluster-body.grid-2`, line 176) that buys back some vertical space.
+
+**Reaching Operations specifically:** Operations lives inside the "System" cluster, as the *third* panel after Liveliness and Settings (`<section id="operations" class="panel panel-wide">`, line 560). The nav only exposes a `#cluster-system` anchor, which lands the operator at the top of the cluster — i.e., at Liveliness — not at Operations. Operations does have its own `id="operations"`, so an anchor jump is technically possible, but **no UI element links to it**; only cluster-level anchors are exposed. So the realistic path is: click "System" chip (1 click) → land on Liveliness → scroll past Liveliness+Settings (which, thanks to grid-2, sit side-by-side, so this is roughly one row's worth of scroll rather than two full panel heights) → arrive at Operations. That's better than scrolling past all 5 preceding panels in the pure baseline, but it is **not** a direct, single-action jump to the named target — the nav's granularity (3 targets) doesn't match the operator's actual unit of navigation (8 panels).
+
+**Collapsing as a lever:** if the operator manually collapses the "Memory" and "Personas" clusters (2 extra clicks) to shorten the page, System — which contains Operations — still has to stay open and still bundles 3 undifferentiated panels with no internal jump/collapse. So even using the feature as designed, the best case for "I want only Operations" is ~2 collapse-clicks + 1 nav-click + a short scroll, and the operator still sees Liveliness/Settings content on the way, since there's no sub-panel affordance inside a cluster.
+
+**Verdict for this lens:** the mechanism (grouping + coarse jump nav) reduces *total document weight* only if the operator does the collapsing work themselves, and even then it does not let them address Operations by name — the nav vocabulary is one level too coarse for the actual ask.
+
+---
+
+## 2. `sidebar-glanceable`
+
+**Mechanism actually shipped:** a persistent left sidebar (`nav#panel-nav`, lines 466–500) with **one button per panel**, 8 total, each carrying `data-target="<panel-id>"` and a live `.status-badge` (pass/fail/loading). A small inline script (lines 922–931) does a classic single-active-panel swap: on click, every `.nav-item` and `.panel` loses `.active`, the clicked button and its matching `#<data-target>` panel gain it. CSS backs this with `.panel { display: none; } .panel.active { display: block; }` (lines 159, 167) — so **only one panel is ever rendered/visible in `<main>` at a time.**
+
+Clicking the "Operations" button (line 488, `data-target="operations"`) is a single, direct, correctly-labeled action that shows exactly the Operations panel and nothing else — no scrolling past Liveliness/Settings/Lanes/Search/Graph, no visual noise from sibling panels, because they're `display:none` in the DOM, not just off-screen.
+
+**Bonus for this lens:** the sidebar is a true persistent app-shell rail (`.shell` is a flex row with independent `overflow-y:auto` regions for nav and main, lines 66–78, 151–156), not a sticky-header-that-scrolls-with-content like the other two options. It never moves, so the operator always has all 8 named targets on screen regardless of scroll position, plus a glanceable status dot per panel (e.g., in the screenshot, "Personas" shows a red `fail` badge and "Search" shows a gray `loading` badge) — meaning the operator can often tell *before* clicking whether Operations even needs attention.
+
+**One real flaw found in source, not screenshot:** the click handler never resets `main`'s scroll position (no `scrollTop = 0` anywhere in the script). Since `main` has its own `overflow-y:auto` independent of the sidebar, if the operator was scrolled deep into a tall panel (e.g., far down in Personas, which has a long form) and then clicks "Operations," the browser will clamp `main`'s scrollTop to Operations's new (shorter) scrollHeight rather than guarantee landing at the panel's `<h2>`. In practice, because Operations is a short/medium panel that likely fits within the viewport without scrolling, this typically self-corrects (clamped scrollTop lands at 0), but it's a latent, unaddressed edge case for taller target panels (e.g., Search or Personas) navigated to from a different deep-scrolled panel.
+
+**Verdict for this lens:** this is the only option where the nav vocabulary is 1:1 with the panel set, the action is a single unambiguous click, and the result is visually isolated (no sibling panels to scan past). It most directly answers "get me to Operations and show me only that."
+
+---
+
+## 3. `minimal-jump-chips`
+
+**Mechanism actually shipped:** a sticky chip bar (`nav#jump-chips`, lines 496–505) with **8 chips, one per panel**, each a plain anchor (`<a href="#operations">`, etc.) to that panel's own `id`. No collapsing, no hide/show — every panel stays in normal document flow, full page length preserved (screenshot height ~4531px, same order as source). The one wayfinding-specific engineering detail: `.panel { scroll-margin-top: 112px; }` (line 148), sized to clear the sticky header (~61px, from `nav#jump-chips { top: 61px; }`, line 86) plus the chip bar itself — so a native anchor jump lands the panel's top just below both sticky bars rather than hidden underneath them. This is a correctly-computed detail that both other options either don't need (sidebar isolates the panel entirely) or don't get right in the same way (collapsible-clusters' `.cluster { scroll-margin-top: 3.6rem; }`, line 119, only applies at the cluster granularity).
+
+**Reaching Operations specifically:** clicking the "Operations" chip (line 502) is a single, directly-labeled action, native browser anchor-jump, no JS required, that scrolls straight to `#operations` (line 681, the panel's actual heading, "06 Operations"). This is exactly as precise and low-effort as sidebar-glanceable's click, and strictly more precise than collapsible-clusters' 3-target nav.
+
+**Where it's weaker than sidebar-glanceable for this lens:** after the jump, Operations is not visually isolated — Search and Graph still sit immediately above it and Personas/Memory Levels immediately below, all still rendered at full height. The "ungodly long list" is still physically the same length; the chip bar makes *travel* to a point in that list fast, but doesn't shrink the list itself or give the operator a moment of "this is now the only thing on screen." There's also no glanceable status per chip (no pass/fail dot next to "Operations" in the nav) — a chip only tells you *where* a panel is, not whether it currently needs attention, whereas sidebar-glanceable's badges answer both.
+
+**Verdict for this lens:** functionally matches sidebar-glanceable on raw "clicks-to-target" (1 click, correct target, no detours) and is meaningfully better than collapsible-clusters on nav granularity, but it doesn't reduce the perceived page length or add glanceability, so the operator's sense of "ungodly long list" is only partially addressed — solved for *travel time*, not for *list length*.
+
+---
+
+## Ranking for this lens only
+
+1. **sidebar-glanceable** — best. 1:1 nav-to-panel mapping, single click, true single-active-panel isolation (siblings are `display:none`, not just scrolled away), persistent rail immune to scroll position, plus status badges that add pre-click glanceability the lens's other candidates don't offer. Only ding: an un-reset `main.scrollTop` on panel-switch is a latent bug for tall targets reached from a deep scroll position elsewhere (self-correcting for Operations specifically, given its height, but not guaranteed for every panel pair).
+2. **minimal-jump-chips** — close second. Equally precise 1:1, single-click, correctly-computed `scroll-margin-top` so the jump lands cleanly under the sticky bars. Loses to #1 only because it's a fast-travel layer over the *same* long page rather than a mechanism that actually shortens or isolates what's on screen, and it has no status-at-a-glance in the nav itself.
+3. **collapsible-clusters** — weakest. The one option that actually offers a collapse affordance, but ships all clusters open by default (no length reduction out of the box) and — more importantly for this lens — exposes only 3 coarse nav targets for 8 panels, so "Operations" has no direct named link; the operator lands at the cluster's first panel (Liveliness) and must still scroll past Settings to arrive. The grouping logic (System/Memory/Personas) is reasonable information architecture, but it actively works against fast single-panel targeting, which is the operator's stated complaint.
+
+## Strongest option(s) through this lens alone
+
+**sidebar-glanceable**, with **minimal-jump-chips** a legitimate, low-risk runner-up. Both give the operator a direct, correctly-labeled, single-click path to "Operations" with no intermediate detours — the two mechanisms collapsible-clusters conspicuously lacks (1:1 nav granularity, and a real single-active-panel or isolate-on-arrival result). sidebar-glanceable wins outright because its mechanism doesn't just get the operator *to* Operations, it also removes the other 7 panels from the screen entirely and lets the operator triage which panel needs a visit before even clicking, which is the more complete answer to "the ungodly long list." minimal-jump-chips is the safer, lower-implementation-risk choice if a full single-page-app panel-swap model is out of scope, since it achieves equivalent click-to-target precision as a purely additive, native-anchor layer over the existing flat page. collapsible-clusters, as built, does not solve the stated complaint for a single named target and would need either default-collapsed clusters or a panel-level (not cluster-level) nav to compete.
