@@ -7,7 +7,25 @@
   --muted: #9aa2b1;
   --pass: #4fd17a;
   --fail: #ff6b6b;
-  --accent: #7aa2f7;
+  /* ui-01-accent-token-reconciliation: migrated from the old blue
+     (#7aa2f7) to the shipped favicon's amber-gold -- see
+     .pHive/epics/mnemosyne-ui-redesign/docs/horizontal-plan.md H1 and
+     is-03's release note for the favicon this now matches. */
+  --accent: #D8A84E;
+  /* --node-selected/--node-focus intentionally alias var(--fail)/
+     var(--pass) directly -- this is NOT a new, non-colliding color pair,
+     and this comment must not claim otherwise. The operator explicitly
+     chose to keep the graph's original red/green selected/focus coloring
+     (this session, round 2 dispatch) over a dedicated third-color
+     treatment. Round 2's visual-identity-cohesion.md critique caught the
+     reference "hybrid" mockup's own header comment falsely claiming these
+     tokens were a real color fix ("dedicated tokens... to fix the color
+     reuse") when they resolve to byte-identical rendered pixels as the
+     raw var(--fail)/var(--pass) usage they replace -- this comment states
+     the real, honest reason (operator preference) instead of repeating
+     that overclaim. */
+  --node-selected: var(--fail);
+  --node-focus: var(--pass);
 }
 
 * { box-sizing: border-box; }
@@ -86,6 +104,39 @@ main {
 .panel-status.pass { color: var(--pass); }
 .panel-status.fail { color: var(--fail); }
 .panel-status.loading { color: var(--muted); }
+
+/* ui-01-accent-token-reconciliation: a real, distinct pill vocabulary --
+   NOT the single-class conflation round 2's visual-identity-cohesion.md
+   critique caught still live (a "Degraded" store rendered with the same
+   amber .needs-review class used for a pending-review state, because no
+   dedicated failure-state pill existed). */
+.status-pill {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.status-pill.live { background: rgba(79, 209, 122, 0.15); color: var(--pass); }
+
+/* .needs-review (amber) marks a pending-human-decision state -- e.g. a
+   persona draft awaiting review. It is NOT a stand-in for a genuine
+   health failure; .degraded below is the real, distinct class for that. */
+.status-pill.needs-review { background: rgba(216, 168, 78, 0.18); color: var(--accent); }
+
+/* Genuinely distinct from .needs-review above (different background,
+   different color, resolves to --fail not --accent) -- a real health
+   failure, never a pending-review state. Wired into the Memory Levels
+   table (loadMemoryLevels() in app.js) for a store that is not actually
+   configured/active right now. */
+.status-pill.degraded { background: rgba(255, 107, 107, 0.15); color: var(--fail); }
+
+.memory-level-cascade-detail {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin-left: 0.4rem;
+}
 
 .detail {
   white-space: pre-wrap;
@@ -424,12 +475,12 @@ main {
 }
 
 .graph-node.selected circle {
-  fill: var(--fail);
+  fill: var(--node-selected);
   r: 9;
 }
 
 .graph-node.focus circle {
-  stroke: var(--pass);
+  stroke: var(--node-focus);
   stroke-width: 3;
 }
 
