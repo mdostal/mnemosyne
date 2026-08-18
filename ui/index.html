@@ -13,6 +13,43 @@
     <button id="refresh-btn" type="button">Refresh</button>
   </header>
 
+  <!-- aha-04-ui-connect-banner (epic: mnemosyne-agent-harness-install):
+       real first slot below the title bar, above even navigation
+       (design-discussion.md §1.4 / research-brief.md §3 -- there is no
+       existing banner/callout region anywhere above the jump-chip nav bar
+       below to repurpose, this is a genuinely new insertion point). Real,
+       copy-pasteable commands, not styled prose describing them: the exact
+       curl install command (aha-03's docs/install.sh / README.md
+       Quickstart) and the exact `mnemosyne agent init` command
+       (bin/mnemosyne-agent.mjs).
+
+       Fail-open by construction, matching horizontal-plan.md's
+       cross-cutting "nothing in this shell may become invisible because of
+       a JS failure" rule: #connect-banner-main below has NO `hidden`
+       attribute in this static markup (so it is genuinely visible with
+       zero JS, or if ui/app.js's collapse script fails to load/errors), and
+       #connect-banner-reopen DOES start `hidden` here -- ui/app.js's
+       initConnectBanner() IIFE only ever ADDS a collapsed state (from a
+       successfully-read, real localStorage value); it never removes this
+       default expanded markup, and any read/DOM error inside it leaves
+       this exact default on screen (see that IIFE's own comment). -->
+  <section id="connect-banner" class="connect-banner">
+    <div id="connect-banner-main">
+      <div class="connect-banner-header">
+        <h2>Connect an agent or harness</h2>
+        <button id="connect-banner-collapse" type="button" aria-expanded="true" aria-controls="connect-banner-main">Collapse ✕</button>
+      </div>
+      <div id="connect-banner-body">
+        <p>Install Mnemosyne, then connect it to your agent harness:</p>
+        <pre><code id="connect-banner-cmd-install">curl -fsSL https://mdostal.github.io/mnemosyne/install.sh | bash</code></pre>
+        <pre><code id="connect-banner-cmd-agent-init">mnemosyne agent init</code></pre>
+        <p class="connect-banner-hint"><code>mnemosyne agent init</code> registers Mnemosyne as an MCP server and installs its skills for Claude Code. Run <code>mnemosyne agent status</code> first to preview state without changing anything.</p>
+      </div>
+    </div>
+    <button id="connect-banner-reopen" type="button" hidden aria-expanded="false" aria-controls="connect-banner-main">▸ Connect an agent or harness</button>
+  </section>
+  <!-- ==================== end aha-04-ui-connect-banner ==================== -->
+
   <!-- ui-03-jump-chip-nav-and-status-wiring: 8 plain #anchor links, one per
        real top-level panel below, in the same document order. These are
        real <a href="#id"> anchors -- click-to-jump works with zero JS, and
