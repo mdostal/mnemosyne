@@ -319,6 +319,22 @@
       </table>
       <p class="panel-status" id="personas-empty" hidden></p>
 
+      <!-- ui-04-personas-draft-tools-collapse: a single native <details>
+           wraps ONLY the write-oriented tail below -- the draft-propose
+           form (#persona-form), the Retrieval Layer Stack sub-section
+           (#persona-layer-stack, which already contains the Level 0
+           pointer), and nothing else. The identity table above (and
+           everything above it: personas-status, the glossary, the
+           toolbar, the aria-live region, #personas-table/#personas-tbody,
+           #personas-empty) stays a direct, always-visible sibling of this
+           <details>, outside it, exactly as it was before this story --
+           never wrapped, never hidden by default. Defaults open, so
+           first-paint length is unchanged; this is a relief valve for a
+           returning operator to collapse, not an automatic length
+           reduction (round-2 design-discussion.md §8 consensus). -->
+      <details id="persona-tools" open>
+        <summary>Draft tools &amp; retrieval layer stack</summary>
+
       <!-- pw-17-personas-panel-write-form, RETARGETED by
            pu-12-draft-review-approve-ui: same add-lane-form-derived
            convention (form-row divs, single submit button, panel-status
@@ -462,6 +478,8 @@
         </div>
       </section>
       <!-- ==================== end pu-11 re-homed section =============== -->
+      </details>
+      <!-- ============= end ui-04 persona-tools <details> wrapper ======== -->
     </section>
     <!-- ================================================================
          ml-05-memory-levels-ui (epic mnemosyne-memory-levels): Memory
