@@ -1,10 +1,35 @@
 id: ui-06-release
 epic: mnemosyne-ui-redesign
 title: "Full-suite regression + version bump + release note"
-status: planned
+status: complete
 complexity: low
 methodology: classic
 depends_on: [ui-05-accessibility-hardening]
+
+note_on_completion: >
+  Carried out directly in the main working tree (not dispatched -- a
+  regression pass + version bump + changelog entry doesn't warrant a
+  separate builder round-trip, and the orchestrating session already had
+  full context on everything ui-01..ui-05 shipped). Ran tsc --noEmit
+  (clean) and the full suite against the epic's final merged state
+  (commit 669a1ea): 54/54 vitest files, 727/727 tests; .mjs suite clean
+  except the 3 already-documented pre-existing POST /remember failures
+  and test/ui-shell.mjs's 22 failures (not part of npm test's own script
+  chain; confirmed genuinely pre-existing via a real stash-and-reproduce
+  against the epic's own pre-ui-01 base commit, done during ui-01's own
+  verification earlier in this epic -- not re-litigated here, same root
+  cause, same unrelated scope). No new failures anywhere -- nothing to
+  fix. Version bumped 0.11.1 -> 0.12.0 (minor, matching epic.yaml's
+  version_bump and the real scope: shared visual/structural changes
+  across the whole UI surface, not a single-asset patch). CHANGELOG.md
+  0.12.0 entry added covering the real deliverable (reconciled amber-gold
+  identity, jump-chip nav with live status, inline header icon, Personas
+  collapse, accessibility hardening) and the two-round swarm-review
+  process that produced the confirmed direction. This closes the
+  mnemosyne-ui-redesign epic (ui-01 through ui-06, all complete) on its
+  own feature branch -- merge to dev/main follows immediately per the
+  operator's own standing go-ahead this session ("yeah, go for it, you
+  can merge keep going... plan,execute,verify,ship,repeat").
 
 description: |
   Closes the mnemosyne-ui-redesign epic (ui-01 through ui-06), mirroring
