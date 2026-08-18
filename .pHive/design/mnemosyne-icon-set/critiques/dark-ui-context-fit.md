@@ -1,0 +1,47 @@
+# Dark-UI Context Fit — Critique of the 10 Mnemosyne Icon Concepts
+
+**Lens:** This review was carried out against a single question only: does the mark read correctly and feel native when it lives in a dark-chrome, amber-gold-accented product UI — specifically as a browser favicon (16–32px, dark tab bar) and an OS dock/install icon (dark dock, dark desktop)? General taste, brand storytelling, and concept cleverness are out of scope here; those belong to other review passes. All ten source files share the same amber-gold hue on a transparent ground, so hue-vs-background contrast is a wash across the set — what separates them under this lens is fill vs. outline construction, stroke weight, and how much fine internal detail survives being rendered small on a dark field.
+
+Two structural facts drove most of the findings below:
+
+- **Solid, filled silhouettes hold their edge against dark chrome at any size.** A single amber mass reads as a clean glyph the moment it's rendered, with no dependency on anti-aliasing or sub-pixel hinting.
+- **Thin or doubled outline strokes are the highest-risk construction on dark backgrounds at favicon scale.** A hairline glyph that looks refined at logo size can thin out, alias, or fuse into a blob once shrunk to 16–32px in a tab strip — the exact opposite of what a favicon needs to do (be identifiable at a glance, in peripheral vision, next to a dozen other tabs).
+
+## Per-concept notes
+
+**1. Memory Spiral / Brain** — This is built from several closely nested spiral lines at a light-to-medium stroke weight, all sitting very near one another. At full size the coil-into-brain effect works, but the tight spacing between line passes is the actual risk factor: at favicon scale those parallel strokes are the most likely of the set to converge into a solid smear or a moiré-like blur rather than a recognizable spiral, especially once you also lose the fine brain-lobe notches at the bottom. It's the concept most dependent on being viewed larger than a tab icon will ever allow it to be. Weakest fit of the ten for this specific lens.
+
+**2. Laurel Profile** — A solid filled silhouette, which is the right construction choice for a dark tab bar. The profile line and laurel leaves are cut as negative space out of the solid gold mass rather than drawn as separate thin strokes, so the shape stays structurally sound even shrunk down — it won't fragment into disconnected pieces the way a line-art mark could. Some interior facial detail (the negative-space nose/chin line) will soften at 16px, but the overall silhouette — round head + wreath sweep — stays identifiable, which is what a favicon needs. Solid, dependable performer.
+
+**3. Neural Node Network** — Five filled dots joined by medium-weight connecting strokes. The nodes are large relative to the connecting lines, which is favorable — dots hold their shape at small size far better than thin lines do. The risk here is different from the outline-based marks: at very small sizes the connecting lines can drop out visually before the dots do, leaving what reads as a scatter of dots rather than a "network." Mid-pack: solid amber mass in the nodes carries it, but it's leaning on line segments that are the first thing to lose definition on a dark, busy tab strip.
+
+**4. Scroll & Quill** — Solid filled silhouette overall, which is good, but the quill is rendered as a negative-space cutout raked diagonally through the gold mass rather than as its own positive shape. Against a dark background, that cutout doesn't read as "a quill" — it reads as a diagonal gap letting the dark chrome show through the icon, which at small size looks less like an intentional quill silhouette and more like a chip or crack in the mark. The scroll's curled ends are also thin negative-space details that will soften first. Decent macro-contrast (it's still a big gold blob against dark chrome) but the internal storytelling collapses exactly where a favicon needs to be legible.
+
+**5. Infinity Recall Loop** — A single bold, thick ribbon with no fine internal detail anywhere. This is the strongest possible construction for a dark UI favicon: one continuous mass of amber, unmistakable silhouette, nothing to lose in translation at 16px. The subtle darker-amber shading at the ribbon's self-crossing point even reads as a small amount of dimensionality/depth against dark chrome rather than as a defect — it looks intentional, almost like a soft shadow, and will still be visible at small size because it sits at the visual center of the mark. Strongest fit in the set.
+
+**6. Hourglass Memory** — Outline-only construction (open triangular contour) with two small solid triangles and two tiny dots inside. This combines two of the higher-risk traits at once: thin bounding strokes on the outer form, plus fine internal marks (the two "sand" dots) that are exactly the kind of detail that disappears first at favicon scale. On a dark background the open, unfilled portions of the hourglass are just dark chrome showing through, which thins the mark's apparent weight further. It will likely read as a vague hourglass-ish outline with the internal detail gone at true favicon size. Weak fit.
+
+**7. Owl (Minimal)** — Two large filled circles (with a subtly darker inner ring, still same amber family) and one small triangle beak. This is about as reduced as a mark can get: no thin strokes, no negative-space storytelling, no small internal marks that depend on being resolved. Two bold dots and a wedge will survive being rendered at 16px without any loss of legibility — it's essentially unbreakable at small size. The inner-circle shading adds a touch of depth without threatening contrast, since both tones are still well clear of the dark background. One of the strongest performers here precisely because it has almost nothing to lose.
+
+**8. Ancient Urn (Vessel)** — A single solid, chunky silhouette with handles as the only articulated sub-shapes, and even those are thick enough to survive scaling down. No hairline strokes, no small internal cutouts. This behaves like the laurel profile and the infinity loop: one dependable mass of amber against dark chrome, legible from favicon size straight up to a full dock icon. Strong, low-risk fit.
+
+**9. Monogram M / Thread** — A bold, thick-stroked outline M built as a continuous doubled line (the "thread" conceit shows as a groove running through the stroke). The stroke weight itself is generous, which is the main thing saving it — this isn't a hairline mark. But the doubled-line construction means there's a thin negative gap running down the center of each stroke, and that gap is the part likely to fill in or vanish at very small sizes, which would just turn it into a plain block M (arguably not even a loss for this lens, since a cleaner M is still perfectly legible). Reasonable fit — the "worst case" degradation still leaves a recognizable, high-contrast letterform.
+
+**10. Concentric Memory Rings** — A bullseye of three rings plus a center dot, with graduated stroke weight (outermost ring noticeably thinner than the ones inside it). The two inner heavier rings and the solid center dot will hold up fine on dark chrome, but that outermost hairline ring is a legibility risk: at 16px it's the kind of single-pixel contour that antialiasing softens toward the background first, potentially leaving the mark looking like it's "missing its edge" rather than intentionally cropped. If the outer ring were brought up to match the inner rings' weight, this would rank near the top; as drawn, it's a solid-but-uneven performer.
+
+## Ranking for this lens (best → worst dark-UI fit)
+
+1. **Infinity Recall Loop (05)** — single bold solid mass, zero fine detail to lose, reads perfectly at any size.
+2. **Owl Minimal (07)** — two dots and a wedge; effectively unbreakable at favicon scale.
+3. **Ancient Urn / Vessel (08)** — solid chunky silhouette, no hairlines, dependable at every size.
+4. **Laurel Profile (02)** — solid fill with negative-space detail that degrades gracefully rather than catastrophically.
+5. **Monogram M / Thread (09)** — generous stroke weight; worst-case degradation is still a legible letterform.
+6. **Concentric Memory Rings (10)** — strong core, but the thin outer ring is a specific, fixable risk.
+7. **Neural Node Network (03)** — dots carry it, but connecting lines are the first thing to thin out.
+8. **Scroll & Quill (04)** — solid mass overall, but the negative-space quill reads as damage on dark chrome, not as a quill.
+9. **Hourglass Memory (06)** — thin outline plus tiny internal dots; too much fine detail for the format.
+10. **Memory Spiral / Brain (01)** — tightly nested thin spiral lines are the most likely of the set to blur into a smear at favicon size.
+
+## Top candidates through this lens alone
+
+**Infinity Recall Loop, Owl Minimal, and Ancient Urn (Vessel)** are the three I'd carry forward on dark-UI fit specifically. All three share the trait that actually matters for a favicon/dock icon on dark chrome: they're single, bold, solid amber masses with little or no fine internal linework, so nothing about them depends on the viewer seeing the icon larger than a tab strip will ever render it. Laurel Profile is a credible fourth pick for the same reason (solid fill, graceful degradation) if the shortlist needs to stay closer to the brand's classical-mythology register rather than the more abstract infinity/owl marks.

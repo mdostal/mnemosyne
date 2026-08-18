@@ -1,0 +1,76 @@
+id: is-03-release
+epic: mnemosyne-icon-selection
+title: Full-suite regression pass + version bump + release note
+status: complete
+complexity: low
+methodology: classic
+depends_on: [is-02-operator-pick-and-assets]
+
+note_on_completion: >
+  Carried out directly in the main working tree (not dispatched -- low
+  complexity, proportionate per this ticket's own scaling note). Ran the
+  full .mjs subprocess suite (18 files, individually, since npm test's own
+  chain stops at first failure) + `npx vitest run` (53 files/713 tests) +
+  `tsc --noEmit` against the epic's final merged state (post is-02 merge,
+  commit 27c90dc): tsc clean, vitest 53/53 files and 713/713 tests passing,
+  .mjs suite clean except the same 3 pre-existing POST /remember
+  default-layer assertions already documented as acceptable baseline in
+  this epic's own design-discussion.md -- byte-identical to the counts the
+  is-02 builder agent independently reported from its own worktree run, no
+  new failures found, nothing to fix. package.json/package-lock.json
+  bumped 0.10.0 -> 0.10.1 (patch, matching epic.yaml's version_bump and
+  this ticket's own scoping note -- one new UI element + a static asset
+  addition). CHANGELOG.md 0.10.1 entry added covering the real deliverable
+  (the shipped favicon) plus the swarm-review process and verification
+  summary. This closes the mnemosyne-icon-selection epic (is-01/is-02/is-03
+  all complete) on its own feature branch -- NOT yet merged to dev/main;
+  that release ritual is a separate step pending operator go-ahead, same
+  as mnemosyne-persona-files (0.11.0) is still awaiting on its own branch.
+
+description: |
+  Closes the mnemosyne-icon-selection epic (is-01 through is-03), mirroring
+  pu-15/pf-08's own closing-ticket convention but proportionate to this
+  epic's own small, fast-release intent (design-discussion.md §1 Ticket 3):
+  a real full-suite regression pass, a version bump, and a release note. Does
+  NOT repeat pf-08's own full fresh-worktree stash-and-reproduce
+  investigation -- that rigor matched an 8-ticket epic; a straightforward
+  in-tree regression pass is proportionate for a 3-ticket, single-asset
+  release.
+
+acceptance_criteria:
+  - "Given the full npm test script (vitest suite + the .mjs subprocess suite) plus tsc --noEmit, when run on this epic's final state, then it completes with only the already-documented, pre-existing failures (the 3 generic POST /remember default-layer assertions, first flagged in ml-04's completion note) -- no NEW failures anywhere"
+  - "Given any NEW failure found, then it is fixed before this ticket completes -- a regression-fixing step, not deferred"
+  - "Given package.json's version field, when this ticket completes, then it reflects a real version bump from the version at epic start"
+  - "Given this ticket's completion note, when read, then it includes the actual full test-run output summary (real pass/fail counts)"
+
+steps:
+  - id: implement
+    description: >
+      Run the full npm test + tsc --noEmit against this epic's final state;
+      fix any new failure found. Bump package.json/package-lock.json's
+      version (patch or minor, whichever matches this epic's actual scope --
+      a single new UI element + a static asset addition reads as patch-scale
+      unless the implementer finds a reason otherwise). Write a release note
+      in CHANGELOG.md covering the real deliverable: the operator-chosen
+      icon now shipping as the standalone UI's favicon.
+    agent: developer
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [implement]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: .pHive/epics/mnemosyne-persona-files/stories/pf-08-full-suite-regression-release.yaml
+      purpose: "Direct template for the closing-ticket convention (version bump + CHANGELOG entry), scaled down per this epic's own proportionality decision (design-discussion.md §1 Ticket 3)."
+
+files_to_modify:
+  - file: package.json
+    change: "Version bump."
+  - file: package-lock.json
+    change: "Version bump, matching package.json."
+  - file: CHANGELOG.md
+    change: "New entry covering the shipped favicon."
+
+cross_cutting: []

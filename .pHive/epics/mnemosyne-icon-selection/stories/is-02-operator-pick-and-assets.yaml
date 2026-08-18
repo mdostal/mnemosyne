@@ -1,0 +1,190 @@
+id: is-02-operator-pick-and-assets
+epic: mnemosyne-icon-selection
+title: "Operator's real final pick, then production-ready favicon assets from that pick"
+status: complete
+complexity: medium
+methodology: classic
+depends_on: [is-01-icon-swarm-review]
+
+operator_pick:
+  answer: >
+    "lol, jar it is, go for it" -- operator confirmed the swarm's unanimous
+    pick, Ancient Urn (icon-08), refined with thicker/wider-aperture
+    handles per all 3 synthesized/finalist-*.md write-ups. Recorded
+    2026-08-17. Fulfills the operator-touchpoint step below -- proceeding
+    to implement/review/integrate.
+
+note_on_completion: >
+  Asset production (Part B) carried out after the real operator pick above.
+  Regeneration was attempted first, per design-discussion.md OQ1: two
+  independent calls to Gemini 3 Pro Image (gemini-3-pro-image) via
+  `portunus resolve --exec` (key reference
+  personalsites-487021-google_generative_ai_api_key, boundary-only
+  injection -- substituted straight into the curl subprocess's URL,
+  never read into this session), each explicitly instructed to redraw
+  icon-08 with thick, wide-aperture positive-space handles and a real
+  PNG alpha channel (not a drawn checkerboard). Both attempts reproduced
+  the requested handle refinement faithfully (thicker strokes, wide open
+  apertures, tapered neck/swelling body/flared foot/single amber fill/no
+  ornamentation all otherwise untouched) but both came back as mimeType
+  image/jpeg -- RGB, no alpha, checkerboard background -- confirming this
+  model genuinely cannot emit real alpha via this API path, matching the
+  behavior already documented for the original 10-option batch.
+
+  Per OQ1's own fallback logic ("falls back to background removal ...
+  so the shipped icon matches what was actually chosen"), background
+  removal was performed via PIL (saturation-based classification --
+  the checkerboard is strictly achromatic, the urn fill is saturated
+  amber-gold, cleanly separable; median-filtered first and small
+  disconnected components dropped to remove JPEG-ringing speckle noise
+  from the high-frequency checker pattern) on the second regenerated
+  image rather than on the original unrefined icon-08-ancient-urn-vessel.jpg.
+  This is a deliberate, documented deviation from the step text's literal
+  "background removal on the original" wording: the regenerated image IS
+  the operator's actual pick (the refined handles), while the original
+  file has the old thin hairline handles the operator explicitly did NOT
+  pick -- background-removing the original would have shipped a mark
+  that contradicts operator_pick above. Chosen as the closer match to
+  "what was actually chosen," consistent with OQ1's stated rationale.
+
+  Verification (direct inspection, not assumed):
+  - ui/favicon.png: PIL confirms mode=RGBA, 1024x1024; corner pixels
+    alpha=0 (fully transparent) at all 4 corners; interior alpha
+    histogram shows real opaque (255) and real transparent (0) pixel
+    populations, not just alpha=255 everywhere.
+  - ui/favicon.ico: PIL confirms format=ICO with embedded frames at
+    (16,16), (32,32), (48,48), (64,64), (128,128), (256,256), each
+    itself mode=RGBA -- inspected via Image.open(...).ico.sizes() and
+    per-size .ico.getimage(), not inferred from the save() call's exit
+    status. 16x16 spot-check: silhouette still reads correctly as an
+    urn (handle apertures partially fill in at that size, exactly the
+    graceful-degradation failure mode all 3 finalist write-ups predicted
+    for this concept).
+  - Server: added .ico/.png entries to src/server.mjs's
+    STATIC_CONTENT_TYPES (previously had no icon/image mappings at all,
+    would have served application/octet-stream). Started the real
+    standalone server (PORT=8478, node src/server.mjs) and did a real
+    HTTP fetch of /ui/favicon.ico -> 200, content-type: image/x-icon.
+  - Browser: Playwright (Chromium) navigated to /ui/, confirmed the live
+    DOM's <link rel="icon"> resolves to /ui/favicon.ico, then ran an
+    in-page fetch() + createImageBitmap() against that URL from inside
+    the real browser -- succeeded, decoding to a genuine 256x256 bitmap
+    (the same decode pathway a browser uses to actually render a
+    favicon), i.e. a real rendering-level check, not an HTML-source-only
+    assertion. (The MCP screenshot tool itself hit an unrelated 5s
+    timeout in this sandbox on a font-wait step even though
+    document.fonts.status was already 'loaded' -- a harness quirk, not a
+    favicon defect; the fetch+decode check above stands in as the visual
+    confirmation.)
+  - Full suite: `npm install` was required first (node_modules was
+    absent in this worktree). `tsc --noEmit` clean. Full test chain run
+    to completion (npm test's own script stops early at the first `&&`
+    failure, so the remaining chain entries plus the vitest run were
+    executed individually to get real completion signal): the only
+    failures anywhere are the 3 already-documented pre-existing
+    `POST /remember` assertions in test/http-api.mjs (design-discussion.md
+    §1 Ticket 3 calls these out by name as an acceptable pre-existing
+    baseline) -- confirmed genuinely pre-existing, not a regression, by
+    stashing this ticket's diff and re-running: identical 3 failures on
+    the untouched 00581ab tree. Every other test file passes, including
+    all 53 vitest files / 713 tests.
+
+description: |
+  Implements design-discussion.md's Ticket 2 -- the one structural
+  departure from pu-01's own precedent: a REAL, blocking operator
+  touchpoint for the final icon pick (never an autonomous selection),
+  followed by production-asset generation from whichever option the
+  operator actually picks.
+
+  Part A (human-in-the-loop, not agent-executable): present is-01's 3
+  synthesized finalists to the operator -- including honoring their
+  already-stated freedom to override entirely with a different concept
+  (e.g. a plain brain) rather than being constrained to the 3 finalists --
+  and wait for their real, explicit pick. This part of the ticket cannot be
+  "completed" by an agent alone; it requires the coordinating session to
+  actually ask and wait.
+
+  Part B (agent-executable once the pick is known): produce real,
+  production-ready assets from the chosen concept -- a genuine
+  transparent-background PNG (regenerating with an explicit real-alpha
+  request preferred over background-removing the existing checkerboard
+  JPEG, per design-discussion.md OQ1), a proper multi-resolution favicon.ico,
+  and a new <link rel="icon"> wired into ui/index.html (confirmed via
+  research-brief.md: no such tag exists today -- this is additive, not a
+  replacement of anything).
+
+acceptance_criteria:
+  - "Given is-01's 3 synthesized finalists, when presented, then the operator is asked for a real, explicit final pick -- never an assumed/auto-advanced selection, and never constrained only to the 3 finalists if the operator wants something else"
+  - "Given the operator's actual pick, when production assets are generated, then the resulting PNG has a genuine alpha channel (verified directly, e.g. via PIL mode==RGBA with real transparency, not a drawn checkerboard) -- confirmed by inspection, not assumed from the generation prompt alone"
+  - "Given the transparent PNG, when the favicon.ico is produced, then it contains multiple real resolutions (at minimum 16x16, 32x32, 48x48) -- verified by inspecting the actual .ico file's embedded image list, not assumed from the conversion command's exit code"
+  - "Given ui/index.html, when this ticket ships, then it has exactly one new <link rel=\"icon\" ...> tag pointing at a real, committed asset path -- confirmed via a real HTTP fetch of that path returning 200 once the standalone UI server is running, not just a static file-exists check"
+  - "Given the shipped icon, when the standalone UI is loaded in a real browser, then the browser tab genuinely shows the new icon -- a real, visual confirmation (e.g. via a screenshot or an accessibility-snapshot-adjacent check), not only an HTML-source-level assertion"
+
+steps:
+  - id: operator-touchpoint
+    description: >
+      Present is-01's 3 synthesized finalists (with their reasoning) to the
+      operator, explicitly noting they may pick any of the 3, their
+      already-stated favorite (icon-01, memory-spiral-brain) even if it
+      isn't among the 3, or something else entirely. Wait for their real
+      answer -- this step cannot be carried out autonomously.
+    agent: developer
+  - id: implement
+    description: >
+      Once the pick is known, generate/derive a real transparent PNG for
+      that concept (regeneration preferred over background removal, per
+      design-discussion.md OQ1), convert to a proper multi-resolution
+      favicon.ico, add the <link rel="icon"> tag to ui/index.html, and
+      commit the real asset files to the repo (e.g. under a new assets/ or
+      ui/ subdirectory -- confirm this repo's own convention, if any,
+      before picking a location).
+    agent: developer
+    depends_on: [operator-touchpoint]
+  - id: review
+    description: >
+      Directly inspect the produced PNG's alpha channel and the .ico file's
+      embedded resolutions (not just trust the generation/conversion
+      command's exit code). Start the real standalone UI server and confirm
+      via a real HTTP fetch that the new <link rel="icon"> path resolves,
+      and via a real browser check (e.g. Playwright) that the tab icon
+      genuinely renders.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: ui/index.html
+      purpose: "Confirmed via research-brief.md to have zero existing icon-related <link> tags -- this ticket's addition is purely additive."
+    - path: .pHive/design/mnemosyne-icon-set/synthesized/
+      purpose: "is-01's own 3 finalist files -- the source of truth this ticket's operator-touchpoint step presents."
+
+files_to_modify:
+  - file: ui/index.html
+    change: "New <link rel=\"icon\"> tag."
+  - file: (new asset location, TBD by implementer)
+    change: "Real transparent PNG + multi-resolution favicon.ico for the operator's chosen concept."
+
+design_decisions:
+  - decision: "Regenerate with an explicit real-alpha request, preferred over background-removing the existing checkerboard JPEG."
+    rationale: "design-discussion.md OQ1: closer to the source of truth than reverse-engineering transparency out of a drawn checkerboard; falls back to background removal only if regeneration produces a materially different result from what was actually reviewed/chosen."
+  - decision: "The operator's pick is a real, blocking touchpoint -- never autonomous."
+    rationale: "Direct operator instruction, this session: 'the icon usually is mine to choose.' The one deliberate structural departure from pu-01's own precedent (which made an autonomous pick under different circumstances -- no interactive operator available at that time)."
+
+cross_cutting: []
+
+risks:
+  - severity: low
+    description: "The operator-touchpoint step cannot be dispatched to an autonomous background builder the way every other ticket this session has been -- it requires the coordinating session itself to ask and wait for a real answer before implement/review/integrate can proceed."
+    mitigation: "Explicitly split into its own step (operator-touchpoint) rather than folded into implement, so the dependency chain makes the blocking nature structurally visible, not just a note in prose."
+
+references:
+  - path: .pHive/epics/mnemosyne-icon-selection/docs/design-discussion.md
+    relevant_excerpt: |
+      §1 Ticket 2: "This is the one structural departure from pu-01's own
+      precedent ... Ticket 1's output (3 finalists) is presented to the
+      operator as a real, blocking gate -- not assumed, not auto-advanced."

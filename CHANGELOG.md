@@ -2,6 +2,55 @@
 
 All notable changes to Mnemosyne are documented here.
 
+## [0.10.1] — 2026-08-17
+
+`mnemosyne-icon-selection` epic (`is-01`..`is-03`) — the standalone UI has a
+real favicon for the first time, chosen through an actual multi-agent design
+review rather than picked ad hoc.
+
+### Added
+
+- **Favicon: an ancient Greek amphora / urn** (`ui/favicon.png`,
+  `ui/favicon.ico`, wired via a new `<link rel="icon">` in `ui/index.html`,
+  is-02) — a genuine transparent-alpha PNG (1024×1024, PIL-verified RGBA
+  with real transparent/opaque pixel populations, not a drawn checkerboard)
+  and a multi-resolution `.ico` (real embedded frames at 16/32/48/64/128/256px,
+  verified by inspecting the file directly). `src/server.mjs` gained
+  `.ico`/`.png` static content-type mappings, which previously didn't exist
+  at all.
+- **7-lens swarm design review over 10 generated icon concepts**
+  (`is-01`) — mirroring the `mnemosyne-persona-ux` epic's own proven
+  multi-agent review structure: 7 independently-dispatched critique agents
+  (legibility at 16px, mythological/brand fit, dark-UI context fit, tab-bar
+  distinctiveness, accessibility/contrast, multi-resolution scalability,
+  visual-language cohesion), each evaluating all 10 options, followed by 3
+  independent synthesis agents. All 3 synthesis agents, working
+  independently from the same 7 critiques, converged unanimously on the
+  same refinement of the Ancient Urn concept. Full critique/synthesis
+  artifacts committed under `.pHive/design/mnemosyne-icon-set/`.
+
+### Process note
+
+The icon's final selection was a real, blocking operator decision (not an
+autonomous pick) — the swarm review narrowed 10 options to 3 refined
+finalists and presented them for a genuine human choice, honoring the
+operator's explicit freedom to override the recommendation entirely. The
+initial regeneration attempt (an explicit real-alpha request to the same
+image model used for the original 10 options) still could not produce a
+true alpha channel; the shipped PNG's transparency was produced via
+background removal on the regenerated (operator-approved) image rather
+than the original unrefined concept, so the shipped mark matches what was
+actually picked.
+
+### Verification
+
+Full test suite (`.mjs` subprocess suite + `vitest`) plus `tsc --noEmit`
+run clean at epic completion: 53/53 vitest files, 713/713 tests passing;
+the only failures anywhere are the 3 already-documented pre-existing
+`POST /remember` default-layer assertions (first flagged in `ml-04`'s
+completion note, unrelated to this epic) — confirmed unchanged from the
+pre-epic baseline.
+
 ## [0.9.0] — 2026-08-16
 
 Full `mnemosyne-memory-levels` epic (`ml-01`..`ml-10`) — corrects the

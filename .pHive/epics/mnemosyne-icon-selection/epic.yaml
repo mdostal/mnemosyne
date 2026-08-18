@@ -1,0 +1,31 @@
+name: mnemosyne-icon-selection
+title: Select and ship the favicon/install icon via a real multi-swarm design review
+target_codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+methodology: classic
+version_bump: patch
+
+description: |
+  Operator ask (verbatim): "the icon usually is mine to choose, and i'm
+  loving the Memory Spiral / Brain [icon-01]." Runs pu-01's proven 7-lens
+  critique -> 3-finalist synthesis structure over the 10 already-generated
+  icon options, but with a real, blocking operator touchpoint for the final
+  pick (the one deliberate departure from pu-01's own autonomous-selection
+  precedent) -- then produces genuine production-ready favicon assets
+  (real alpha PNG, multi-resolution .ico) and wires them into the
+  standalone UI. Ships as its own small, fast release, explicitly sequenced
+  before the separate, larger "full UI look/feel/component/navigation"
+  pass the operator also asked for.
+
+stories:
+  - id: is-01-icon-swarm-review
+    title: "7-lens critique + 3-finalist synthesis over the 10 existing icon options"
+    complexity: medium
+    depends_on: []
+  - id: is-02-operator-pick-and-assets
+    title: "Operator's real final pick, then production-ready favicon assets from that pick"
+    complexity: medium
+    depends_on: [is-01-icon-swarm-review]
+  - id: is-03-release
+    title: Full-suite regression pass + version bump + release note
+    complexity: low
+    depends_on: [is-02-operator-pick-and-assets]

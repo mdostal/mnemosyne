@@ -54,8 +54,24 @@ topics:
 
   - topic: mnemosyne-icon-set
     output_dir: .pHive/design/mnemosyne-icon-set/
-    process: 10-option-generation -> 7-lens-review-panel (queued) -> 3-option-synthesis (queued) -> operator final pick
+    process: 10-option-generation -> 7-lens-review-panel -> 3-finalist-synthesis -> operator final pick -> production assets
     artifacts:
+      final_assets:
+        - path: ui/favicon.png
+          note: >
+            Real RGBA PNG (1024x1024), genuine alpha channel (verified via
+            PIL: transparent corners, real opaque/transparent pixel
+            populations, not just mode metadata). Regenerated via Gemini 3
+            Pro Image (gemini-3-pro-image) with the operator-picked
+            refinement (thick, wide-aperture positive-space handles),
+            background made transparent via PIL background removal since
+            two regeneration attempts both came back as checkerboard JPEG
+            despite explicit real-alpha prompting (per design-discussion.md
+            OQ1's fallback).
+        - path: ui/favicon.ico
+          note: >
+            Multi-resolution ICO, verified via PIL to contain real embedded
+            RGBA frames at 16x16, 32x32, 48x48, 64x64, 128x128, 256x256.
       initial_options:
         - .pHive/design/mnemosyne-icon-set/options/icon-01-memory-spiral-brain.jpg
         - .pHive/design/mnemosyne-icon-set/options/icon-02-laurel-profile.jpg
@@ -67,8 +83,37 @@ topics:
         - .pHive/design/mnemosyne-icon-set/options/icon-08-ancient-urn-vessel.jpg
         - .pHive/design/mnemosyne-icon-set/options/icon-09-monogram-m-thread.jpg
         - .pHive/design/mnemosyne-icon-set/options/icon-10-concentric-memory-rings.jpg
+      lens_critiques:
+        - .pHive/design/mnemosyne-icon-set/critiques/legibility-16px.md
+        - .pHive/design/mnemosyne-icon-set/critiques/mythological-brand-fit.md
+        - .pHive/design/mnemosyne-icon-set/critiques/dark-ui-context-fit.md
+        - .pHive/design/mnemosyne-icon-set/critiques/tab-bar-distinctiveness.md
+        - .pHive/design/mnemosyne-icon-set/critiques/accessibility-contrast.md
+        - .pHive/design/mnemosyne-icon-set/critiques/multi-resolution-scalability.md
+        - .pHive/design/mnemosyne-icon-set/critiques/visual-language-cohesion.md
+      synthesized_finalists:
+        - .pHive/design/mnemosyne-icon-set/synthesized/finalist-1.md
+        - .pHive/design/mnemosyne-icon-set/synthesized/finalist-2.md
+        - .pHive/design/mnemosyne-icon-set/synthesized/finalist-3.md
     generator: "Gemini 3 Pro Image (\"Nano Banana Pro\", gemini-3-pro-image), via portunus resolve --exec -- key never read into this session's context"
-    status: options-generated-review-not-yet-run
+    status: shipped
+    operator_pick: "Ancient Urn (icon-08), refined -- see is-02-operator-pick-and-assets.yaml's operator_pick field for the verbatim operator answer"
+    review_note: >
+      All 3 independent synthesis agents converged unanimously on the same
+      refinement: Ancient Urn (icon-08), with thickened/wider-aperture
+      handles. The mythological-brand-fit lens ranked it #1 of 10 (the only
+      concept where the Greek-antiquity silhouette and the "holds/stores,
+      can be drawn from later" metaphor are the same image); 5 of the other
+      6 lenses independently converged on the handles as the mark's one
+      liability, all describing the failure mode as graceful (degrades to a
+      simpler correct shape, not to mud/noise). No autonomous pick was
+      made -- this is real input for is-02's operator touchpoint, not a
+      final decision. The operator's own early favorite, icon-01
+      (memory-spiral-brain), was flagged as the single worst performer on
+      the legibility-16px lens ("most purpose-built to fail this test") and
+      near-bottom on mythological-brand-fit (generic brain silhouette, no
+      antiquity/myth signal).
+    selection_mechanism: "3 finalists only -- final pick is a real, blocking operator touchpoint (is-02), never autonomous, per the operator's own explicit process note this session."
     consumers:
-      - mnemosyne-icon-set-review (epic, to be filed when the review pass is dispatched)
+      - is-02-operator-pick-and-assets
     date: 2026-08-17
