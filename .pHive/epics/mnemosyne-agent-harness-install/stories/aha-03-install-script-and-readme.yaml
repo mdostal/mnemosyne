@@ -243,6 +243,34 @@ note_on_completion: >
   /Users/mdostal/Documents/work/pantheon/mnemosyne checkout -- is genuinely
   untouched by this ticket's work.
 
+  Independent verification (orchestrating session, before merge): found a
+  third genuinely real bug in this ticket (after aha-01's .mcp.json/CWD
+  collision and aha-02's silent-overwrite discovery) -- bin/mnemosyne's
+  `dirname "$0"` resolution broke when invoked through the very symlink
+  docs/install.sh itself creates (resolves relative to the symlink's own
+  directory, not the real script's), which the builder caught by actually
+  running their own install script end-to-end rather than testing it in
+  isolation, and fixed with a portable manual symlink-resolution loop. Ran
+  my own, independent manual end-to-end verification before trusting the
+  formal test suite: (1) a real install run against an isolated temp
+  target (MNEMOSYNE_INSTALL_DIR/MNEMOSYNE_BIN_DIR overrides, cloning from
+  this local worktree rather than the network) -- real clone, real npm
+  install, real symlink, and `mnemosyne agent status` genuinely ran
+  through that symlink and produced real output, confirming the
+  dirname-resolution fix actually works; (2) a second run against the
+  same target -- confirmed idempotent (detected the existing clone,
+  `git pull`ed, "Already up to date", no re-clone, no duplicate symlink).
+  Then ran the ticket's own formal test/install-script.mjs suite: all
+  checks pass, including its own real safety assertion that this
+  operator's actual /Users/mdostal/.local/bin/mnemosyne was genuinely
+  unchanged (didn't exist before, didn't exist after). Ran the full suite
+  separately: tsc clean, 54/54 vitest files, 727/727 tests, .mjs suite
+  clean except the 3 pre-existing POST /remember failures. README.md diff
+  confirmed purely additive (new curl line above the fully-preserved
+  existing gh-clone block). scripts/install.sh confirmed byte-identical
+  to docs/install.sh via a real symlink, not a content fork that could
+  drift.
+
 description: |
   Implements design-discussion.md §1.2/§1.3. A real, git-clone-based
   install script (Mnemosyne is "private": true in package.json -- no
