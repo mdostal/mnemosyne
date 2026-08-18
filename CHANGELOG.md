@@ -2,6 +2,77 @@
 
 All notable changes to Mnemosyne are documented here.
 
+## [0.13.0] — 2026-08-18
+
+`mnemosyne-agent-harness-install` epic (`aha-01`..`aha-05`) — every agent or
+harness that wants to use Mnemosyne now has a real, documented way to install
+and connect to it, mirroring Portunus's own shipped `agent init`/`agent
+status` pattern: harness detection, MCP server registration, skill install,
+a real curl-able install script, and a top-and-forefront UI banner surfacing
+all of it. Adapted to Mnemosyne's real current shape — an MCP server that
+already existed (`bin/mnemosyne-mcp.mjs`), 2 real skills (not Portunus's 4),
+and a private/unpublished npm package, so the install path is git-clone-based
+rather than registry-based.
+
+### Added
+
+- **`mnemosyne agent init` / `mnemosyne agent status`** (`bin/mnemosyne-agent.mjs`,
+  `aha-01`/`aha-02`) — detects Claude Code and/or Codex CLI on the machine,
+  registers Mnemosyne's MCP server for each via a real, single-server
+  targeted lookup (`claude mcp get` / `codex mcp get` — never the broad
+  `list` equivalent, which health-checks every configured server), and
+  (Claude Code only) installs the `mnemosyne-standalone` and
+  `mnemosyne-persona-interview` skills into `~/.claude/skills/`. Both
+  commands are genuinely idempotent; `status` is fully read-only.
+  `--harness claude|codex` narrows either command to one harness. Real
+  bugs found and fixed while building this: Claude Code resolves MCP scope
+  from CWD, so this repo's own project-scoped `.mcp.json` could masquerade
+  as a real registration unless every harness-CLI invocation is pinned to
+  `homedir()`; `codex mcp add` silently overwrites an existing registration
+  rather than erroring, making the check-before-write guard load-bearing
+  for idempotency, not just error-avoidance, on the Codex side.
+- **`docs/install.sh`** (`aha-03`, also `scripts/install.sh`, a real
+  symlink to the same file) — a real, git-clone-based install script
+  (Mnemosyne is `"private": true`, so there's no package-registry install
+  to wrap): shallow-clones the repo, `npm install`s it, links `bin/mnemosyne`
+  onto `PATH` at `~/.local/bin/mnemosyne` (matching this operator's own
+  established convention for CLI tools), and prints — but never runs —
+  `mnemosyne agent init` as an explicit, separate next step. Idempotent
+  re-run (updates an existing clone rather than re-cloning). Published
+  verbatim at `https://mdostal.github.io/mnemosyne/install.sh`, now the
+  README Quickstart's first line. Real bug found and fixed while building
+  this: `bin/mnemosyne`'s own path resolution broke when invoked through
+  the very symlink this script creates (`dirname "$0"` resolves relative
+  to the symlink's directory, not the real script's) — fixed with a
+  portable manual symlink-resolution loop.
+- **A top-and-forefront, collapsible "connect an agent/harness" banner**
+  (`ui/index.html`/`ui/app.js`/`ui/style.css`, `aha-04`) — placed between
+  the header and the jump-chip nav (the real first slot below the title
+  bar), showing the real install curl command and the real
+  `mnemosyne agent init` command in copy-pasteable blocks, both
+  byte-verified against their real source (README.md/docs/install.sh/
+  bin/mnemosyne-agent.mjs) rather than hand-typed placeholders. Collapse
+  state persists across reloads via `localStorage`; the reopen control is
+  always reachable, never fully removed. Fails open by design — the
+  banner's core content renders even if the collapse script never runs,
+  errors, or `localStorage` throws (verified with a real browser via two
+  separate fault-injection tests).
+
+### Verification
+
+Full suite (`.mjs` subprocess suite + `vitest`) plus `tsc --noEmit` run
+clean on this epic's final merged state: 54/54 vitest files, 727/727 tests
+passing; the only failures anywhere are the 3 already-documented
+pre-existing `POST /remember` default-layer assertions and
+`test/ui-shell.mjs`'s 22 pre-existing failures (not part of `npm test`'s
+own script chain, confirmed pre-existing via stash-and-reproduce earlier
+this session). Every ticket was independently re-verified before merging —
+real diffs read, real tests re-run, and for every ticket touching this
+operator's actual machine state (MCP registrations, `~/.claude/skills/`,
+`~/.local/bin/`), a real, explicit before/after check confirming zero
+leakage into real Claude Code, Codex CLI, or filesystem state outside each
+ticket's own isolated test target.
+
 ## [0.12.0] — 2026-08-18
 
 `mnemosyne-ui-redesign` epic (`ui-01`..`ui-06`) — a full look-and-feel/UX
