@@ -6,6 +6,8 @@
 #        bin/mnemosyne persona sync --repo <path> --tier <tier> --scope-id <id> [--dry-run]
 #        bin/mnemosyne persona seed [--root <path>] [--scope-id <id>]
 #        bin/mnemosyne persona show <tier> <scope-id>
+#        bin/mnemosyne agent init   [--harness claude|codex]
+#        bin/mnemosyne agent status [--harness claude|codex]
 set -euo pipefail
 export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
@@ -22,6 +24,13 @@ if [ "${1:-}" = "persona" ]; then
   # not plain node, since noEmit:true means there is no build step to import
   # a .ts module without it (see bin/mnemosyne-persona.mjs's own doc comment).
   exec node "$HERE/node_modules/.bin/tsx" "$HERE/bin/mnemosyne-persona.mjs" "$@"
+fi
+
+if [ "${1:-}" = "agent" ]; then
+  shift
+  # Plain node, like reindex.mjs (not tsx like persona.mjs) -- agent.mjs
+  # imports no lib/mnemosyne/*.ts modules, only node:child_process/fs/os.
+  exec node "$HERE/bin/mnemosyne-agent.mjs" "$@"
 fi
 
 exec node "$HERE/src/server.mjs"
