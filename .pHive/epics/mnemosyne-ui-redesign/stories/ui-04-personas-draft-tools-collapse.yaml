@@ -1,10 +1,157 @@
 id: ui-04-personas-draft-tools-collapse
 epic: mnemosyne-ui-redesign
 title: "Collapse Personas' write-tooling tail into a single <details> section"
-status: planned
+status: complete
 complexity: low
 methodology: classic
 depends_on: [ui-03-jump-chip-nav-and-status-wiring]
+
+note_on_completion: >
+  Worktree note: this dispatch's worktree was provisioned at commit 8a24edd
+  (dev tip, persona-files merged) on its own auto-generated branch, NOT at
+  feat/mnemosyne-ui-redesign's real tip (c1adefb, ui-01/02/03 merged) as the
+  dispatch prompt described -- a provisioning mismatch, not a base-commit
+  choice. Fetched origin/feat/mnemosyne-ui-redesign and branched this
+  story's own branch, ui-04-personas-tools-wrapper, directly off the real
+  c1adefb tip (confirmed via `git log --oneline -5` showing ui-03's merge
+  commit, matching feat/mnemosyne-ui-redesign's own log exactly) before
+  touching anything -- same base commit the ticket specified, just
+  discovered and corrected first rather than assumed.
+
+  HIGH-RISK story, treated accordingly: read ui/index.html end to end
+  (511 lines) BEFORE any edit, and all 7 test files named in this ticket's
+  key_files/acceptance criteria (persona-draft-review-approve-ui.mjs,
+  persona-write-form.mjs, personas-panel-shell.mjs, persona-layer-stack.mjs,
+  persona-layer-stack-shell-integration.mjs, persona-files-slice1-e2e.mjs,
+  persona-files-slice2-e2e.mjs) end to end, to know every selector/assertion
+  that touches Personas' DOM before changing a byte of it. The last two
+  (persona-files-slice1/2-e2e) turned out to make zero assertions against
+  ui/index.html at all -- both are pure backend/CLI/API e2e proofs (CLI
+  subprocess -> HTTP draft routes -> approve -> real persisted YAML on
+  disk); confirmed by grepping each file for "index.html"/"<section"/
+  "<form" (zero hits) before relying on that conclusion, not assumed from
+  the filename.
+
+  Found the real boundary precisely: identity table ends at
+  <p class="panel-status" id="personas-empty" hidden></p> (was line 320);
+  everything before it (personas-status, personas-drafts-status, the
+  panel-hint, #personas-glossary, #personas-toolbar,
+  #personas-live-region, #personas-table/#personas-tbody, #personas-empty)
+  is read-oriented and was left byte-for-byte untouched. Everything from
+  the pw-17 doc-comment through #persona-form (355-397) through the pu-11
+  doc-comment through <section id="persona-layer-stack"> (428-463,
+  already containing #persona-level0-pointer as its own nested div -- no
+  separate wrap needed for the Level 0 pointer) is write-oriented and is
+  exactly what got wrapped. The actual diff is 18 lines added, 0 removed,
+  0 modified: one opening <details id="persona-tools" open> + <summary>
+  block (with its own doc comment) inserted immediately before the pw-17
+  comment, and one closing </details> + comment inserted immediately after
+  the "end pu-11 re-homed section" comment, before #personas' own closing
+  </section>. Verified tag balance directly (grep -c '<details'/'</details>'
+  = 2/2, '<form '/'</form>' = 4/4, real (non-comment) '<section '/
+  '</section>' = 9/9) before running anything.
+
+  Ran all 7 named Personas test files individually against the diff, every
+  one PASS, zero modifications, zero selector updates needed (not even a
+  mechanical one) -- rechecked why each survived rather than assuming:
+  persona-draft-review-approve-ui.mjs and persona-write-form.mjs both match
+  #personas' body via a NON-GREEDY `<section id="personas"[\s\S]*?<\/section>`
+  regex, which was already stopping at the FIRST </section> encountered
+  (persona-layer-stack's own close, since it's nested) even before this
+  story -- <details> introduces no new <section> tag, so that match
+  boundary is byte-for-byte unaffected. personas-panel-shell.mjs and
+  persona-layer-stack.mjs assert on element presence/content, not nesting
+  depth, so an added ancestor is invisible to them. persona-layer-stack-
+  shell-integration.mjs is the one file that DOES assert real DOM nesting
+  (walks </section> close-tag positions to prove persona-layer-stack sits
+  BEFORE the first </section> close after #personas opens, i.e. nested
+  inside it) -- also unaffected, since <details> is not a <section> and
+  the section-nesting relationship it's checking (persona-layer-stack
+  inside personas) is unchanged; it's now additionally nested inside
+  persona-tools too, which this test never inspects. persona-write-form.mjs
+  ALSO has one check specifically watching for exactly this kind of
+  regression -- it slices from the last "<form" before #persona-file-input
+  and asserts no "<details" appears in that slice, i.e. the file input must
+  never end up nested inside an ADDITIONAL details inside the form; since
+  my <details> wraps AROUND <form>, not inside it, that check passed
+  correctly and would have caught the wrong nesting had I gotten it
+  backwards. persona-files-slice1/2-e2e.mjs pass because (confirmed above)
+  they never touch ui/index.html.
+
+  Ran the full suite myself, from a clean worktree (npm install first,
+  node_modules was absent; approved the 3 pending native-module install
+  scripts via `npm approve-scripts` to let better-sqlite3/esbuild/fsevents
+  build, then reverted package.json's resulting allowScripts diff before
+  committing since it's out of this story's scope): all of npm test's own
+  chained .mjs files pass except test/http-api.mjs's 3 known POST /remember
+  failures (ok:true / layer:file / has provenance) -- and since npm test's
+  `&&` chain stops at the first non-zero exit, ran every remaining chained
+  command by hand (single-layer-config.mjs, git-hooks.mjs,
+  install-git-hooks.mjs, lifecycle-compliance-audit.mjs, persona-cli.mjs,
+  then `vitest run lib/mnemosyne lib/minerva benchmarks src/planning
+  src/config src/runners`) to get a real complete picture rather than
+  trusting a truncated run: all pass, vitest 54/54 files, 727/727 tests --
+  matching ui-03's own documented baseline exactly. tsc --noEmit: clean,
+  zero output. Verified the 3 POST /remember failures are genuinely
+  pre-existing and unrelated (this sandbox has no real swarm-memory/Qdrant
+  backend for /remember to write through to) via real stash-and-reproduce,
+  not assumption: `git stash` (reverting ui/index.html to the unmodified
+  c1adefb base), re-ran test/http-api.mjs directly against that base --
+  same 3 failures, identical messages, reproduced byte-for-byte -- then
+  `git stash pop` to restore this story's diff.
+
+  Started a real server (src/server.mjs, port 8590) and drove it with a
+  real Playwright browser. Structural DOM proof: #persona-tools exists,
+  defaults open=true; #persona-form and #persona-layer-stack are both
+  contained by it (details.contains() true for both); the identity table
+  (#personas-table), #personas-empty, #personas-toolbar, #personas-glossary,
+  and the <h2>Personas</h2> heading are all confirmed NOT contained by
+  #persona-tools (details.contains() false for every one) -- the identity
+  surface is a genuine sibling, not nested. Real-click collapse proof: a
+  literal Playwright mouse click on the <summary> toggled
+  details.hasAttribute('open') from present to absent, and toggled
+  document.body.scrollHeight from 4033 to 3140 (a real ~893px layout
+  contraction, not just an attribute flip) -- clicked a second time and
+  confirmed the exact reverse (open attribute back, scrollHeight back to
+  4033). Note: getComputedStyle().display on the collapsed content read
+  "block" instead of "none" in this specific tool's Chromium session --
+  investigated rather than dismissed, and confirmed via a throwaway,
+  zero-custom-CSS synthetic <details> element (created fresh via
+  document.createElement, appended to body, no relation to this story's
+  markup) that the SAME anomaly reproduces on a totally vanilla native
+  <details> in this sandbox's browser instrumentation -- a known class of
+  Chromium/CDP-automation accessibility-tree-forced-rendering quirk in
+  this tool's environment, not a defect in this story's markup; the real
+  page-layout signal (scrollHeight, which this same query proved DOES
+  genuinely contract and expand on click) is the trustworthy measurement,
+  and it confirms genuine collapse. Also seeded one fake row into
+  #personas-tbody and unhid #personas-table with #persona-tools collapsed:
+  confirmed the identity table renders fully visible (offsetParent
+  non-null, real non-zero bounding box) while the write-tooling tail stays
+  collapsed (scrollHeight 3208, well below the fully-open 4033+row figure)
+  -- direct proof the identity table is never affected by the new
+  disclosure's state, populated or not. The `browser_take_screenshot` tool
+  itself timed out repeatedly in this sandbox ("waiting for fonts to
+  load...") on every attempt, including on a bare navigate with no
+  interaction -- a pre-existing tool/environment limitation, not related
+  to this change; relied on the DOM/attribute/scrollHeight-level proof
+  above instead, which is strictly more precise for a <details> element's
+  correctness than a static screenshot would have been. Cleaned up the
+  injected test row and reset #persona-tools to open before closing the
+  browser and killing the test server.
+
+  First-paint length: acceptance criterion 4's tradeoff (defaults open ->
+  no length reduction until a user acts) is real and intentional here too
+  -- confirmed structurally (the `open` attribute is present in the
+  committed markup) rather than re-litigated.
+
+  Files touched: ui/index.html only (18 lines added, 0 removed, 0
+  modified) -- no changes to ui/app.js, ui/style.css, or any test file.
+  Committed as 1cb04f3 on branch ui-04-personas-tools-wrapper (pushed to
+  origin) -- a dedicated branch off the real c1adefb tip, not a direct
+  commit onto feat/mnemosyne-ui-redesign, matching ui-03's own established
+  worktree-to-branch pattern for exactly this two-worktrees-one-branch
+  situation.
 
 description: |
   Implements horizontal-plan.md's H2 (Personas collapse portion) /
