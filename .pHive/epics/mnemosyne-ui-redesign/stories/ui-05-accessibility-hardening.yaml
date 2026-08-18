@@ -162,7 +162,7 @@ note_on_completion: >
   inside syncJumpChips(), 0 removed) -- exactly the 2 files
   files_to_modify named, nothing else. No new CSS was added (reused the
   existing .sr-only class verbatim, per this ticket's own instruction).
-  Committed as db-pending on branch ui-05-status-ring-labels (pushed to
+  Committed as 9e629c8 on branch ui-05-status-ring-labels (pushed to
   origin) -- a dedicated branch off the real 5362196 tip, matching
   ui-03/ui-04's own established worktree-to-branch pattern.
 
