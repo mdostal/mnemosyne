@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // bin/mnemosyne-agent.mjs — `mnemosyne agent init` / `mnemosyne agent status`
-// (aha-01-agent-init-status-claude, epic: mnemosyne-agent-harness-install).
+// (aha-01-agent-init-status-claude + aha-02-agent-init-status-codex, epic:
+// mnemosyne-agent-harness-install).
 //
 // Mirrors Portunus's own shipped `agent init`/`agent status` pattern
 // (design-discussion.md §1.1): detects a harness on PATH, registers
@@ -10,45 +11,90 @@
 // freshly-cloned checkout is immediately usable from inside a harness, not
 // just via this CLI.
 //
-// This ticket (aha-01) implements the Claude Code harness only — the
-// "certain, locally-verifiable half" per research-brief.md §1/§4. The Codex
-// CLI harness is aha-02-agent-init-status-codex, a separate, dependent
-// ticket, since its exact MCP-registration command shape is unverified
-// locally (no Codex CLI reference anywhere in this repo). `harnessesToRun()`
-// below is the intended extension point: add a `codex` branch to
-// runInit/runStatus alongside `initClaude`/`statusClaude` rather than
-// duplicating the CLI/arg-parsing shell.
+// aha-01 implemented the Claude Code harness only — the "certain,
+// locally-verifiable half" per research-brief.md §1/§4. aha-02 (this
+// extension) adds the Codex CLI harness: MCP registration only, no skill
+// install (research-brief.md §4 / design-discussion.md §1.1 step 3 — Codex
+// CLI has no analogous skill-file mechanism, confirmed). Unlike aha-01's own
+// planning-time uncertainty, aha-02 was implemented AFTER directly,
+// hand-verifying the real, installed `codex` CLI (codex-cli 0.143.0) on this
+// machine — not guessed from the operator's Portunus report alone:
+//   - `codex mcp add <NAME> -- <COMMAND>...` registers a stdio server (same
+//     `--` separator shape as `claude mcp add`). Note: unlike `claude mcp
+//     add` (which errors non-zero on an already-registered name), a second
+//     `codex mcp add <NAME> ...` call SILENTLY OVERWRITES the existing
+//     entry with the new args instead of erroring — hand-verified by
+//     calling it twice with different command paths and reading back
+//     `codex mcp get`. This makes the check-before-write idempotency
+//     pattern (see codexMcpRegistered()) load-bearing for Codex too, for a
+//     different reason than Claude's: not to avoid an error, but to avoid a
+//     real, silent, redundant re-write of already-correct config on every
+//     `init` run.
+//   - `codex mcp get <NAME>` is the real, single-server targeted lookup
+//     (exit 0 + prints the registered command/args when found, exit 1 +
+//     "No MCP server named '<NAME>' found." when not) — the Codex
+//     equivalent of `claude mcp get`.
+//   - `codex mcp list` exists (and is fast here, unlike Portunus's
+//     `claude mcp list` health-check story) but per this ticket's own
+//     acceptance criteria is never used for the registration check — only
+//     `get`, for the same targeted-lookup discipline as the Claude side.
+//   - Codex resolves ALL of its config via `$CODEX_HOME` (default `~/.codex`
+//     if unset) — confirmed via `codex --help`'s own text ("Layer
+//     $CODEX_HOME/<name>.config.toml on top of the base user config") and by
+//     hand: pointing `$CODEX_HOME` at a fresh, empty directory produces a
+//     brand-new `config.toml` there with zero interaction with the real
+//     `~/.codex/`. Unlike Claude Code's project-scoped `.mcp.json` bug (see
+//     HARNESS_EXEC_CWD's comment), Codex's `mcp add`/`mcp get` do NOT
+//     resolve anything from CWD — hand-verified by running `codex mcp get`
+//     from both a throwaway tmp dir and this repo's own root against the
+//     same `$CODEX_HOME` and getting byte-identical output. HARNESS_EXEC_CWD
+//     is still applied to Codex's execs below purely for consistency/hygiene
+//     with the Claude side, not because Codex needs it.
+//
+// `harnessesToRun()` below is the shared extension point both harnesses use:
+// initClaude/statusClaude and initCodex/statusCodex are parallel, independent
+// branches in runInit/runStatus, so one harness being absent, unsupported, or
+// erroring never blocks the other.
 //
 // Usage:
 //   bin/mnemosyne-agent.mjs init   [--harness claude|codex]
 //   bin/mnemosyne-agent.mjs status [--harness claude|codex]
 //
 //   --harness claude|codex   narrow to exactly one harness. Omitted =
-//                             attempt every known harness (today: just
-//                             "claude" for real; "codex" prints an honest
-//                             "not yet implemented" note and is otherwise a
-//                             no-op — never a hard failure, matching
-//                             aha-02's own "one harness missing/unsupported
-//                             must not fail the other" contract).
-//                             `--harness codex` on its own (this ticket, pre
-//                             aha-02) is a LOUD, non-zero-exit failure —
-//                             asked-for-and-not-done must never look like
-//                             success.
+//                             attempt every known harness (today: both
+//                             claude and codex, for real). A harness binary
+//                             genuinely absent from PATH is never a hard
+//                             failure (for either harness, with or without
+//                             --harness naming it) — it's an honest,
+//                             clearly-logged skip, since "one of two
+//                             possible harnesses isn't installed here" is a
+//                             completely normal, expected machine state, not
+//                             an error condition.
+//
+// Loud failure, never silent (design-discussion.md §2's named Codex risk):
+// if a harness IS present on PATH but its MCP-registration command fails in
+// a way that doesn't mean "not registered yet" (e.g. its real command shape
+// has diverged from what's implemented here), that error propagates up
+// uncaught — never swallowed into a generic skip — surfacing the exact
+// command and the real subprocess stderr via main()'s own top-level catch
+// (non-zero exit). See registerMcp()/registerMcpCodex()'s own doc comments.
 //
 // Idempotency (both init and status), matching bin/mnemosyne-install-hooks's
 // and bin/mnemosyne-install-git-hooks's own established conventions:
 //   - MCP registration: check-before-write via a targeted, single-server
 //     lookup (see the `claude mcp get` vs `claude mcp list` comment on
-//     mcpRegistered() below) — `claude mcp add` is only ever invoked when
-//     that check reports "not registered", so a second `init` run makes
-//     zero MCP-registration writes.
-//   - Skill copy: byte-for-byte compare before write (see copySkill()) — a
-//     file whose destination content already matches is left completely
-//     untouched (no write syscall, no mtime bump), so a second `init` run
-//     makes zero skill-file writes either.
-//   - `status` never calls `claude mcp add` or writes any skill file — it
-//     only ever calls the same read-only targeted lookup / fs.existsSync
-//     checks `init` uses to decide whether to act.
+//     mcpRegistered(), and the `codex mcp get` vs `codex mcp list` comment
+//     on codexMcpRegistered(), below) — `claude mcp add`/`codex mcp add` are
+//     only ever invoked when that harness's own check reports "not
+//     registered", so a second `init` run makes zero MCP-registration
+//     writes for either harness.
+//   - Skill copy (Claude Code only): byte-for-byte compare before write (see
+//     copySkill()) — a file whose destination content already matches is
+//     left completely untouched (no write syscall, no mtime bump), so a
+//     second `init` run makes zero skill-file writes either.
+//   - `status` never calls `claude mcp add`/`codex mcp add` or writes any
+//     skill file — it only ever calls the same read-only targeted lookup /
+//     fs.existsSync checks `init` uses to decide whether to act.
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -95,7 +141,11 @@ const EXEC_TIMEOUT_MS = 30_000;
 // global, cross-project Claude Code config, not "does THIS cwd happen to
 // have a same-named server" — so every harness-CLI exec below pins CWD to
 // homedir() (never process.cwd()), sidestepping any ambient project .mcp.json
-// entirely, in this checkout or anyone else's.
+// entirely, in this checkout or anyone else's. Codex CLI has no analogous
+// CWD-scoping bug (hand-verified: `codex mcp get`/`codex mcp add` resolve
+// purely from `$CODEX_HOME`, identical output regardless of CWD) — Codex's
+// execs still pin CWD here too, purely to keep every harness-CLI exec in
+// this file on one consistent, reviewable convention.
 const HARNESS_EXEC_CWD = () => homedir();
 
 // --- harness binary detection ---------------------------------------------
@@ -237,14 +287,72 @@ function printClaudeStatus(report, log) {
   }
 }
 
-// --- Codex CLI harness placeholder (aha-02) ---------------------------------
-// Deliberately NOT implemented here — see the module doc comment. Kept as a
-// named, honest branch (never silently dropped from --harness's accepted
-// values) so `agent init`/`agent status` with no --harness flag still
-// completes the Claude Code half normally and says plainly that Codex isn't
-// available yet, rather than pretending only one harness ever existed.
-function codexNotYetImplementedMessage() {
-  return "codex: not yet implemented in this build -- see aha-02-agent-init-status-codex";
+// --- MCP registration (Codex CLI) -------------------------------------------
+// aha-02's own acceptance criteria, mirroring aha-01's Claude-side rule: the
+// registration CHECK must be a single, targeted lookup of exactly the
+// "mnemosyne" server — `codex mcp get mnemosyne` — and must NEVER become
+// `codex mcp list`, which lists EVERY MCP server configured for this
+// $CODEX_HOME (the same class of broad, non-targeted check aha-01's own
+// Claude-side fix exists to avoid — see mcpRegistered()'s comment above). Do
+// not "simplify" this back to `list` in a future edit.
+export async function codexMcpRegistered(name = MCP_SERVER_NAME, { exec = execFileAsync } = {}) {
+  try {
+    await exec("codex", ["mcp", "get", name], { timeout: EXEC_TIMEOUT_MS, cwd: HARNESS_EXEC_CWD() });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Registers `serverPath` under `name` with the Codex CLI via stdio transport — the shape `codex mcp add --help` itself documents (`codex mcp add <NAME> -- <COMMAND>...`). Caller must have already confirmed via codexMcpRegistered() that this is not a redundant call: unlike `claude mcp add`, `codex mcp add` does NOT error on an already-registered name — it silently overwrites (hand-verified, see this file's header comment) — so skipping this call when already-registered isn't just about avoiding an error, it's the only thing making `init` genuinely idempotent (zero redundant writes) for Codex. On any OTHER failure (a real command-shape mismatch, not "already registered"), this throws a loud, specific error naming the exact command and the real subprocess stderr — see the module doc comment's "Loud failure, never silent" section — rather than letting a diverged Codex CLI surface look like a normal registration. */
+export async function registerMcpCodex({ name = MCP_SERVER_NAME, serverPath = MCP_SERVER_PATH, exec = execFileAsync } = {}) {
+  try {
+    await exec("codex", ["mcp", "add", name, "--", "node", serverPath], {
+      timeout: EXEC_TIMEOUT_MS,
+      cwd: HARNESS_EXEC_CWD(),
+    });
+  } catch (e) {
+    const reason = (e && e.stderr && String(e.stderr).trim()) || (e && e.message) || String(e);
+    throw new Error(
+      `codex mcp add ${name} -- node ${serverPath} failed -- Codex's real command shape may have diverged from what aha-02 hand-verified: ${reason}`,
+    );
+  }
+}
+
+// --- Codex CLI harness: init / status (no skill install — research-brief.md
+// §4: Codex CLI has no analogous skill-file mechanism, confirmed) -----------
+export async function initCodex({ log = console.log, warn = console.error, exec = execFileAsync } = {}) {
+  const report = { harness: "codex", binaryFound: false, mcp: null };
+
+  report.binaryFound = await detectBinary("codex", { exec });
+  if (!report.binaryFound) {
+    warn("codex: binary not found on PATH -- skipping Codex CLI harness registration");
+    return report;
+  }
+
+  if (await codexMcpRegistered(MCP_SERVER_NAME, { exec })) {
+    log(`codex: mcp server '${MCP_SERVER_NAME}' already registered (codex mcp get ${MCP_SERVER_NAME}) -- skipped`);
+    report.mcp = { action: "already-registered" };
+  } else {
+    await registerMcpCodex({ exec });
+    log(`codex: registered mcp server '${MCP_SERVER_NAME}' -> node ${MCP_SERVER_PATH}`);
+    report.mcp = { action: "registered" };
+  }
+
+  return report;
+}
+
+/** Read-only: same targeted `codex mcp get` lookup init uses, but init() never calls registerMcpCodex() here — see the module doc comment's idempotency section. */
+export async function statusCodex({ exec = execFileAsync } = {}) {
+  const binaryFound = await detectBinary("codex", { exec });
+  const registered = binaryFound ? await codexMcpRegistered(MCP_SERVER_NAME, { exec }) : false;
+  return { harness: "codex", binaryFound, mcpRegistered: registered };
+}
+
+function printCodexStatus(report, log) {
+  log("codex:");
+  log(`  binary: ${report.binaryFound ? "found" : "NOT found on PATH"}`);
+  log(`  mcp server '${MCP_SERVER_NAME}': ${report.mcpRegistered ? "registered" : "NOT registered"}`);
 }
 
 // --- CLI ---------------------------------------------------------------
@@ -258,7 +366,7 @@ export function parseArgs(argv) {
   return args;
 }
 
-/** Resolves the harness list to attempt: exactly `[requested]` when --harness narrows scope, else every known harness (today: claude for real, codex as an honest no-op — see codexNotYetImplementedMessage()). */
+/** Resolves the harness list to attempt: exactly `[requested]` when --harness narrows scope, else every known harness (today: both claude and codex, for real). */
 function harnessesToRun(requested) {
   if (requested) {
     if (!KNOWN_HARNESSES.includes(requested)) {
@@ -272,25 +380,22 @@ function harnessesToRun(requested) {
 export async function runInit(argv, { log = console.log, warn = console.error } = {}) {
   const { harness } = parseArgs(argv);
   const harnesses = harnessesToRun(harness);
-  let ok = true;
   for (const h of harnesses) {
     if (h === "claude") {
       await initClaude({ log, warn });
     } else if (h === "codex") {
-      // Explicitly asked for (`--harness codex`) and not implemented -> a
-      // loud, non-zero-exit failure, never a silent "success". Reached as
-      // part of the default multi-harness sweep (no --harness at all) ->
-      // an honest, non-fatal note instead, matching aha-02's own "one
-      // harness missing must not fail the other" contract.
-      if (harness === "codex") {
-        warn(codexNotYetImplementedMessage());
-        ok = false;
-      } else {
-        log(codexNotYetImplementedMessage());
-      }
+      // A harness genuinely absent from PATH is handled inside initCodex()
+      // itself (a clear, non-fatal warn+skip) — symmetric with initClaude's
+      // own absent-binary handling, regardless of whether --harness named it
+      // explicitly or it was reached via the default multi-harness sweep. A
+      // real command-shape failure (harness present, registration itself
+      // fails unexpectedly) is NOT caught here — it propagates uncaught to
+      // main()'s own top-level catch, which is the loud, non-zero-exit,
+      // specific-message failure design-discussion.md §2 requires.
+      await initCodex({ log, warn });
     }
   }
-  return ok;
+  return true;
 }
 
 export async function runStatus(argv, { log = console.log, warn = console.error } = {}) {
@@ -301,11 +406,8 @@ export async function runStatus(argv, { log = console.log, warn = console.error 
       const report = await statusClaude({});
       printClaudeStatus(report, log);
     } else if (h === "codex") {
-      if (harness === "codex") {
-        warn(codexNotYetImplementedMessage());
-      } else {
-        log(codexNotYetImplementedMessage());
-      }
+      const report = await statusCodex({});
+      printCodexStatus(report, log);
     }
   }
   return true;
