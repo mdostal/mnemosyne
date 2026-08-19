@@ -1,0 +1,106 @@
+id: ro-04-org-tree-registry
+epic: mnemosyne-repo-onboarding
+title: Canonical ~/.mnemosyne/org-tree.yaml registry + read/write helpers
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [ro-02-onboard-repo-core-orchestrator]
+
+description: |
+  Mode A's "where it sits as a whole so that we can build and create our
+  tree and mapping logic" needs a durable, queryable answer, not just a
+  one-off classification printed to stdout. `placement_engine.py`'s own
+  default write location (`.pHive/epics/ingest-a10ab2c1/inventory/
+  qdrant-placement.yaml`) is epic-scratch, not a permanent home. This story
+  adds a new, canonical, operator-global registry — `~/.mnemosyne/
+  org-tree.yaml` — mirroring the already-established "operator-global, not
+  per-repo" convention `~/.mnemosyne/level0-rules.md` (level0.ts) already
+  uses, rather than inventing a new home convention.
+
+  `lib/mnemosyne/onboarding/orgTree.ts` exports `appendOrgTreeEntry(entry)`
+  (dedupes on `repo_path`, last-write-wins on re-onboard) and
+  `listOrgTreeEntries()`. Read fresh off disk every call, no module-level
+  caching — mirrors level0.ts's and persona-store-repo-local.ts's own
+  established "read fresh" contract. Concurrent-write safety reuses
+  `layer1/lock.ts`'s existing `withLock` helper around the read-modify-
+  write, the same pattern already proven for `syncHarnessFile`/
+  `writeRepoLocalPersona`.
+
+acceptance_criteria:
+  - "Given a fresh machine with no ~/.mnemosyne/org-tree.yaml, when appendOrgTreeEntry() is called once, then the file is created with a single entries: [...] list containing that one entry"
+  - "Given an existing org-tree.yaml with one entry for repo_path X, when appendOrgTreeEntry() is called again with the SAME repo_path X but different fields (e.g. a re-onboard with a different collection), then the existing entry for X is replaced in place, not duplicated"
+  - "Given an existing org-tree.yaml with entries for repos X and Y, when appendOrgTreeEntry() is called for a NEW repo_path Z, then the file ends up with 3 entries (X, Y, Z), X and Y byte-unchanged"
+  - "Given two appendOrgTreeEntry() calls racing concurrently (real subprocess-level test, not simulated), when both complete, then the final file contains BOTH entries, never a lost update (proves withLock is actually applied around the read-modify-write, not just present in the file)"
+  - "Given listOrgTreeEntries() called on a machine with no org-tree.yaml at all, then it returns an empty array, never throws (mirrors listRepoLocalPersonas' own missing-directory-is-not-an-error contract)"
+
+steps:
+  - id: research
+    description: >
+      Read layer1/level0.ts's DEFAULT_LEVEL0_PATH convention and
+      layer1/lock.ts's withLock signature/usage in syncHarnessFile and
+      writeRepoLocalPersona, to match both conventions exactly rather than
+      inventing new ones for this registry.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Write failing tests for appendOrgTreeEntry/listOrgTreeEntries against
+      a real, isolated ~/.mnemosyne (test-overridable path, never the
+      operator's real home) covering: first write, dedupe-on-repo_path
+      replace, multi-entry append, concurrent-write race, missing-file
+      empty-list.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Create lib/mnemosyne/onboarding/orgTree.ts implementing the registry
+      per the acceptance criteria, using the `yaml` package (already a
+      dependency, per persona-store-repo-local.ts's own established
+      convention — "we define our own yaml", not JSON) and withLock for
+      the read-modify-write.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the withLock usage genuinely serializes concurrent writes (not just present but unused in the critical path), confirm dedupe-on-repo_path semantics match the acceptance criteria exactly.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-repo-onboarding.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/layer1/level0.ts
+      purpose: "DEFAULT_LEVEL0_PATH — the exact '~/.mnemosyne/<file>' operator-global convention this story's registry path mirrors."
+    - path: lib/mnemosyne/layer1/persona-store-repo-local.ts
+      purpose: "withLock usage pattern (writeRepoLocalPersona) and 'read fresh, no caching' contract this story's registry reuses exactly."
+
+files_to_modify:
+  - file: lib/mnemosyne/onboarding/orgTree.ts
+    change: "New file: appendOrgTreeEntry, listOrgTreeEntries, DEFAULT_ORG_TREE_PATH."
+  - file: lib/mnemosyne/onboarding/orgTree.test.ts
+    change: "New file: tests per acceptance criteria, using a test-overridable path."
+
+design_decisions:
+  - decision: "Registry lives at ~/.mnemosyne/org-tree.yaml, not under any single epic's .pHive/ directory."
+    rationale: "placement_engine.py's own DEFAULT_PLACEMENT_PATH is epic-scratch (ingest-a10ab2c1-scoped); a permanent, cross-epic, operator-global registry needs a permanent, operator-global home — ~/.mnemosyne/ is the established convention (level0.ts), not a new one invented here."
+  - decision: "Dedupe on repo_path, last-write-wins."
+    rationale: "A repo can be re-onboarded (e.g. collection renamed, scope corrected) — the registry should reflect current placement, not accumulate stale historical entries for the same repo."
+
+cross_cutting:
+  - concern: documentation
+    action: "N/A — no user-facing CLI surface in this story itself; the registry becomes discoverable via ro-05's onboard CLI verb, documented there."
+
+risks:
+  - severity: low
+    description: "Concurrent onboarding of two different repos at the exact same moment could race on the shared registry file."
+    mitigation: "withLock (already-proven pattern) serializes the read-modify-write; acceptance criterion #4 tests this directly, not just asserted."
+
+references:
+  - path: .pHive/epics/mnemosyne-repo-onboarding/docs/structured-outline.md
+    relevant_excerpt: "Part 2.3 — the org-tree.yaml schema and the explicit decision to place it outside any single epic's directory."
+
+metric:
+  applies: false
+  justification: "Pure data-store/schema story (registry read/write helpers, no CLI or recall/write API surface exposed yet) — correctness is fully verified by the unit tests in acceptance criteria, not a trend metric with a baseline/target."

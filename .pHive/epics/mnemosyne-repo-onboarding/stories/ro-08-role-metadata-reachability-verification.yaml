@@ -1,0 +1,113 @@
+id: ro-08-role-metadata-reachability-verification
+epic: mnemosyne-repo-onboarding
+title: Verify seeded roles/personas/metadata are reachable end-to-end post-onboarding
+status: pending
+complexity: low
+methodology: tdd
+depends_on: [ro-02-onboard-repo-core-orchestrator]
+
+description: |
+  The operator's own stated payoff for Mode A ("Then it becomes EASY to
+  define the roles and places and metadata across etc.") is currently only
+  an assumed side effect of `ro-02`'s persona-seed/Layer-1-sync sub-steps —
+  this story makes it a directly verified, standalone acceptance surface
+  rather than trusting it fell out of composition for free.
+
+  Verifies, for a repo `onboardRepo()` has run against (either mode):
+  1. `bin/mnemosyne-persona.mjs show code-architect <scopeId>` (existing,
+     shipped CLI verb) successfully reads back the persona `ro-02` seeded —
+     proving the seed used the exact schema/path the existing read path
+     expects, not a plausible-looking-but-incompatible shape.
+  2. The synced `CLAUDE.md`/`AGENTS.md`/`GEMINI.md` managed block actually
+     contains the code-architect tier content AND the la-07 memory-
+     lifecycle mandate section — the concrete mechanism that drives
+     "continue to grow... over time" via ongoing agent usage, confirmed
+     present, not merely assumed because `syncAllHarnesses` was called.
+  3. (Mode A only) The org-tree entry written by `ro-04`/`ro-05` is
+     listable via `listOrgTreeEntries()` and its `org_tree_path` is a
+     syntactically valid `org/<scope>/<identifier>` path per
+     `placement_engine.py`'s own `_org_tree_path` convention.
+
+acceptance_criteria:
+  - "Given onboardRepo() has run against a fresh repo (either mode), when `bin/mnemosyne-persona.mjs show code-architect <scopeId>` is run against that repo, then it succeeds and prints the exact persona content ro-02's seed step wrote — a real, independent read-path proof, not a re-inspection of the write step's own return value"
+  - "Given the same repo, when CLAUDE.md's managed block is parsed, then it contains a heading matching TIER_CONTENT['code-architect'].displayName AND a 'Memory-lifecycle mandate' heading with non-empty body content"
+  - "Given a Mode A onboarding (ro-05/ro-07), when listOrgTreeEntries() is called, then the new repo's entry is present and its org_tree_path matches the exact string placement_engine._org_tree_path would independently compute for the same (scope, name) pair — cross-checked, not merely trusted from the write path"
+  - "Given a repo where onboarding has NOT run, when the same three checks above are attempted, then each fails with a clear, distinguishable message (no persona found / no managed block found / no org-tree entry found) rather than a generic error — the operator can tell WHICH onboarding step is missing"
+
+steps:
+  - id: research
+    description: >
+      Read bin/mnemosyne-persona.mjs's `show` verb's real output format
+      and layer1/tiers.ts's renderTierContentMarkdown output shape, to
+      write assertions against the real, current format rather than an
+      assumed one.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Write failing tests combining a real onboardRepo() run (both modes)
+      with the three independent read-path checks above, plus the
+      not-yet-onboarded negative-case checks.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      No new production code expected beyond what ro-01/ro-02/ro-04/ro-05
+      already ship — this story is a verification pass. If a real gap is
+      found (e.g. the seeded persona doesn't actually pass `show`'s own
+      read path), fix it at its real source story rather than papering
+      over it here.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm each of the three checks is a genuinely independent read path (not a re-inspection of the same write call's return value), and that the negative-case messages are distinguishable per step.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-repo-onboarding.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: bin/mnemosyne-persona.mjs
+      purpose: "Existing `persona show` CLI verb — the independent read path this story verifies onboarding's persona seed is actually compatible with."
+    - path: lib/mnemosyne/layer1/tiers.ts
+      purpose: "TIER_CONTENT and MANDATE_SECTIONS — the exact content this story confirms is present in a synced harness file post-onboarding, not merely assumed."
+
+files_to_modify:
+  - file: test/onboard-reachability.mjs
+    change: "New file: end-to-end reachability tests combining onboardRepo() with independent read paths (persona show, harness-file parsing, org-tree listing)."
+
+design_decisions:
+  - decision: "This is a verification-only story with no assumed new production code."
+    rationale: "The 'roles/metadata become EASY to define' payoff is a claim about composition of already-planned stories (ro-01/ro-02/ro-04/ro-05) working together correctly — the right artifact for that claim is an independent, cross-story verification pass, not new feature code."
+  - decision: "Every check reads back through an EXISTING, independent read path (persona show CLI, markdown parsing, listOrgTreeEntries), never the write step's own return value."
+    rationale: "A write step reporting its own success proves nothing about real reachability if the read path expects a different shape — this is exactly the class of bug this story exists to catch before it ships."
+
+cross_cutting:
+  - concern: documentation
+    action: "N/A — this story adds no new user-facing surface, only verification of existing surfaces."
+
+risks:
+  - severity: low
+    description: "This story could surface a real incompatibility between ro-02's persona-seed shape and bin/mnemosyne-persona.mjs's existing read path, discovered late (after ro-02/ro-05 are already 'complete')."
+    mitigation: "Sequenced explicitly as its own story (not folded into ro-02) specifically so a discovered gap has a clear place to be fixed and re-verified without reopening an already-integrated story's own acceptance criteria."
+
+references:
+  - path: .pHive/epics/mnemosyne-repo-onboarding/docs/structured-outline.md
+    relevant_excerpt: "Part 7, Elicitation Q5 — the operator's own stated payoff ('roles and places and metadata... EASY to define') is corroborated by the shared-core design, not just taken on faith; this story is where that corroboration is made concrete and automated."
+
+metric:
+  applies: true
+  name: onboarding.persona_reachability_check_pass
+  direction: up
+  unit: count
+  baseline: 0
+  target: 1
+  window: story-integrate
+  source:
+    kind: manual
+    ref: "test/onboard-reachability.mjs run output — pass (1) or fail (0) across all three independent read-path checks"
+  verify_at: integrate
+  owner: tester

@@ -106,12 +106,9 @@
  */
 
 import http from 'node:http';
-import { existsSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import path from 'node:path';
 import { MnemosyneClient } from './client.js';
 import type { Layer, Scope } from './interfaces.js';
-import { DEFAULT_LEVEL0_PATH } from './layer1/level0.js';
 import { PERSONA_STORE_BY_TIER, resolveRememberScope } from './layer1/persona.js';
 import {
   disposeDraftPersona,
@@ -129,7 +126,7 @@ import {
   writeRepoLocalPersona,
 } from './layer1/persona-store-repo-local.js';
 import { TIERS, type Tier } from './layer1/tiers.js';
-import { MEMORY_LEVELS } from './memory-levels/levels.js';
+import { computeMemoryLevels } from './memory-levels/computeMemoryLevels.js';
 
 const PORT = Number(process.env.MNEMOSYNE_PORT || 3141);
 const ROOT_DIRECTORY = process.env.MNEMOSYNE_ROOT_DIR || process.cwd();
@@ -438,45 +435,17 @@ const server = http.createServer(async (req, res) => {
       //     client.getConfiguredLayers()'s CURRENT resolved cascade -- a
       //     READ of that already-computed output only, so this route can
       //     never disagree with what GET /layers itself would report.
+      //
+      // ro-01-memory-levels-scoped-extraction (epic mnemosyne-repo-
+      // onboarding): the computation itself now lives in
+      // memory-levels/computeMemoryLevels.ts, parameterized on
+      // (client, repoRoot, level0Path?) so it can also be called against an
+      // ARBITRARY repo (onboardRepo(), ro-02). This route is now a thin
+      // caller of that extracted function against its own existing
+      // singleton `client` + `ROOT_DIRECTORY` -- same output, zero behavior
+      // change.
       applyPersonaCors(req, res);
-      const activeAdapterNames = new Set<string>(client.getConfiguredLayers().map((l) => l.layer));
-      const level0Configured = existsSync(DEFAULT_LEVEL0_PATH);
-      const level1Configured = existsSync(path.join(ROOT_DIRECTORY, 'mnemosyne.md'));
-      const levels = MEMORY_LEVELS.map((level) => {
-        // levels 0/1: real on-disk existence. levels 2-4: real presence in
-        // the already-resolved cascade -- both are "is this level configured
-        // right now", just checked two different ways depending on whether
-        // the level participates in a recall() cascade at all.
-        const configured =
-          level.id === 0
-            ? level0Configured
-            : level.id === 1
-              ? level1Configured
-              : level.adapterNames.some((name) => activeAdapterNames.has(name));
-        const entry: {
-          id: number;
-          label: string;
-          storeType: string;
-          configured: boolean;
-          sourceRef: string;
-          activeInCascade?: boolean;
-        } = {
-          id: level.id,
-          label: level.label,
-          storeType: level.storeType,
-          configured,
-          sourceRef: level.sourceRef,
-        };
-        if (level.id >= 2) {
-          // Same underlying value as `configured` for these levels --
-          // exposed under its own, self-documenting name because "active in
-          // the resolved cascade" is exactly what it measures for a
-          // cascade-participating level, matching this story's acceptance
-          // criteria ("levels 2-4 additionally carrying activeInCascade").
-          entry.activeInCascade = configured;
-        }
-        return entry;
-      });
+      const levels = computeMemoryLevels(client, ROOT_DIRECTORY);
       return sendJson(res, 200, { levels });
     }
 

@@ -1,0 +1,158 @@
+id: ro-06-collection-creation-and-scope-mapping
+epic: mnemosyne-repo-onboarding
+title: Additive-only Qdrant collection creation + scope mapping (Python)
+status: pending
+complexity: high
+methodology: tdd
+depends_on: []
+
+description: |
+  The one genuinely new, live-Qdrant-Cloud-infra-touching piece of this
+  epic, deliberately isolated into its own story with its own explicit
+  safety proof (grill finding 2.1; structured-outline.md risk R1/R2 —
+  the SINGLE highest-blast-radius action in this epic, given this
+  project's hard "never wipe Qdrant" rule).
+
+  Two real gaps close here: (1) `mnemosyne/inventory/qdrant_inventory.py`
+  is read-only by explicit design (docstring: "Read-only Qdrant collection
+  inventory") and has no creation path; (2)
+  `VectorLayerAdapter.remember()`'s write path resolves `scope →
+  collection` via a `cfg.scopes` map (`VectorLayerAdapter.ts:213-226`) and
+  fails loudly with `unknown_scope` when a repo's scope isn't in that map
+  — nothing in this codebase today writes that mapping for a brand-new
+  repo.
+
+  This story's FIRST step is a real research spike, not an assumed
+  implementation: does `swarm-memory` (sibling repo, never read by this
+  epic's research pass) expose a collection-create CLI verb? The answer
+  gates which of two paths `mnemosyne/onboarding.py`'s
+  `create_collection_and_scope(name, scope)` takes:
+
+  - If yes: shell out to it (mirrors `VectorLayerAdapter`'s own
+    shell-out-to-`swarm-memory` pattern).
+  - If no: extend `qdrant_inventory.py`'s `HttpQdrantClient` (currently:
+    `list_collections`, `collection_info` only) with a `create_collection`
+    method calling Qdrant's own `PUT /collections/{name}` directly —
+    explicitly the higher-risk fallback, requiring its own additional,
+    explicit no-wipe safety proof before merge (real collection-list diff
+    before/after, asserting exactly one new collection appeared and zero
+    existing collections changed).
+
+  Also confirms (real research, not assumed) WHERE swarm-memory's own
+  `scopes` config actually lives at runtime (VectorLayerAdapter.ts's
+  `cfg.scopes` read site names the shape but not the file/schema) before
+  writing to it.
+
+acceptance_criteria:
+  - "Given the real swarm-memory CLI's actual --help output, when this story's research step completes, then the codebase's own docstrings/comments record which of the two creation paths was actually taken and why — never left as an assumption"
+  - "Given create_collection_and_scope(name, scope) is called for a collection name that does NOT yet exist, when it completes, then a real Qdrant collection-list diff (before vs. after, via qdrant_inventory.py's own existing read-only list_collections) shows EXACTLY one new collection and zero existing collections modified or removed"
+  - "Given create_collection_and_scope() is called a second time with the SAME name/scope (idempotency check), when it completes, then no error is raised and no duplicate collection is created — the function detects the already-created state via the same read-only inventory check, never a blind create-or-fail"
+  - "Given create_collection_and_scope() completes, when VectorLayerAdapter.remember() is subsequently called with scope pointing at the newly-created collection, then it succeeds (no unknown_scope error) — proving the scope→collection mapping was written to the real location VectorLayerAdapter.ts:213-226 reads from, not merely a plausible-looking guess at the config schema"
+  - "Given any failure mid-creation (e.g. collection created but scope-mapping write fails), when the function returns, then it reports the partial state explicitly (which half succeeded) rather than a generic error, so a retry or manual fix is possible without re-deriving what happened"
+
+steps:
+  - id: research
+    description: >
+      Read the real swarm-memory CLI's --help output and its config file
+      schema (the sibling repo at ~/Documents/work/dostal/code/
+      swarm-memory, per m-08's own key_files) to confirm: does a
+      collection-create verb exist? Where does the scopes map actually
+      live on disk (confirm the real path/format, not assumed to be
+      config.toml's [qdrant] section, which qdrant_inventory.py's own
+      load_qdrant_url only confirms for the URL, not scopes)? Document
+      findings before writing any implementation.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Write failing tests for create_collection_and_scope() against a
+      MOCKABLE Qdrant/swarm-memory interface (mirroring
+      mnemosyne/tests/test_qdrant_inventory.py's existing mockable
+      HttpQdrantClient pattern — never a live Qdrant call in the unit
+      test suite itself), covering: fresh creation, idempotent re-call,
+      partial-failure reporting, and the scope-mapping write's real
+      target location as confirmed by research.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Create mnemosyne/onboarding.py implementing create_collection_and_
+      scope() per whichever path the research step confirmed, additive-
+      only (no delete/drop code path exists anywhere in this module).
+      Extend qdrant_inventory.py's HttpQdrantClient with a
+      create_collection() method ONLY if the research step confirmed no
+      swarm-memory-native path exists.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: >
+      Independently re-verify the no-wipe safety proof for real, not by
+      trusting the story's own self-report (mirrors aha-01's own
+      "orchestrating session ran the real verification itself before
+      merge" precedent): run create_collection_and_scope() against a
+      real (or realistically staged) Qdrant Cloud target, diff the
+      collection list before/after by hand, confirm zero existing
+      collections changed.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-repo-onboarding.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: mnemosyne/inventory/qdrant_inventory.py
+      purpose: "Existing read-only HttpQdrantClient (list_collections, collection_info) — the base this story extends only if the swarm-memory-native path doesn't exist; never converted to read-write wholesale."
+    - path: lib/mnemosyne/layers/VectorLayerAdapter.ts
+      purpose: "Lines 213-226 — the exact cfg.scopes read site this story's scope-mapping write must satisfy; the real config location must be confirmed against this file's actual runtime behavior, not just its type shape."
+    - path: mnemosyne/tests/test_qdrant_inventory.py
+      purpose: "Established mockable-client test pattern this story's own tests should follow."
+  tech_stack:
+    scopes_config_location: "UNCONFIRMED — this story's own first research task, not assumed"
+
+files_to_modify:
+  - file: mnemosyne/onboarding.py
+    change: "New file: create_collection_and_scope(name, scope), additive-only."
+  - file: mnemosyne/tests/test_onboarding.py
+    change: "New file: mockable-client tests per acceptance criteria."
+  - file: mnemosyne/inventory/qdrant_inventory.py
+    change: "Extend HttpQdrantClient with create_collection() ONLY if research confirms no swarm-memory-native creation path exists."
+
+design_decisions:
+  - decision: "Research spike is this story's own first step, gating the implementation path — not an assumption baked into planning."
+    rationale: "Grill finding 2.1 — swarm-memory's real CLI surface was never read during this epic's research pass; discovering the wrong answer mid-implementation would be far more expensive than a dedicated first step."
+  - decision: "Additive-only function signature — no delete/drop code path exists anywhere in this module, at all."
+    rationale: "ways_of_working.md's hard rule: never wipe Qdrant. The absence of any delete capability in the module is a stronger guarantee than a runtime check that merely avoids calling delete."
+
+cross_cutting:
+  - concern: loud-failure
+    action: "Partial-failure state (collection created, scope-mapping write failed) must be reported explicitly, per acceptance criterion #5 — never a generic error that hides which half succeeded."
+
+risks:
+  - severity: critical
+    description: "Collection creation touches live Qdrant Cloud infra — the single highest-blast-radius action in this entire epic."
+    mitigation: "Additive-only module (no delete path exists); explicit before/after collection-list diff required in review, independently re-run by the reviewer, not trusted from the developer's own self-report."
+  - severity: high
+    description: "swarm-memory's real collection-create surface and scopes-config location are both unconfirmed going into this story."
+    mitigation: "Research step is the story's first, blocking step — implementation does not proceed until both are confirmed against the real sibling repo/config, not assumed."
+
+references:
+  - path: .pHive/epics/mnemosyne-repo-onboarding/docs/grill-record.md
+    relevant_excerpt: "Finding 2.1 — 'swarm-memory's own collection-create path' was never verified to exist."
+  - path: .pHive/epics/mnemosyne-repo-onboarding/docs/structured-outline.md
+    relevant_excerpt: "Risk registry R1/R2 — critical/high severity, this story's own explicit mitigations."
+
+metric:
+  applies: true
+  name: onboarding.collection_creation_zero_wipe_incidents
+  direction: down
+  unit: count
+  baseline: null
+  target: 0
+  window: "every run, permanently"
+  source:
+    kind: manual
+    ref: "Reviewer's independently-run before/after collection-list diff, every merge and every subsequent release regression pass"
+  verify_at: integrate
+  owner: reviewer
