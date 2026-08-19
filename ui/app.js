@@ -1393,6 +1393,16 @@ const personasEmptyEl = document.getElementById("personas-empty");
 const personasStatusFilterEl = document.getElementById("personas-status-filter");
 const personasLiveRegionEl = document.getElementById("personas-live-region");
 
+// puf-04-repo-scoped-personas-reachable: the repo-path input that makes
+// groupPersonaRows()'s already-coded Repo-grouping branch (pu-10/pu-11)
+// reachable for real. Unlike personasStatusFilterEl/the group-by radios
+// above (client-side re-bucket only, no re-fetch), changing this one has to
+// trigger a real re-fetch -- a repo's code-architect rows only exist once
+// loadPersonas()/loadDrafts() ask the persona service for them via ?repo=,
+// see currentPersonaRepoFilter()/the change listener below and both
+// functions themselves further down this file.
+const personasRepoFilterEl = document.getElementById("personas-repo-filter");
+
 // Canonical tier cascade order (mirrors lib/mnemosyne/layer1/tiers.ts's
 // TIERS) -- used for stable Tier-group-by ordering and to label Repo-group-
 // by's 3 "global" sub-groups.
@@ -1456,6 +1466,14 @@ function personaMatchesStatusFilter(row, filterValue) {
 function currentPersonaGroupBy() {
   const checked = document.querySelector('input[name="personas-group-by"]:checked');
   return checked ? checked.value : "tier";
+}
+
+// puf-04-repo-scoped-personas-reachable: trimmed value of the new repo
+// filter, or "" when blank -- the one place loadPersonas()/loadDrafts()
+// below read it, so "" (the default, matching every page load before this
+// ticket) is the single source of truth for "behave exactly as before".
+function currentPersonaRepoFilter() {
+  return personasRepoFilterEl ? personasRepoFilterEl.value.trim() : "";
 }
 
 // Buckets already-loaded (and already status-filtered) rows for the
@@ -1771,6 +1789,22 @@ document.querySelectorAll('input[name="personas-group-by"]').forEach((el) => {
   el.addEventListener("change", renderPersonas);
 });
 personasStatusFilterEl.addEventListener("change", renderPersonas);
+
+// puf-04-repo-scoped-personas-reachable: unlike the two listeners just
+// above, a repo change has to re-FETCH (loadPersonas()/loadDrafts() below
+// are the only place ?repo= is ever sent) -- both are called (like the
+// initial page load below does) so the same "code-architect rows appear
+// alongside live AND drafted global rows in one list" contract holds no
+// matter which changed first. Fires on the input's native "change" event
+// (commits on blur, matching this ticket's own task description) --
+// nothing calls this at module-load time, so an untouched, blank filter
+// never fires it and never re-fetches beyond the existing initial load.
+if (personasRepoFilterEl) {
+  personasRepoFilterEl.addEventListener("change", () => {
+    loadPersonas();
+    loadDrafts();
+  });
+}
 
 // ==================== pu-12-draft-review-approve-ui: draft detail/edit/
 // approve/discard, built per pu-01's chosen synthesized option's documented
@@ -2120,7 +2154,17 @@ async function loadDrafts() {
   setStatus(personasDraftsStatusEl, "loading", "loading drafts…");
   try {
     const origin = personaServiceOrigin();
-    const listRes = await fetch(`${origin}/persona/draft`);
+
+    // puf-04-repo-scoped-personas-reachable: GET /persona/draft's own
+    // ?repo=<path> contract ADDS that repo's code-architect drafts
+    // alongside the 3 global tiers in the SAME list response (server.ts --
+    // not a "switch" the way GET /persona's ?repo= is, see loadPersonas()
+    // below) -- so making this reachable is a single URL change, never a
+    // second fetch. No repo selected (the default) -> repo is "" -> listUrl
+    // is byte-identical to before this ticket.
+    const repo = currentPersonaRepoFilter();
+    const listUrl = repo ? `${origin}/persona/draft?repo=${encodeURIComponent(repo)}` : `${origin}/persona/draft`;
+    const listRes = await fetch(listUrl);
     const listBody = await listRes.json();
     if (!listRes.ok) {
       setStatus(personasDraftsStatusEl, "fail", `FAIL — GET /persona/draft returned ${listRes.status}`);
@@ -2133,9 +2177,18 @@ async function loadDrafts() {
     const drafts = await Promise.all(
       entries.map(async (entry) => {
         try {
-          const res = await fetch(
-            `${origin}/persona/draft/${encodeURIComponent(entry.tier)}/${encodeURIComponent(entry.scopeId)}`
-          );
+          // puf-04: the per-entry read-back also needs ?repo= for a
+          // code-architect entry (server.ts's own "?repo=<path> required
+          // for tier=code-architect" contract on GET /persona/draft/:tier/
+          // :scopeId) -- every code-architect entry in this list came from
+          // the one `repo` just queried above. A global-tier entry (or any
+          // entry when no repo is selected) never gets ?repo= appended,
+          // same URL as before this ticket.
+          const url =
+            entry.tier === "code-architect" && repo
+              ? `${origin}/persona/draft/${encodeURIComponent(entry.tier)}/${encodeURIComponent(entry.scopeId)}?repo=${encodeURIComponent(repo)}`
+              : `${origin}/persona/draft/${encodeURIComponent(entry.tier)}/${encodeURIComponent(entry.scopeId)}`;
+          const res = await fetch(url);
           const body = await res.json();
           if (!res.ok || !body.draft) return null;
           return body.draft;
@@ -2167,26 +2220,60 @@ async function loadPersonas() {
     }
     const entries = Array.isArray(listBody.personas) ? listBody.personas : [];
 
+    // puf-04-repo-scoped-personas-reachable: GET /persona's own ?repo=
+    // contract SWITCHES to that repo's code-architect personas ONLY
+    // (server.ts -- unlike GET /persona/draft's ADD contract above), so
+    // making the repo tier reachable here needs a SECOND, separate fetch
+    // rather than a URL change on the one above -- the plain GET /persona
+    // fetch just above stays completely untouched either way. Each
+    // resulting entry is tagged with the repo it came from (`repo` isn't
+    // part of GET /persona's list response shape) so the per-entry record
+    // fetch below can request the right ?repo=, and so the final row carries
+    // the `row.repo` groupPersonaRows()'s already-coded Repo-grouping branch
+    // keys its sub-group label on. No repo selected -> this block is a
+    // no-op -> `entries` is exactly what it was before this ticket.
+    const repo = currentPersonaRepoFilter();
+    if (repo) {
+      try {
+        const repoListRes = await fetch(`${origin}/persona?repo=${encodeURIComponent(repo)}`);
+        const repoListBody = await repoListRes.json().catch(() => ({}));
+        if (repoListRes.ok && Array.isArray(repoListBody.personas)) {
+          for (const entry of repoListBody.personas) entries.push({ ...entry, repo });
+        }
+      } catch {
+        // Swallow -- a failed repo-scoped fetch leaves the global-tier
+        // rows (already fetched above) intact rather than failing the
+        // whole panel load, matching this ticket's own per-entry
+        // try/catch-and-fall-back convention immediately below.
+      }
+    }
+
     // One fetch per LISTED persona's OWN record only (needed for
     // displayName + parentRefs, which GET /persona's list response doesn't
     // carry) -- this is each persona's own content, not any parent's, so it
     // does not touch the copy-down guarantee above. CRITICAL: this never
     // loops over a persona's parentRefs to fetch THOSE -- see
     // parentRefsText/personaParentCell, the only things rendered for
-    // parentRefs.
+    // parentRefs. puf-04: a repo-tagged entry (above) also needs ?repo= on
+    // this per-entry read (server.ts's own "?repo=<path> required for
+    // tier=code-architect" contract) and has that `repo` copied onto the
+    // returned record (GET /persona/:tier/:scopeId's own response never
+    // carries it back) -- an entry with no `repo` (every entry, before this
+    // ticket) takes the exact same branch/URL as before.
     const personas = await Promise.all(
       entries.map(async (entry) => {
+        const url = entry.repo
+          ? `${origin}/persona/${encodeURIComponent(entry.tier)}/${encodeURIComponent(entry.scopeId)}?repo=${encodeURIComponent(entry.repo)}`
+          : `${origin}/persona/${encodeURIComponent(entry.tier)}/${encodeURIComponent(entry.scopeId)}`;
         try {
-          const res = await fetch(
-            `${origin}/persona/${encodeURIComponent(entry.tier)}/${encodeURIComponent(entry.scopeId)}`
-          );
+          const res = await fetch(url);
           const body = await res.json();
           if (!res.ok || !body.persona) {
-            return { tier: entry.tier, scopeId: entry.scopeId, displayName: null, parentRefs: [] };
+            return { tier: entry.tier, scopeId: entry.scopeId, displayName: null, parentRefs: [], repo: entry.repo };
           }
-          return body.persona;
+          return entry.repo ? { ...body.persona, repo: entry.repo } : body.persona;
         } catch {
-          return { tier: entry.tier, scopeId: entry.scopeId, displayName: null, parentRefs: [] };
+          return { tier: entry.tier, scopeId: entry.scopeId, displayName: null, parentRefs: [], repo: entry.repo };
         }
       })
     );
@@ -2195,7 +2282,11 @@ async function loadPersonas() {
     // unchanged (no ?repo=, no /persona/draft) -- every row loaded here is
     // therefore a committed, live record. pu-12 is the ticket that merges
     // in GET /persona/draft's needs-review/needs-review-update rows
-    // alongside these (horizontal-plan.md H7 component 3).
+    // alongside these (horizontal-plan.md H7 component 3). puf-04-repo-
+    // scoped-personas-reachable additively extends the SAME fetch above
+    // (see the repo-scoped second fetch there) to also reach code-architect
+    // rows for one selected repo -- this line, and everything below it, is
+    // unchanged.
     loadedPersonas = personas.map((p) => ({ ...p, status: "live" }));
     renderPersonas();
     setStatus(personasStatusEl, "pass", `${personas.length} persona(s)`);
