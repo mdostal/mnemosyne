@@ -90,11 +90,11 @@ try {
   ok(/<select id="personas-status-filter">/.test(personasSection),
     "toolbar has a native <select id=\"personas-status-filter\"> -- not a clickable-chip widget");
   ok(
-    /<option value="all" selected>All<\/option>/.test(personasSection) &&
+    /<option value="all">All<\/option>/.test(personasSection) &&
       /<option value="live">Live<\/option>/.test(personasSection) &&
-      /<option value="needs-review">Needs review<\/option>/.test(personasSection) &&
+      /<option value="needs-review" selected>Needs review<\/option>/.test(personasSection) &&
       /<option value="history">History<\/option>/.test(personasSection),
-    "status filter offers All/Live/Needs review/History",
+    "status filter offers All/Live/Needs review/History, defaulting to Needs review (puf-01)",
   );
 
   // --- table columns: Tier/Scope ID/Display name/Parent(s)/Status, status
