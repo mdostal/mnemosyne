@@ -331,6 +331,25 @@
           <option value="needs-review" selected>Needs review</option>
           <option value="history">History</option>
         </select>
+
+        <!-- puf-04-repo-scoped-personas-reachable: the one real control that
+             makes code-architect (repo-scoped) rows reachable at all --
+             groupPersonaRows()'s Repo-grouping branch (pu-10/pu-11) has
+             always been correctly coded but was UNREACHABLE, since neither
+             loadPersonas() nor loadDrafts() had any way to learn a repo path
+             to pass as ?repo=. Follows #persona-repo's own existing
+             labeled-text-input convention below (same panel, same "Repo"
+             wording, same placeholder shape) rather than inventing a new
+             visual style. Left blank (the default) -> loadPersonas()/
+             loadDrafts() fetch exactly as before this ticket -- see
+             ui/app.js. -->
+        <label for="personas-repo-filter">repo:</label>
+        <input
+          id="personas-repo-filter"
+          type="text"
+          placeholder="e.g. /path/to/repo — optional, adds that repo's code-architect personas/drafts"
+          autocomplete="off"
+        />
       </div>
 
       <!-- aria-live region: announces approve/discard/parent-jump outcomes

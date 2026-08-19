@@ -818,6 +818,19 @@ main {
   font-size: 0.85rem;
 }
 
+/* puf-04-repo-scoped-personas-reachable: same per-element toolbar-input
+   rule shape as #personas-status-filter/#graph-search above -- no new
+   visual style invented. */
+#personas-repo-filter {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  color: var(--text);
+  font-size: 0.85rem;
+  min-width: 220px;
+}
+
 #personas-table {
   width: 100%;
   border-collapse: collapse;

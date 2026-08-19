@@ -96,13 +96,21 @@ try {
   // loadDrafts() exists exactly once, fetches GET /persona/draft (list),
   // then GET /persona/draft/:tier/:scopeId per entry (mirroring
   // loadPersonas()'s own "list route doesn't carry displayName" shape).
+  //
+  // puf-04-repo-scoped-personas-reachable: both URLs are now built as a
+  // plain `?repo=`-less template when no repo is selected (byte-identical
+  // to before this ticket) OR the same template plus `?repo=` when one is
+  // -- these regexes (loosened from this ticket's original exact-fetch-
+  // call checks, which predate ?repo= existing at all) still assert the
+  // unscoped template itself is exactly unchanged, just no longer require
+  // it be the literal sole argument to fetch().
   const loadDraftsDefCount = (appJs.match(/async function loadDrafts\(\)/g) || []).length;
   ok(loadDraftsDefCount === 1, `exactly one loadDrafts() function definition (found ${loadDraftsDefCount})`);
-  ok(/fetch\(`\$\{origin\}\/persona\/draft`\)/.test(appJs),
-    "loadDrafts() fetches GET /persona/draft (the list route)");
+  ok(/:\s*`\$\{origin\}\/persona\/draft`\s*;[\s\S]{0,120}?fetch\(listUrl\)/.test(appJs),
+    "loadDrafts() fetches GET /persona/draft (the list route, ?repo=-less URL unchanged when no repo is selected)");
   ok(
-    /fetch\(\s*`\$\{origin\}\/persona\/draft\/\$\{encodeURIComponent\(entry\.tier\)\}\/\$\{encodeURIComponent\(entry\.scopeId\)\}`\s*\)/.test(appJs),
-    "loadDrafts() fetches GET /persona/draft/:tier/:scopeId per listed entry (for sourceSummary/proposedBy/proposedAt)",
+    /:\s*`\$\{origin\}\/persona\/draft\/\$\{encodeURIComponent\(entry\.tier\)\}\/\$\{encodeURIComponent\(entry\.scopeId\)\}`\s*;[\s\S]{0,120}?fetch\(url\)/.test(appJs),
+    "loadDrafts() fetches GET /persona/draft/:tier/:scopeId per listed entry (?repo=-less URL unchanged for a non-repo-scoped entry)",
   );
   const loadDraftsBodyMatch = appJs.match(/async function loadDrafts\(\)\s*\{[\s\S]*?\n\}\n/);
   const loadDraftsBody = loadDraftsBodyMatch ? loadDraftsBodyMatch[0] : "";

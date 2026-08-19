@@ -144,13 +144,24 @@ try {
   // loadPersonas() is REUSED, not duplicated: exactly one function of that
   // name, still doing the same two fetches (GET /persona, then GET
   // /persona/:tier/:scopeId per listed entry) via personaServiceOrigin().
+  //
+  // puf-04-repo-scoped-personas-reachable: the per-entry fetch's URL is now
+  // built as a plain `?repo=`-less template for an entry with no `repo`
+  // (byte-identical to every entry before this ticket, since GET /persona's
+  // list response never carries a `repo` field -- see persona-store-
+  // global.ts's listGlobalPersonas) OR the same template plus `?repo=` for
+  // an entry this ticket's own repo-scoped fetch tagged with one -- this
+  // regex (loosened from pu-10's original exact-fetch-call check, which
+  // predates ?repo= existing at all) still asserts the untagged branch's
+  // URL template is exactly unchanged, just no longer requires it be the
+  // literal sole argument to fetch().
   const loadPersonasDefCount = (appJs.match(/async function loadPersonas\(\)/g) || []).length;
   ok(loadPersonasDefCount === 1,
     `exactly one loadPersonas() function definition (found ${loadPersonasDefCount})`);
   ok(/fetch\(`\$\{origin\}\/persona`\)/.test(appJs),
     "loadPersonas() still fetches GET /persona (unchanged)");
-  ok(/fetch\(\s*`\$\{origin\}\/persona\/\$\{encodeURIComponent\(entry\.tier\)\}\/\$\{encodeURIComponent\(entry\.scopeId\)\}`\s*\)/.test(appJs),
-    "loadPersonas() still fetches GET /persona/:tier/:scopeId per listed entry (unchanged)");
+  ok(/:\s*`\$\{origin\}\/persona\/\$\{encodeURIComponent\(entry\.tier\)\}\/\$\{encodeURIComponent\(entry\.scopeId\)\}`\s*;[\s\S]{0,120}?fetch\(url\)/.test(appJs),
+    "loadPersonas() still fetches GET /persona/:tier/:scopeId per listed entry (?repo=-less URL unchanged for a non-repo-scoped entry)");
   ok(/const origin = personaServiceOrigin\(\);/.test(appJs),
     "loadPersonas() still uses personaServiceOrigin()'s cross-origin pattern");
 
