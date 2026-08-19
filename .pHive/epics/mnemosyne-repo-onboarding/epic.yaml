@@ -1,0 +1,115 @@
+name: mnemosyne-repo-onboarding
+title: Repo onboarding — tree-integrated (Mode A) and standalone/embedded (Mode B)
+target_codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+methodology: tdd
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: dev
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [infrastructure, multi-system-integration, cli-surface]
+  roster: [researcher, technical-writer, tpm]
+  per_tag_reasoning:
+    infrastructure: "New onboarding orchestrator composing 5 already-shipped subsystems (Layer-1 sync, persona store, file-store index, memory-levels route, placement engine) into one repeatable sequence"
+    multi-system-integration: "Cross-stack: new TypeScript orchestrator + new Python collection-creation module + CLI wiring in both bin/mnemosyne and bin/mnemosyne-agent.mjs + live Qdrant Cloud infra mutation"
+    cli-surface: "Two new/extended CLI entry points (mnemosyne onboard, mnemosyne agent init --build) plus a new operator-global registry file"
+  confidence: high
+  gate_decisions:
+    scale: large
+    h_v_required: true
+    structured_outline_required: true
+
+description: |
+  Operator ask, two quotes given back-to-back in the same session, treated as
+  ONE coherent capability with two real deployment modes (per the design
+  discussion's own elicitation Q5, which confirms this at the code-design
+  level, not just by inference from phrasing):
+
+  Mode A (tree-integrated): "you also need a way to add a new repo or spot
+  or something to the memory and build out, index, get the base level and
+  onboard it into the memory system and where it sits as a whole so that we
+  can build and create our tree and mapping logic and where it all sits and
+  how it works. Then it becomes EASY to define the roles and places and
+  metadata across etc."
+
+  Mode B (standalone/embedded): "same thing, if we ship an individual
+  mnemosyne WITH a product, it should be able to stand up, build, and have
+  its own usage and internal memory, reading, and work WITH that agent etc
+  so that the knowledgebase and context improve and continue to grow in
+  that area"
+
+  Built entirely by composing already-shipped mechanisms (Layer-1 role
+  sync, repo-local persona store, file-store index, the ml-04 GET
+  /memory-levels base-level computation, the Python placement engine) plus
+  three genuinely new pieces: a repo-scoped extraction of the base-level
+  computation, a shared onboarding orchestrator, and a new, additive-only
+  Qdrant collection-creation primitive for Mode A's "genuinely new repo"
+  case. Explicit, non-duplicating relationship maintained with
+  mnemosyne-foundation's open m-06/m-07/m-08 backlog and ingest-a10ab2c1's
+  unbuilt repo-* bulk-sweep stories — see docs/design-discussion.md §2.4
+  and Open Questions.
+
+notes: |
+  Planned 2026-08-19. Full research → design-discussion → grill (6/6
+  findings resolved) → H/V → structured-outline (large scope, confirmed by
+  real code reading, not assumed) pass. See docs/ for the full trail.
+
+  Explicit, operator-facing relationship notes (not silently resolved):
+  - ingest-a10ab2c1's remaining repo-inventory/repo-categorization/
+    repo-index/repo-continuous-index/repo-verification stories (0/5 built)
+    are a bulk-sweep, story-for-story overlap candidate with this epic's
+    single-repo onboardRepo() primitive. Recommendation: re-scope those
+    stories to call onboardRepo() in a loop once this epic ships. This
+    epic does not unilaterally edit ingest-a10ab2c1's story list.
+  - mnemosyne-foundation's m-06 (continuous indexing), m-07 (first god
+    integration), m-08 (bulk reindex command) remain untouched, separate
+    backlog — referenced, not re-planned.
+
+stories:
+  - id: ro-01-memory-levels-scoped-extraction
+    title: Extract GET /memory-levels computation into a repo-scoped, reusable function
+    complexity: low
+    depends_on: []
+
+  - id: ro-02-onboard-repo-core-orchestrator
+    title: Shared onboardRepo() orchestrator (Layer-1 sync, persona seed, first-time index, base-level report)
+    complexity: high
+    depends_on: [ro-01-memory-levels-scoped-extraction]
+
+  - id: ro-03-agent-init-build-flag
+    title: "Mode B entry point: mnemosyne agent init --build"
+    complexity: medium
+    depends_on: [ro-02-onboard-repo-core-orchestrator]
+
+  - id: ro-04-org-tree-registry
+    title: Canonical ~/.mnemosyne/org-tree.yaml registry + read/write helpers
+    complexity: medium
+    depends_on: [ro-02-onboard-repo-core-orchestrator]
+
+  - id: ro-05-onboard-cli-verb-existing-collection
+    title: "mnemosyne onboard CLI verb (Mode A, existing collection)"
+    complexity: medium
+    depends_on: [ro-02-onboard-repo-core-orchestrator, ro-04-org-tree-registry]
+
+  - id: ro-06-collection-creation-and-scope-mapping
+    title: Additive-only Qdrant collection creation + scope mapping (Python)
+    complexity: high
+    depends_on: []
+
+  - id: ro-07-onboard-new-collection-full-mode-a
+    title: "mnemosyne onboard --create (Mode A, genuinely new repo)"
+    complexity: high
+    depends_on: [ro-05-onboard-cli-verb-existing-collection, ro-06-collection-creation-and-scope-mapping]
+
+  - id: ro-08-role-metadata-reachability-verification
+    title: Verify seeded roles/personas/metadata are reachable end-to-end post-onboarding
+    complexity: low
+    depends_on: [ro-02-onboard-repo-core-orchestrator]
+
+  - id: ro-09-full-regression-release
+    title: Full-suite regression, version bump, CHANGELOG, README/install docs
+    complexity: low
+    depends_on: [ro-03-agent-init-build-flag, ro-07-onboard-new-collection-full-mode-a, ro-08-role-metadata-reachability-verification]

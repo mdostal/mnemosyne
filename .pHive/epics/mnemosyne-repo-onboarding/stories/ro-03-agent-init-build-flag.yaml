@@ -1,0 +1,129 @@
+id: ro-03-agent-init-build-flag
+epic: mnemosyne-repo-onboarding
+title: "Mode B entry point: mnemosyne agent init --build"
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [ro-02-onboard-repo-core-orchestrator]
+
+description: |
+  Mode B's real entry point. `bin/mnemosyne-agent.mjs`'s existing `agent
+  init` (epic mnemosyne-agent-harness-install, shipped: harness detection +
+  MCP registration + skill copy) never runs a first-time index of the host
+  product's own codebase and never runs Layer-1 sync/persona seed — this is
+  the concrete, named gap the operator's "stand up, build" quote describes.
+
+  Adds a new, OPT-IN `--build` flag (default OFF) that wires
+  `onboardRepo({ mode: 'standalone', repoRoot: process.cwd(), scopeId:
+  <derived or --scope-id> })` after MCP registration + skill copy complete.
+
+  Grill finding 3.2 (docs/grill-record.md): originally scoped as opt-OUT
+  (build on by default), reversed after the grill pass — `docs/install.sh`'s
+  own established convention is that heavy/mutating actions stay separate,
+  explicit, operator-confirmed steps (the exact reason install.sh itself
+  prints but never runs `agent init`). `--build` extends that same
+  convention one level up rather than introducing a second, inconsistent
+  default.
+
+  Also ships `docs/embedded-layers.json`, a recommended `mnemosyne.layers.json`
+  template for a bare embedded install that explicitly omits `vector`
+  (rather than relying on the existing, still-correct, silent-degrade-past-
+  a-failing-layer behavior) — an explicit, documented choice for an
+  operator deciding how to configure a fresh embedded install with no
+  swarm-memory credential.
+
+acceptance_criteria:
+  - "Given `mnemosyne agent init` run with no --build flag, when it completes, then it behaves byte-identically to today (MCP registration + skill copy only) and onboardRepo() is never called"
+  - "Given `mnemosyne agent init --build` run in a fresh repo with no prior Mnemosyne state, when it completes, then onboardRepo({ mode: 'standalone', ... }) has run and its printed summary includes the base-level report (which of the 5 levels are now configured)"
+  - "Given `mnemosyne agent init` run WITHOUT --build, when its output is inspected, then it prints a 'next step (not run automatically): mnemosyne agent init --build' line, mirroring install.sh's own existing 'prints, never runs agent init' convention"
+  - "Given docs/embedded-layers.json, when read, then it is a valid mnemosyne.layers.json (per layers/config.ts's isLayerStackConfig shape) containing only graphify and file (vector omitted)"
+  - "Given `mnemosyne agent init --build` run a second time (already built), when it completes, then it makes zero redundant writes beyond what onboardRepo() itself already guarantees idempotent (persona/harness-sync idempotency, inherited from ro-02, re-verified here at the CLI-flag level)"
+
+steps:
+  - id: research
+    description: >
+      Read bin/mnemosyne-agent.mjs's existing initClaude/initCodex/
+      harnessesToRun structure and runInit() dispatch, plus docs/install.sh's
+      printed-next-step convention, to place the new --build step
+      consistently with both.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Extend test/agent-cli.mjs's real-subprocess pattern (isolated
+      mkdtemp $HOME/cwd per test) to cover: --build absent (no
+      onboardRepo call, byte-identical to today), --build present (real
+      onboardRepo() effects verified on disk), printed next-step text
+      when --build is absent, second-run idempotency.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Add --build flag parsing to bin/mnemosyne-agent.mjs's parseArgs,
+      call onboardRepo() (ro-02) from runInit() when set, print the
+      base-level report and the not-run-automatically guidance line when
+      unset. Add docs/embedded-layers.json.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm --build absent is truly byte-identical to pre-story behavior (no accidental default-on regression), confirm the printed guidance text matches install.sh's own established phrasing style.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-repo-onboarding.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: bin/mnemosyne-agent.mjs
+      purpose: "Existing agent init/status CLI — this story adds --build as a new, additive flag."
+    - path: docs/install.sh
+      purpose: "Established 'print, never auto-run the next heavy step' convention this story's guidance text mirrors."
+
+files_to_modify:
+  - file: bin/mnemosyne-agent.mjs
+    change: "Add --build flag; wire onboardRepo() call in runInit(); print base-level report + not-run-automatically guidance."
+  - file: docs/embedded-layers.json
+    change: "New file: recommended layer-stack config for a bare embedded install (graphify + file, no vector)."
+  - file: docs/install.sh
+    change: "Update printed next-steps text to also mention --build."
+  - file: README.md
+    change: "Quickstart section gains a one-line mention of --build for embedded/product installs."
+
+design_decisions:
+  - decision: "--build defaults OFF, not ON."
+    rationale: "Grill finding 3.2 — matches install.sh's own established convention for heavy/mutating steps staying separate and explicit, rather than introducing a second, inconsistent default one layer up."
+  - decision: "docs/embedded-layers.json omits vector rather than including it unconfigured."
+    rationale: "The unconfigured-vector-layer-degrades-safely behavior already works (client.ts's cascade), but leaving it in an embedded install's config silently attempts and fails a layer on every call — an explicit, documented recommended config avoids that noise without removing the option to add vector back later."
+
+cross_cutting:
+  - concern: documentation
+    action: "README Quickstart + docs/install.sh printed text updated to mention --build; docs/embedded-layers.json is itself a discoverable, self-documenting artifact."
+  - concern: versioning
+    action: "Additive CLI flag, no breaking change — folds into this epic's overall minor version bump (ro-09)."
+
+risks:
+  - severity: medium
+    description: "--build could turn a fast, cheap `agent init` into a slow first-time-index action on a large embedded host repo."
+    mitigation: "Opt-in default OFF (see design decision above); the file/graph-index steps themselves are the same already-proven-fast primitives (ml-06/ml-08's shipped benchmarks), not new indexing code with unknown performance."
+
+references:
+  - path: .pHive/epics/mnemosyne-agent-harness-install/stories/aha-03-install-script-and-readme.yaml
+    relevant_excerpt: "Established 'print, never auto-run agent init' convention — this story's --build guidance text mirrors it one level up."
+  - path: .pHive/epics/mnemosyne-repo-onboarding/docs/design-discussion.md
+    relevant_excerpt: "§2.3 Mode B entry point — the full design decision trail, including the grill 3.2 reversal."
+
+metric:
+  applies: true
+  name: onboarding.mode_b_build_success_rate
+  direction: up
+  unit: percent
+  baseline: 0
+  target: 100
+  window: story-integrate
+  source:
+    kind: manual
+    ref: "test/agent-cli.mjs --build scenario run output"
+  verify_at: integrate
+  owner: tester

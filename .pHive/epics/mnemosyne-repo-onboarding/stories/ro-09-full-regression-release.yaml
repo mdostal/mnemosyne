@@ -1,0 +1,127 @@
+id: ro-09-full-regression-release
+epic: mnemosyne-repo-onboarding
+title: Full-suite regression, version bump, CHANGELOG, README/install docs
+status: pending
+complexity: low
+methodology: classic
+depends_on: [ro-03-agent-init-build-flag, ro-07-onboard-new-collection-full-mode-a, ro-08-role-metadata-reachability-verification]
+
+description: |
+  Closes the epic: full-suite regression (`npm test`, `npx tsc --noEmit`,
+  the Python test suite under `mnemosyne/tests/`), minor version bump
+  (additive CLI verbs/flags, no breaking change to any existing contract —
+  per this epic's own `version_bump: minor`), a dated `CHANGELOG.md`
+  section, and final README/`docs/install.sh` pass confirming both modes'
+  documentation is discoverable and accurate end to end (not just each
+  individual story's own local doc update).
+
+  Also runs one real, end-to-end smoke test per mode against a disposable
+  temp repo (mirroring `test/agent-cli.mjs`'s isolated-temp-directory
+  convention throughout): Mode B (`agent init --build` in a throwaway repo,
+  confirm base-level report), Mode A (`onboard --collection --create` in a
+  throwaway repo against a disposable/test-scoped Qdrant target if
+  available, or clearly documented as skipped-in-CI with a manual
+  verification note otherwise — never silently skipped without a visible
+  reason).
+
+acceptance_criteria:
+  - "Given the full epic's changes, when `npm test` runs, then it passes with zero NEW failures beyond this repo's own already-documented, pre-existing baseline (the same standard aha-01's own completion note established — confirmed by diffing against the pre-epic baseline, not assumed)"
+  - "Given the full epic's changes, when `npx tsc --noEmit` runs, then it is clean"
+  - "Given mnemosyne/tests/ (Python), when pytest (or the project's established Python test runner) runs, then test_onboarding.py (ro-06) and any other new/modified Python tests pass"
+  - "Given package.json's version field, when this story completes, then it reflects a minor bump from its pre-epic value, and CHANGELOG.md gains a new dated section listing every consumer-visible addition from this epic (mnemosyne onboard verb, --create flag, agent init --build flag, GET /memory-levels' unchanged-but-now-shared computation)"
+  - "Given README.md's Quickstart and docs/install.sh's printed guidance, when read together, then both onboarding modes (Mode A: mnemosyne onboard; Mode B: agent init --build) are discoverable from the top-level README without needing to already know a story ID or internal file path"
+  - "Given the Mode B smoke test, when run against a throwaway temp repo, then it completes and its base-level report shows levels 0/1/4 configured=true (2 conditionally, depending on graphify availability in the test environment)"
+
+steps:
+  - id: research
+    description: >
+      Confirm the repo's current pre-epic baseline test/tsc state (mirrors
+      aha-01's own "confirmed this is pre-existing, unrelated to this
+      diff" verification discipline) so this story's own regression pass
+      has an honest comparison point, not a guess.
+    agent: researcher
+  - id: implement
+    description: >
+      Bump package.json's version (minor), write the CHANGELOG.md dated
+      section, finalize README.md/docs/install.sh cross-references for
+      both modes, write the two end-to-end smoke test scripts.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: >
+      Run the full regression suite (npm test, npx tsc --noEmit, Python
+      tests) and both mode smoke tests; diff results against the
+      confirmed pre-epic baseline from the research step.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: >
+      Independently re-run the full regression suite and both smoke
+      tests (mirrors aha-01's own "orchestrating session ran it myself
+      before merge" precedent) — do not trust the tester's self-report
+      alone for a release-gating story.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-repo-onboarding; this is the last commit on the epic branch (version-bump commit last, per this repo's own versioning cross-cutting concern convention).
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: CHANGELOG.md
+      purpose: "Existing, actively-maintained changelog — new dated section appended here, following its own established entry format."
+    - path: package.json
+      purpose: "Version field to bump (minor)."
+
+files_to_modify:
+  - file: package.json
+    change: "Minor version bump."
+  - file: CHANGELOG.md
+    change: "New dated section listing this epic's consumer-visible additions."
+  - file: README.md
+    change: "Final cross-reference pass confirming both onboarding modes are discoverable from the top-level Quickstart."
+  - file: docs/install.sh
+    change: "Final printed-guidance pass confirming --build's next-step text is accurate and current."
+  - file: test/onboard-smoke-mode-a.mjs
+    change: "New file: end-to-end Mode A smoke test against a disposable temp repo."
+  - file: test/onboard-smoke-mode-b.mjs
+    change: "New file: end-to-end Mode B smoke test against a disposable temp repo."
+
+design_decisions:
+  - decision: "Version-bump commit is the last commit on the epic branch."
+    rationale: "Matches this repo's own established versioning cross-cutting concern convention (cross-cutting-concerns.yaml: 'Bump commit is the LAST commit on the epic branch')."
+  - decision: "Mode A's smoke test is allowed to be documented-skip-in-CI if no disposable Qdrant target is available, but never silently skipped."
+    rationale: "Live Qdrant Cloud access is a real external dependency this repo's own CI does not currently provision (config.ts's own doc comment: 'this repo's own CI does not install graphify' — the same class of CI-environment gap); a visible, explained skip is honest, a silent one is not."
+
+cross_cutting:
+  - concern: versioning
+    action: "This IS the versioning story for the epic — package.json bump + CHANGELOG.md section, last commit on the branch."
+  - concern: documentation
+    action: "This IS the final documentation cross-check story for the epic — confirms every earlier story's own local doc update actually reads coherently end to end from the top-level README."
+
+risks:
+  - severity: low
+    description: "The Mode A smoke test's dependency on real/disposable Qdrant Cloud access could make this story's own completion nondeterministic across different environments."
+    mitigation: "Explicit, visible skip-with-reason path documented in the design decision above, rather than a flaky or silently-passing test."
+
+references:
+  - path: .pHive/epics/mnemosyne-agent-harness-install/stories/aha-05-release.yaml
+    relevant_excerpt: "Precedent for this epic's own final regression+release story shape and independent-reviewer-reruns-it-themselves discipline."
+  - path: .pHive/cross-cutting-concerns.yaml
+    relevant_excerpt: "versioning concern's implementation_checklist — 'Bump commit is the LAST commit on the epic branch.'"
+
+metric:
+  applies: true
+  name: release.regression_suite_pass_rate
+  direction: up
+  unit: percent
+  baseline: null
+  target: 100
+  window: story-integrate
+  source:
+    kind: manual
+    ref: "npm test / npx tsc --noEmit / Python test suite output, diffed against the confirmed pre-epic baseline"
+  verify_at: integrate
+  owner: reviewer

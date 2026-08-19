@@ -1,0 +1,123 @@
+id: ro-07-onboard-new-collection-full-mode-a
+epic: mnemosyne-repo-onboarding
+title: "mnemosyne onboard --create (Mode A, genuinely new repo)"
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [ro-05-onboard-cli-verb-existing-collection, ro-06-collection-creation-and-scope-mapping]
+
+description: |
+  Completes the operator's literal Mode A ask in full: "a way to add a new
+  repo or spot or something to the memory" for a repo that has NEVER
+  touched Qdrant before. Wires `ro-06`'s new
+  `create_collection_and_scope()` primitive through `ro-05`'s CLI verb via
+  a new `--create` flag: `mnemosyne onboard <path> --collection <name>
+  --create [--scope-id <id>] [--override project|enterprise]`.
+
+  Also lands the real vector-index sub-step `ro-02`'s orchestrator left
+  stubbed (`{ ran: false, reason: 'not yet implemented' }`) — once a
+  collection genuinely exists (freshly created here, or pre-existing per
+  `ro-05`), `onboardRepo({ mode: 'tree', ... })`'s vector-index step calls
+  the existing `POST /reindex {scope, directory}` contract
+  (`src/server.mjs`, shipped) for a real first-time vector index, with full
+  7-field provenance on the resulting hits (provenance-completeness
+  cross-cutting concern, verified here for the first time in this epic).
+
+acceptance_criteria:
+  - "Given a genuinely new repo path and a collection name that does NOT yet exist, when `mnemosyne onboard <path> --collection <name> --create` runs, then ro-06's create_collection_and_scope() is called, the collection is created, and onboarding proceeds through the full sequence (classify, org-tree register, Layer-1 sync, persona seed, L4/L2 index, vector index, base-level report)"
+  - "Given the same run, when it completes, then the base-level report shows level 3 (vector) as configured=true — previously (pre-ro-07) this was structurally impossible for a genuinely new repo, since no collection existed to index into"
+  - "Given the same run, when a recall() is subsequently issued against the newly onboarded repo's own scope, then it returns real hits with full 7-field provenance sourced from the vector layer (not the file-layer floor) — proving the first-time vector index actually indexed real content, not an empty collection"
+  - "Given `mnemosyne onboard <path> --collection <name> --create` where <name> ALREADY exists, when the command runs, then it fails loudly directing the operator to omit --create (use ro-05's existing-collection path instead) — --create is never silently a no-op over an existing collection"
+  - "Given `--create` is combined with an ambiguous collection name and no --override, then the same needs_override: true behavior from ro-05 applies unchanged — --create does not bypass or weaken the classification/override contract"
+
+steps:
+  - id: research
+    description: >
+      Read POST /reindex's real contract (src/server.mjs, SERVICE.md's
+      "Two reindex paths" section) and ro-06's create_collection_and_
+      scope() return shape, to wire the new vector-index sub-step and
+      --create flag correctly against both.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Write failing tests for --create's full sequence (fresh collection
+      creation through to a real recall() round-trip with vector
+      provenance), --create-against-existing-collection loud failure, and
+      --create-with-ambiguous-name-no-override behavior parity with ro-05.
+      Uses a mockable/stubbed Qdrant target per ro-06's own test
+      convention, never a live Qdrant call in the automated test suite.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Add --create flag to bin/mnemosyne-onboard.mjs (ro-05), wiring
+      ro-06's create_collection_and_scope() ahead of the classify/
+      onboardRepo() sequence. Replace onboardRepo()'s stubbed vector-index
+      sub-step with a real POST /reindex call once a collection is
+      confirmed to exist (either freshly created here, or pre-existing per
+      ro-05's own existing-collection path).
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm --create-against-existing-collection truly fails loudly (never silently proceeds), confirm the vector-index sub-step's provenance is genuinely full (all 7 fields), confirm no code path in this story bypasses ro-06's additive-only safety contract.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-repo-onboarding.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: bin/mnemosyne-onboard.mjs
+      purpose: "ro-05's existing CLI verb — this story adds --create as a new, additive flag."
+    - path: mnemosyne/onboarding.py
+      purpose: "ro-06's create_collection_and_scope() — the primitive this story's --create flag calls."
+    - path: src/server.mjs
+      purpose: "POST /reindex's real contract — the mechanism this story's real vector-index sub-step uses, reused not reimplemented."
+
+files_to_modify:
+  - file: bin/mnemosyne-onboard.mjs
+    change: "Add --create flag; call ro-06's create_collection_and_scope() ahead of the existing classify/onboardRepo() sequence."
+  - file: lib/mnemosyne/onboarding/onboardRepo.ts
+    change: "Replace the stubbed vector-index sub-step with a real POST /reindex call, mode: 'tree' only."
+  - file: test/onboard-cli.mjs
+    change: "Extend with --create scenarios per acceptance criteria."
+
+design_decisions:
+  - decision: "--create is a separate, explicit flag on the same verb, not a separate command."
+    rationale: "Keeps the CLI surface small and consistent with ro-05's existing verb rather than a fourth top-level onboarding-related command; the flag's presence is the one clear signal distinguishing 'new collection' from 'existing collection' intent."
+  - decision: "--create against an already-existing collection is a loud failure, never a silent no-op."
+    rationale: "An operator who mistakenly passes --create for an existing collection should be told explicitly, not have the flag silently ignored — matches this project's loud-failure cross-cutting concern."
+
+cross_cutting:
+  - concern: provenance-completeness
+    action: "First real end-to-end proof in this epic that a first-time vector index produces recall() hits with all 7 provenance fields — verified directly in acceptance criteria #3, not assumed from POST /reindex's own existing (separately-tested) contract."
+  - concern: loud-failure
+    action: "--create against an existing collection fails loudly per acceptance criterion #4."
+
+risks:
+  - severity: medium
+    description: "Chaining ro-06's collection creation directly into a first-time vector index in one CLI invocation increases the blast radius of a single command beyond ro-06's own isolated creation-only scope."
+    mitigation: "ro-06's own additive-only safety contract is unchanged and independently re-verified in this story's review step too — this story adds a caller, never loosens the primitive it calls."
+
+references:
+  - path: .pHive/epics/mnemosyne-repo-onboarding/docs/vertical-plan.md
+    relevant_excerpt: "Slice 3 — Mode A: genuinely new repo, collection created from nothing. Deliberately last — the one genuinely new, live-infra-mutating piece, sequenced after both the shared core and the safer existing-collection path are already proven."
+  - path: SERVICE.md
+    relevant_excerpt: "Two reindex paths — POST /index (targeted) vs POST /reindex (bulk scope+directory) — this story uses the bulk path for a repo's first-time full index."
+
+metric:
+  applies: true
+  name: onboarding.mode_a_new_repo_end_to_end_success_rate
+  direction: up
+  unit: percent
+  baseline: 0
+  target: 100
+  window: story-integrate
+  source:
+    kind: manual
+    ref: "test/onboard-cli.mjs --create scenario run output, including the real recall() provenance round-trip check"
+  verify_at: integrate
+  owner: tester
