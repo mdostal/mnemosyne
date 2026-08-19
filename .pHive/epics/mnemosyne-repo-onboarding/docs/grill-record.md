@@ -1,13 +1,16 @@
 # Grill Record — mnemosyne-repo-onboarding
 
-rounds_completed: 2
+rounds_completed: 3
 total_unresolved_count: 0
 
-Two rounds on this branch: round 1 (below) graded the original Mode A/Mode B
-design; round 2 (appended, at the bottom of this file) graded §7 of
-`design-discussion.md`, the amendment adding configurable storage, document
-ingestion, web crawl, and two explicit install paths. Round 2 does not
-reopen or replace round 1 — both stand.
+Three rounds on this branch: round 1 (below) graded the original Mode A/Mode
+B design; round 2 graded §7 of `design-discussion.md`, the amendment adding
+configurable storage, document ingestion, web crawl, and two explicit
+install paths; round 3 (appended, at the bottom of this file) grades §7.9,
+the operator's direct answers to open questions #4 (PDF ingestion) and #5
+(SSRF guard) — the two, small, targeted changes to `ro-10`/new `ro-13` and
+`ro-11` respectively. Round 3 does not reopen or replace rounds 1/2 — all
+three stand.
 
 ---
 
@@ -307,3 +310,165 @@ design doc simply asserting safety.
 story YAMLs. No findings carried forward unresolved — `unresolved_count: 0`.
 Round 1's own 6/6 resolved findings are unaffected — nothing in round 2
 reopens them.
+
+---
+
+# Round 3 — Amendment, operator answers to open questions #4/#5 (2026-08-19)
+
+round_number: 3
+unresolved_count: 0
+
+Adversarial pass against `design-discussion.md`'s new §7.9 and the two
+revised/new story YAMLs it produced (`ro-13-pdf-document-ingestion`, new;
+`ro-11-bounded-website-crawl`, revised) — the operator's direct answers to
+open questions #4 (PDF ingestion must happen) and #5 (SSRF guard firm,
+default-on). Grounded in real npm-registry reads, real tarball inspection,
+and a fresh re-read of `ro-10`/`ro-11`'s existing shipped-in-plan shape.
+Same five categories, same descriptive-finding-plus-question discipline as
+rounds 1/2. All findings below resolved by revising `ro-13`/`ro-11`;
+nothing here reopens rounds 1/2's already-resolved findings.
+
+## 1. Vocabulary mismatches
+
+**Finding 3.1.1 — `MAX_PDF_SOURCE_BYTES` (new, `ro-13`) sits directly
+alongside `ro-10`'s existing `MAX_INGEST_BYTES` and is easy to misread as
+"the same cap, just PDF-flavored" rather than two constants bounding
+structurally different quantities (compressed binary source bytes vs.
+already-extracted text bytes).** A future implementer skimming the code
+could reasonably reach for the wrong constant at the wrong checkpoint —
+exactly the class of naming ambiguity round 1's finding 1.1 flagged for
+"onboard" vs. "ingest," now recurring at the constant-naming level inside
+a single file.
+
+**Resolution:** `ro-13`'s `design_decisions` already states the two
+constants measure different things and names the rationale explicitly;
+round 3 additionally requires (see `ro-13`'s `implement` step and
+`files_to_modify` entry for `ingestDocument.ts`) that the two constants be
+defined ADJACENT in the source with an explicit inline comment naming the
+distinction — not left to be inferred only from the design doc a reader
+may never open.
+
+## 2. Hidden assumptions
+
+**Finding 3.2.1 — the first draft of `ro-13` implicitly assumed PDF text
+could be concatenated into one flat string and handed to `ro-10`'s
+existing chunker unchanged, silently losing page identity.** `unpdf`'s
+`extractText()` (confirmed via its real `.d.mts` type declarations, read
+directly from the published tarball) returns one string PER PAGE by
+default (`mergePages: false`) — but `ro-10`'s existing chunker has no
+concept of a page boundary; it splits a single flat string by character
+count. Flattening first would mean a `recall()` hit's provenance could
+only ever say "chunk 7 of resume.pdf," never "page 2 of resume.pdf,"
+degrading the exact kind of provenance specificity `ro-10`'s own
+acceptance criterion #6 was written to guarantee.
+
+**Resolution:** `ro-13` revised to run each PAGE's text through `ro-10`'s
+existing chunker independently (a page whose text still exceeds one
+chunk's bound splits into multiple chunks, mirroring `ro-10`'s own
+already-proven multi-chunk behavior) and to tag every resulting chunk
+with BOTH page number and chunk-within-page index. Acceptance criterion
+#1 rewritten to test this explicitly rather than merely asserting
+"chunk N of filename."
+
+**Finding 3.2.2 (verification, not a defect — recorded for the record) —
+"unpdf has zero required dependencies" was verified only against its
+DECLARED dependency manifest, not against whether its vendored `pdf.js`
+bundle dynamically loads a native module at runtime through an
+undeclared path (`require()`/`process.dlopen`/a `.node` import hidden
+inside the minified bundle).** Given this codebase's explicit aversion to
+a second native-binding surface, asserting "no native dependency" from
+the package manifest alone, without checking the actual shipped code, is
+the same class of unverified-confidence gap grill finding 5.1/2.5.1
+flagged in rounds 1/2.
+
+**Resolution:** The vendored `dist/pdfjs.mjs` bundle (unpacked directly
+from the published tarball) was grepped for `require(`, `process.dlopen`,
+and `.node`-suffixed dynamic imports — zero matches. `ro-13`'s
+`unpdf@^1.8.1` design decision now states this deeper verification
+explicitly, not just the declared-dependency-graph read.
+
+## 3. Unresolved tensions
+
+**Finding 3.3.1 — the firm SSRF guard, as first drafted, resolved a
+hostname via DNS once and then called `fetch()` separately afterward —
+a classic DNS-rebinding TOCTOU (time-of-check-to-time-of-use) gap.** A
+DNS server designed to return a public IP for the guard's own
+resolve-and-check step and a different, private-range IP for `fetch()`'s
+own internal resolution at actual connect time would sail straight
+through the guard despite it being "real code that runs before the
+fetch," exactly the kind of gap that makes an SSRF guard look complete
+in a code review while remaining bypassable in practice. Does treating
+"resolve, check, then fetch" as sufficient — without addressing the gap
+between the two separate resolutions — actually satisfy the operator's
+"put a guard in place" instruction, or does it leave a real, exploitable
+seam undocumented?
+
+**Resolution:** Named explicitly as a new risk, R13, in `ro-11` — not
+silently treated as closed by the guard's mere existence. A full fix
+(pinning the exact validated socket for the real connection while still
+presenting the correct hostname for TLS SNI) requires connection-level
+control this story's "first cut" (plain global `fetch()`) does not have,
+and is named as a genuine, separate follow-on. The story's own mitigation
+narrows (does not eliminate) the window: the guard re-resolves and
+re-checks immediately before EVERY individual fetch, including each page
+of a multi-page crawl (not once, cached, at the start of the whole crawl
+call) — a new acceptance criterion added to `ro-11` requiring
+call-count-instrumented proof of one resolve-and-check per fetch, not
+merely one per `crawlAndIngest()` invocation.
+
+## 4. Convention violations
+
+**Finding 3.4.1 — `ro-13`'s first draft specified `unpdf@1.8.1` as an
+exact-pinned dependency; every existing entry in this package's own
+`package.json` `dependencies` block uses a caret range
+(`@modelcontextprotocol/sdk: ^1.30.0`, `better-sqlite3: ^13.0.3`, `tsx:
+^4.23.11`, `yaml: ^2.9.0`, `zod: ^3.25.76`, confirmed by reading the real
+file directly).** An exact pin for the one new dependency this amendment
+adds would be a silent, unexplained deviation from an established,
+consistent convention every other dependency in the same file already
+follows.
+
+**Resolution:** `ro-13` revised to specify `unpdf@^1.8.1` (caret range),
+matching the existing convention exactly, with the rationale stated
+inline in both the `implement` step and the `files_to_modify` entry so
+the convention-match is visible at implementation time, not only
+inferable from reading the rest of `package.json` separately.
+
+## 5. Posture mismatches
+
+**Finding 3.5.1 — the first draft of this amendment's PDF-library
+research read as "unpdf is obviously the right choice" without showing
+the actual comparative evidence a skeptical reader would need to verify
+that conclusion independently — the same declarative-confidence pattern
+rounds 1 (finding 5.1) and 2 (finding 2.5.1) both already flagged and
+had to walk back with real evidence.** Given this codebase's own stated
+aversion to a second native-binding dependency is the PRIMARY reason
+`pdf-parse` was rejected, asserting that rejection without the actual
+registry-read proof (that `@napi-rs/canvas` is a REQUIRED dependency of
+`pdf-parse`, not optional) would repeat the exact posture gap already
+named twice in this epic's own grill history.
+
+**Resolution:** `ro-13`'s description section now cites the real,
+directly-read registry data for both candidates side by side (`npm view
+pdf-parse dependencies` showing `@napi-rs/canvas` as a hard dependency;
+`unpdf`'s own registry manifest showing zero required `dependencies` and
+`@napi-rs/canvas` only as an `optional: true` peer dependency, confirmed
+via `peerDependenciesMeta`), plus real weekly-download and
+last-publish-date figures for both packages and for raw `pdfjs-dist`
+(read directly from `api.npmjs.org`/the registry, not asserted from
+memory) — the comparative claim is falsifiable by anyone re-running the
+same three `npm view`/`curl` commands, not asked to be taken on faith.
+
+## Summary (round 3)
+
+5 findings, 5 resolved via `ro-13`/`ro-11` story-YAML revision. No findings
+carried forward unresolved — `unresolved_count: 0`. Rounds 1/2's own 11/11
+resolved findings are unaffected — nothing in round 3 reopens them.
+
+**Explicitly NOT found in this round:** no evidence of a real, legitimate
+need for ro-11's crawl target to reach a private-network address that
+would justify a bypass flag — the one plausible tension found (a Mode B
+product's internal-staging "website") is named as a new, genuinely open
+question (design-discussion.md §7.8 #6) precisely because it is NOT
+resolved either direction, not because a bypass was warranted and omitted
+by oversight.

@@ -1,0 +1,267 @@
+id: ro-13-pdf-document-ingestion
+epic: mnemosyne-repo-onboarding
+title: PDF text extraction into the SAME ingestDocument() primitive (no second ingestion path)
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [ro-10-document-ingestion-primitive]
+
+description: |
+  Amendment story, round 3 (design-discussion.md §7.9), closing open
+  question #4 (§7.8): the operator's explicit answer is that PDF ingestion
+  MUST happen, not be deferred to an unscoped future epic. `ro-10`
+  deliberately excluded PDF because `package.json` confirmed no
+  PDF-parsing dependency existed anywhere in this codebase — that gap is
+  closed here, in the SAME `ingestDocument()` primitive `ro-10` shipped,
+  never a second, parallel ingestion path.
+
+  **Real dependency research (npm registry read directly, not assumed):**
+
+  Two real candidates were pulled from the actual npm registry and
+  compared on the exact axes this codebase already cares about (this repo
+  already carries one native-binding dependency, `better-sqlite3`, whose
+  native-binding crash is a named, already-documented pre-existing test
+  flake per `mnemosyne-memory-levels`'s own horizontal-plan.md — a second,
+  avoidable native-binding dependency is a real, concrete cost, not a
+  theoretical one):
+
+  - `pdf-parse@2.4.5` (the mehmet-kozan-maintained fork; the original
+    `pdf-parse` package is unmaintained) — REJECTED. Its own registry
+    metadata (`npm view pdf-parse dependencies`) shows a HARD, required
+    dependency on `@napi-rs/canvas@0.1.80` — a native N-API addon with
+    per-platform prebuilt binaries. Even though `@napi-rs/canvas` ships
+    prebuilds (lighter-weight than a `node-gyp`-compiled dependency), it
+    is still a second native-binding install-time surface in exactly the
+    class this codebase already has one avoidable instance of and no
+    reason to add a second. `pdf-parse`'s own declared `engines.node` is
+    also an unusual, narrower range (`>=20.16.0 <21 || >=22.3.0` — Node 21
+    excluded entirely).
+  - `unpdf@1.8.1` — CHOSEN. Published by the UnJS collective (the team
+    behind `unbuild`/`ofetch`/`h3`, an actively-maintained org with a real
+    track record in this ecosystem), last published 2026-08-13 (six days
+    before this amendment), ~2.3M weekly downloads
+    (`api.npmjs.org/downloads/point/last-week/unpdf`, read directly).
+    Its registry manifest has **zero required `dependencies`** — its only
+    dependency is `@napi-rs/canvas`, and it is declared a `peerDependency`
+    with `peerDependenciesMeta.optional: true`, used ONLY by
+    `renderPageAsImage`/`createIsomorphicCanvasFactory` (page-to-image
+    rendering), which this story never calls. Confirmed directly from the
+    unpacked tarball: the entire package is 157 files, pure `.mjs`/`.cjs`/
+    `.d.ts` — zero `.node`/`.wasm` binaries anywhere in the package
+    (`tar tzf unpdf-1.8.1.tgz | grep -iE '\.wasm|\.node$'` — zero matches).
+    It vendors Mozilla's own `pdf.js` engine directly inside
+    `dist/pdfjs.mjs` (1.68MB minified JS, the same battle-tested parser
+    shipped inside every Firefox install — one of the most heavily-fuzzed
+    PDF parsers that exists) rather than pulling `pdfjs-dist` as an
+    external dependency. `getDocumentProxy(data)` takes a plain
+    `Uint8Array`/`ArrayBuffer` (not a Node-specific `Buffer` API — a
+    `Buffer` from `fs.readFileSync()` satisfies this directly since
+    `Buffer` extends `Uint8Array`, but the API itself is cross-runtime by
+    design, not Node-coupled).
+
+  **Real, honest tradeoff — not silently absorbed:** `unpdf@1.8.1`
+  declares `engines: { node: ">=22" }`, stricter than this package's own
+  current `package.json` (`engines.node: ">=20"`). This repo's actual CI
+  (`ci.yml`, `node-version: '22'`) and local dev (`node --version` ->
+  v24.18.1 at research time) both already satisfy `unpdf`'s floor, and the
+  raw `pdfjs-dist` package itself (v6.2.108, the officially-maintained
+  upstream) now requires an even stricter `>=22.13.0 || >=24` — confirming
+  the entire modern pdf.js ecosystem has moved past Node 20, not a quirk
+  unique to `unpdf`. This story's implementation step MUST bump this
+  package's own `package.json` `engines.node` from `>=20` to `>=22` as
+  part of landing PDF support (a real, named, package-wide floor raise —
+  not silently absorbed as if it only affected the new PDF codepath) and
+  call this out explicitly in `ro-09`'s CHANGELOG entry.
+
+  **Bounded scope, same discipline as `ro-10` itself (never parse first,
+  bound later):**
+
+  - A NEW constant, `MAX_PDF_SOURCE_BYTES`, caps the RAW PDF file's byte
+    size BEFORE `getDocumentProxy()` is ever called — checked from
+    `Buffer.byteLength`/`fs.statSync` on the already-read/about-to-be-read
+    bytes, never after a parse attempt has already started. Deliberately a
+    SEPARATE constant from `ro-10`'s `MAX_INGEST_BYTES` (not the same
+    literal cap reused) because the two measure structurally different
+    things: `MAX_INGEST_BYTES` bounds already-extracted TEXT (`ro-10`'s
+    existing enforcement, reused unchanged below); `MAX_PDF_SOURCE_BYTES`
+    bounds the compressed BINARY PDF file's source bytes before parsing —
+    a PDF's byte size is dominated by embedded images/fonts and is not a
+    reliable proxy for how much text it contains, so conflating the two
+    caps would either let a huge, image-heavy PDF through (if sized for
+    text) or reject a legitimate, text-heavy, well-compressed multi-page
+    PDF (if sized too small) — named explicitly as its own design decision
+    below, not silently assumed equivalent to `ro-10`'s cap.
+  - After extraction, the resulting text is handed to `ro-10`'s existing,
+    UNCHANGED `ingestDocument()` — which already enforces `MAX_INGEST_BYTES`
+    on that extracted text and already does the chunking/tagging/
+    sequential-`remember()` work. This story adds NO second write path,
+    NO second chunker, NO second tagging scheme — `.pdf` is a new INPUT
+    FORMAT feeding the exact same primitive `.txt`/`.md` already feed.
+  - **Page/chunk granularity, resolved explicitly (grill round 3, finding
+    2 — not silently assumed):** `unpdf`'s `extractText(pdf, { mergePages:
+    false })` (the default) returns one string PER PAGE, but `ro-10`'s
+    existing chunker operates on a single flat string, splitting by
+    character-count bounds with no concept of a page boundary. This story
+    does NOT silently concatenate all pages into one flat string and let
+    page identity disappear into `ro-10`'s existing chunk-N tagging.
+    Instead: each PAGE's text is passed through `ro-10`'s existing
+    chunker independently (a page whose text exceeds one chunk's bound
+    still splits into multiple chunks, exactly as `ro-10`'s own
+    multi-chunk behavior already works for a long `.txt`/`.md` file), and
+    the resulting `Content.metadata`/`tag` for every chunk carries BOTH
+    the page number AND the chunk-within-page index (e.g. "resume.pdf,
+    page 2, chunk 1") — so a `recall()` hit's provenance traces back to a
+    real page, not just an anonymous position in a fully-flattened blob.
+    This is a small, explicit extension of `ro-10`'s existing tag shape
+    (page number added alongside the filename/chunk-index fields it
+    already carries), not a second tagging scheme.
+  - Corrupt/unparseable/encrypted PDFs fail loudly, never a silent
+    empty-content ingest. Confirmed directly from the vendored `pdf.js`
+    source (`dist/pdfjs.mjs`) that it throws real, distinguishable,
+    named exception classes: `PasswordException` (encrypted/password-
+    protected PDF — `PasswordResponses`/`NeedPassword`/`IncorrectPassword`
+    constants confirmed present) and `InvalidPDFException` (corrupt/
+    malformed PDF structure). This story's implementation catches both by
+    name and surfaces a distinguishable error message per class — never a
+    generic catch-all that reports "ingestion failed" with no signal of
+    which failure mode actually occurred.
+
+acceptance_criteria:
+  - "Given a well-formed, real multi-page PDF file's bytes under MAX_PDF_SOURCE_BYTES, when ingestDocument(client, { content: pdfBytes, filename: 'resume.pdf' }) is called, then unpdf's getDocumentProxy()/extractText({ mergePages: false }) successfully extracts one text string per page, each page's text is run through ro-10's SAME existing chunker independently, and every resulting remember() call's tag/metadata identifies BOTH 'resume.pdf' page P and chunk-within-page index N (never a single flattened chunk-N-of-file tag that loses page identity)"
+  - "Given a PDF file whose raw byte size exceeds MAX_PDF_SOURCE_BYTES, when ingestDocument() is called, then it fails loudly (ok: false, a clear oversized-PDF-source error naming MAX_PDF_SOURCE_BYTES) BEFORE getDocumentProxy()/extractText() is ever invoked — verified directly by instrumenting/spying that the pdf-parsing call is never reached, never a silent truncate-then-parse"
+  - "Given a PDF file protected by a password (a real, fixture-generated encrypted PDF, not a mocked exception), when ingestDocument() is called, then it fails loudly with a message distinguishing 'encrypted/password-protected' from any other failure class, catching unpdf/pdf.js's real PasswordException by name — never a silent empty-content ingest"
+  - "Given a corrupt/malformed PDF (a real, deliberately-truncated/byte-mangled fixture, not a mocked exception), when ingestDocument() is called, then it fails loudly with a message distinguishing 'corrupt/unparseable PDF' from any other failure class, catching unpdf/pdf.js's real InvalidPDFException by name — never a silent empty-content ingest"
+  - "Given extracted PDF text itself exceeds ro-10's existing MAX_INGEST_BYTES (a large multi-page PDF), when ingestDocument() is called, then ro-10's ALREADY-EXISTING oversized-content rejection fires unchanged on the post-extraction text — proving this story adds zero new, parallel size-enforcement logic for the post-extraction stage, only the new pre-parse MAX_PDF_SOURCE_BYTES gate"
+  - "Given ingestDocument() completes successfully for a real, multi-page PDF fixture, when recall() is subsequently called against the same scope, then hits from at least one page/chunk are returned with full 7-field provenance (layer, source, chunk_span, index_timestamp, content_hash, embedder, retrieval_time) naming the source .pdf filename — proving real extracted PDF text landed and is recall()-able, not merely that extraction returned non-empty text"
+
+steps:
+  - id: research
+    description: >
+      Confirm (already done for this story's own planning, re-verify at
+      implementation time against whatever unpdf/pdf-parse versions are
+      then-current on the npm registry) unpdf@1.8.1's actual dependency
+      manifest (zero required deps, @napi-rs/canvas as an unused optional
+      peer), its vendored-pdfjs exception classes (PasswordException,
+      InvalidPDFException), and its extractText()/getDocumentProxy() API
+      shape. Confirm this package's engines.node bump (>=20 -> >=22) is
+      the only package.json-wide side effect of adding this dependency.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Write failing tests for ingestDocument()'s new PDF input path
+      against a stubbed/fake MnemosyneClient (same convention ro-10's own
+      tests use, never a live Qdrant call): a real well-formed multi-page
+      PDF fixture (generated once, checked into the test fixtures
+      directory), a real password-protected PDF fixture, a real corrupt/
+      truncated-byte PDF fixture, an oversized-source-bytes case (spy
+      confirming getDocumentProxy is never called), and a real recall()
+      provenance round-trip mirroring ro-10's own acceptance criterion #6.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Add unpdf@^1.8.1 to package.json dependencies (caret range, matching
+      this package.json's own existing convention for every current
+      dependency — @modelcontextprotocol/sdk, better-sqlite3, tsx, yaml,
+      zod all use ^-ranges, never exact pins); bump engines.node from
+      >=20 to >=22. Extend lib/mnemosyne/ingest/ingestDocument.ts to detect
+      a .pdf filename hint (or an explicit content-type option), route PDF
+      bytes through MAX_PDF_SOURCE_BYTES check -> unpdf's
+      getDocumentProxy()/extractText() -> the SAME existing
+      chunk/tag/remember() path .txt/.md content already uses. Catch
+      PasswordException/InvalidPDFException by name for distinguishable
+      loud failures. No changes to the ingest_document MCP tool's,
+      bin/mnemosyne-ingest.mjs's, or POST /ingest's existing external
+      contract — .pdf is accepted through the SAME surfaces ro-10 already
+      shipped, not a new tool/verb/route.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: >
+      Confirm MAX_PDF_SOURCE_BYTES is genuinely checked before
+      getDocumentProxy() is called (not after a partial parse attempt),
+      confirm PasswordException/InvalidPDFException produce genuinely
+      distinguishable error messages (not a shared generic string),
+      confirm zero second ingestion/storage path was introduced (PDF text
+      flows through the exact same chunk/tag/remember() code ro-10 already
+      ships, verified by reading the diff, not assumed from the story
+      description alone).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-repo-onboarding.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/ingest/ingestDocument.ts
+      purpose: "ro-10's existing primitive — this story extends it with a new PDF input path, never creates a second one."
+    - path: package.json
+      purpose: "engines.node bump (>=20 -> >=22) and the new unpdf dependency land here; no other dependency shape changes."
+    - path: skills/mnemosyne-persona-interview/crawl-context.mjs
+      purpose: "The same named-cap-enforced-in-code discipline MAX_PDF_SOURCE_BYTES mirrors, consistent with ro-10's own citation of this pattern."
+
+files_to_modify:
+  - file: package.json
+    change: "Add unpdf@^1.8.1 dependency (caret range, matching this file's existing convention for every current dependency); bump engines.node from >=20 to >=22."
+  - file: lib/mnemosyne/ingest/ingestDocument.ts
+    change: "New PDF input branch: MAX_PDF_SOURCE_BYTES pre-parse check (defined adjacent to MAX_INGEST_BYTES with an explicit inline comment naming the distinction between the two — grill round 3, finding 1 — so a future maintainer never conflates 'raw PDF source bytes' with 'extracted text bytes' as the same cap by mistake), unpdf getDocumentProxy()/extractText() call, PasswordException/InvalidPDFException-specific loud failures, extracted text fed into the SAME existing chunk/tag/remember() path with per-page chunk tagging."
+  - file: lib/mnemosyne/ingest/ingestDocument.test.ts
+    change: "New PDF-path test cases appended to ro-10's existing test file: well-formed multi-page fixture, encrypted fixture, corrupt fixture, oversized-source case, recall() provenance round-trip."
+  - file: test/fixtures/pdf/
+    change: "New directory: a real well-formed multi-page PDF, a real password-protected PDF, a real corrupt/truncated PDF — checked-in binary fixtures, not mocked exceptions."
+
+design_decisions:
+  - decision: "unpdf@^1.8.1 chosen over pdf-parse@2.4.5 (and over depending on pdfjs-dist directly)."
+    rationale: "pdf-parse hard-requires the native-binding @napi-rs/canvas as a required dependency (registry-confirmed) — a second native-binding install-time surface this codebase already has one avoidable instance of (better-sqlite3) and no reason to add a second. unpdf vendors pdf.js directly with zero required dependencies (registry- and tarball-confirmed: no .node/.wasm files anywhere in the package), and its only dependency on @napi-rs/canvas is an unused, optional peer this story never imports. Depending on raw pdfjs-dist directly was also considered and rejected: its latest version (6.2.108) requires an even stricter Node floor (>=22.13.0 || >=24) than unpdf, with no packaging convenience unpdf doesn't already provide for text-only extraction. Grill round 3 pushed this verification one level deeper than 'no declared native dependency': the vendored dist/pdfjs.mjs bundle itself was grepped directly for require(...)/process.dlopen/.node dynamic-load patterns — zero matches — confirming no native module is loaded at runtime through an undeclared, dynamic path either, not just absent from the declared dependency graph."
+  - decision: "engines.node is bumped from >=20 to >=22 as a real, named, package-wide side effect of this story, not hidden as a PDF-only change."
+    rationale: "npm's engines field is package-wide, not conditional per feature — adding unpdf as an unconditional dependency (never lazy-loaded/optional, since PDF ingestion must always be available per the operator's explicit requirement) means the whole package's floor moves. This repo's actual CI (node 22) and dev environment (node 24) already satisfy the new floor; the bump is named explicitly in ro-09's CHANGELOG entry rather than silently absorbed."
+  - decision: "MAX_PDF_SOURCE_BYTES is a new, separate constant from ro-10's MAX_INGEST_BYTES, not a reuse of the same literal cap."
+    rationale: "The two constants bound structurally different things (compressed binary PDF source bytes vs. already-extracted plain text bytes) — a PDF's byte size is dominated by embedded images/fonts, not proportional to its text content, so a single shared cap would either be too permissive for image-heavy PDFs or too restrictive for well-compressed, text-heavy ones. Named explicitly rather than silently assumed equivalent to ro-11's own shared-MAX_INGEST_BYTES reuse (which is valid there because ro-11's crawled bytes and ro-10's ingested bytes are both already-decoded text/HTML, a genuinely comparable quantity)."
+  - decision: "PDF support lands as a new input branch inside ro-10's existing ingestDocument(), never a second ingestion primitive, MCP tool, CLI verb, or HTTP route."
+    rationale: "Operator's own explicit instruction for this amendment: PDF support must land in the SAME primitive. Consistent with this epic's own established discipline (ro-11 also feeds ro-10's ingestDocument() unchanged rather than inventing a parallel path)."
+
+cross_cutting:
+  - concern: loud-failure
+    action: "Oversized PDF source bytes, encrypted PDFs, and corrupt PDFs each fail loudly with a distinguishable message before/instead of any silent empty-content ingest, per acceptance criteria #2-4."
+  - concern: provenance-completeness
+    action: "Extracted PDF text chunks must produce recall() hits with full 7-field provenance naming the source .pdf filename, verified directly in acceptance criterion #6, mirroring ro-10's own standard exactly."
+  - concern: existing-infrastructure
+    action: "PDF text is fed through ro-10's existing, unmodified chunk/tag/remember() path — no new storage mechanism, no second ingestion primitive, no new MCP tool/CLI verb/HTTP route."
+  - concern: documentation
+    action: "ro-10's existing 'ingest a document into memory' README mention is extended to name .pdf as a supported format; CHANGELOG entry (ro-09) explicitly names both the new unpdf dependency and the engines.node floor raise."
+
+risks:
+  - severity: medium
+    description: "unpdf vendors its own copy of pdf.js rather than depending on the upstream pdfjs-dist package — future pdf.js security fixes land in unpdf on its own release cadence, not automatically via a transitive-dependency bump."
+    mitigation: "unpdf's real release cadence (registry-confirmed: multiple releases within the week before this amendment, ~2.3M weekly downloads, UnJS-maintained) is active enough that this is a monitorable, not a blocking, risk — named explicitly rather than silently assumed safe forever."
+  - severity: low
+    description: "engines.node's bump from >=20 to >=22 could reject an install on an operator's older Node 20/21 runtime for the WHOLE package, not just the new PDF codepath."
+    mitigation: "This repo's actual CI and documented dev environment already run Node >=22; named explicitly in this story's design decisions and ro-09's CHANGENLOG entry rather than silently absorbed as a PDF-only change."
+  - severity: low
+    description: "A PDF crafted to be small in raw byte size but pathologically expensive to parse (deeply nested object graphs, decompression-heavy streams) could still tie up CPU/memory even under MAX_PDF_SOURCE_BYTES, since the cap bounds bytes, not parse complexity."
+    mitigation: "Same class of accepted, named risk ro-10 already carries for its own MAX_INGEST_BYTES (a byte cap, not a complexity cap) — not solved here; unpdf's vendored pdf.js is the same parser Firefox runs against arbitrary untrusted PDFs from the open web, the most heavily-adversarially-tested PDF parser realistically available to this codebase."
+
+references:
+  - path: .pHive/epics/mnemosyne-repo-onboarding/docs/design-discussion.md
+    relevant_excerpt: "§7.9 — round-3 amendment resolving open question #4: PDF ingestion is real scope, not deferred; unpdf chosen with real registry/tarball research and named tradeoffs."
+  - path: .pHive/epics/mnemosyne-repo-onboarding/docs/grill-record.md
+    relevant_excerpt: "Round 3 — real findings/resolutions against this story and ro-11's revised SSRF acceptance criteria."
+  - path: .pHive/epics/mnemosyne-repo-onboarding/stories/ro-10-document-ingestion-primitive.yaml
+    relevant_excerpt: "The primitive this story extends, never duplicates — same acceptance-criteria shape mirrored above, same chunk/tag/remember() path reused unchanged."
+
+metric:
+  applies: true
+  name: onboarding.pdf_ingestion_success_rate
+  direction: up
+  unit: percent
+  baseline: 0
+  target: 100
+  window: story-integrate
+  source:
+    kind: manual
+    ref: "ingestDocument.test.ts PDF-path test run output across all acceptance-criteria scenarios (well-formed, encrypted, corrupt, oversized, recall() round-trip)"
+  verify_at: integrate
+  owner: tester

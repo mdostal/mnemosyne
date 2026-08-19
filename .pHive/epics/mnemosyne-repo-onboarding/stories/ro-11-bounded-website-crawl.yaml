@@ -40,6 +40,54 @@ description: |
   - Not a scheduled/background crawler — one bounded, on-demand call.
   - Not a readability/content-extraction engine in this story's cut.
 
+  **Amendment, round 3 (design-discussion.md §7.9), resolving open
+  question #5 (§7.8):** the operator's own explicit answer, verbatim:
+  "SSRF, lets put a guard in place unless that blocks something
+  explicitly." This is no longer "the research step decides whether
+  warranted" — the SSRF guard is now a FIRM, default-on requirement with
+  its own real acceptance criteria (below), not a conditional research
+  outcome. The target hostname is resolved and the resolved IP is checked
+  against the blocked ranges BEFORE any fetch is attempted; a match fails
+  loudly, naming which range matched. No bypass flag exists anywhere in
+  this module — research re-confirmed this story's own real deployment
+  context (§7.3/§7.6: an operator or a product's own agent supplies the
+  URL, but that URL ultimately arrives at this codebase's own network-
+  reachable surfaces — the `crawl_website` MCP tool and `POST /crawl` HTTP
+  route — not a code-level trust boundary; either surface could in
+  principle be reached by a less-trusted caller than "the operator
+  themselves typing a URL," e.g. a Mode B sidecar's `POST /crawl` route
+  listening on a container-network port). Guard-on-by-default is the safe
+  posture regardless of who the story's primary intended caller is.
+  **One real, concrete tension surfaced by this research, not solved
+  here:** a Mode B product being onboarded while its own "website" is
+  still an internal-only staging deployment (a plausible, not merely
+  hypothetical, case for this epic's own Mode B narrative — see
+  design-discussion.md §7.8 open question #6, newly added, not silently
+  resolved either direction) would have that legitimate crawl target
+  rejected by this same guard. No bypass flag is added to resolve that
+  tension in this story — per the operator's own explicit instruction,
+  the default stays guard-on/no-bypass unless and until the operator
+  decides otherwise against the named question.
+
+  **Named, accepted residual risk (grill round 3, finding 3 — not
+  silently assumed solved):** resolving a hostname via DNS and then
+  making a SEPARATE fetch() call afterward has an inherent TOCTOU
+  (time-of-check-to-time-of-use) gap — a malicious/rebinding DNS server
+  could return a public IP for the pre-fetch resolve-and-check, then a
+  different, private-range IP for fetch()'s own internal resolution at
+  actual connect time (the classic "DNS rebinding" SSRF-guard bypass). A
+  full fix (pinning the exact validated socket address for the real HTTP
+  connection while still presenting the correct hostname for TLS SNI/
+  certificate validation on https targets) requires connection-level
+  control this story's "first cut" (plain global fetch(), no custom
+  HTTP-client/dispatcher) does not have. This story's mitigation: the
+  guard re-resolves and re-checks immediately before EVERY individual
+  fetch (not once per whole crawl call — relevant for multi-page
+  crawling, where a DNS TTL could expire and rebind between page 1's
+  fetch and page 3's fetch), minimizing but not eliminating the single-
+  request window. The residual gap is named explicitly as R13 (below),
+  not silently treated as fully closed by "the guard exists."
+
 acceptance_criteria:
   - "Given a single URL and no depth/page-count option, when crawlAndIngest(url) runs, then it fetches EXACTLY that one page (never following any link) and feeds its extracted text through ro-10's ingestDocument() unchanged"
   - "Given a real robots.txt at the target host disallows the requested path, when crawlAndIngest(url) runs, then it fails loudly with a clear message naming the robots.txt disallow — the page is never fetched"
@@ -49,6 +97,11 @@ acceptance_criteria:
   - "Given a target URL's response body exceeds the SAME MAX_INGEST_BYTES constant ro-10 defines, when crawlAndIngest() runs, then it aborts the read once the cap is hit (never buffers the full oversized body into memory first) and fails loudly — one shared cap with ro-10, not a second, independently-drifting limit"
   - "Given a target URL returns 401 or 403, when crawlAndIngest() runs, then it fails loudly surfacing that status — no retry, no credential injection, no workaround attempted"
   - "Given a real per-request timeout is exceeded, when crawlAndIngest() runs, then the fetch is aborted (via the same AbortController/signal pattern already used elsewhere in this codebase) and the call fails loudly with a timeout-specific message, never hangs indefinitely"
+  - "Given a target URL whose hostname resolves (via real DNS resolution, e.g. node:dns's lookup()) to an address inside 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 (including 169.254.169.254), ::1, fc00::/7, or fe80::/10, when crawlAndIngest(url) runs, then the fetch is NEVER attempted — hostname resolution and the range check both happen BEFORE any network fetch — and the call fails loudly naming the SPECIFIC blocked range that matched (e.g. 'target resolves to 169.254.169.254, inside the link-local/cloud-metadata range 169.254.0.0/16')"
+  - "Given a target URL's hostname is itself a literal blocked IP (e.g. http://127.0.0.1/, no DNS resolution needed), when crawlAndIngest(url) runs, then the same range check catches it via direct IP-literal parsing, not only via DNS resolution — no gap between the hostname-is-a-name and hostname-is-an-IP cases"
+  - "Given a target URL whose hostname resolves to a genuinely public IP address, when crawlAndIngest(url) runs, then the SSRF guard allows the fetch to proceed — the guard is a real allow/deny check against actual resolved-IP ranges, never a blanket deny or a no-op that only logs"
+  - "Given the SSRF guard's implementation, when the module is reviewed, then no flag, option, or environment variable exists anywhere in the module to bypass the guard for any target — the default-on posture has no escape hatch in this story's cut, per the operator's explicit instruction"
+  - "Given multi-page crawling is opted into, when successive same-host requests are made, then the SSRF guard's hostname-resolve-and-check re-runs before EACH individual fetch (never checked once at the start of the whole crawl and cached/trusted for later pages) — verified directly by call-count instrumentation in the test showing one resolve-and-check per fetch, mitigating (not eliminating — named as R13's residual TOCTOU gap) a DNS-rebinding window between pages"
 
 steps:
   - id: research
@@ -56,15 +109,20 @@ steps:
       Confirm real robots.txt fetch/parse behavior needed (no existing
       robots.txt parser in this codebase — decide a minimal, testable
       disallow-check implementation, not a full spec-compliant parser, and
-      document that scope decision explicitly). Confirm this story's real
-      deployment context (operator-supplied or a product's own agent-
-      supplied URLs, not arbitrary untrusted end-user input) to decide
-      whether an SSRF guard (reject non-public/loopback/link-local target
-      hosts) is warranted for this story's acceptance criteria — document
-      the decision explicitly either way (design-discussion.md §7.8 open
-      question #5), never silently assumed safe. Read the existing
-      AbortController/timeout pattern (bin/mnemosyne-skill-helper.mjs) to
-      match it exactly.
+      document that scope decision explicitly). The SSRF guard itself is
+      NO LONGER a research-step decision (resolved firm, default-on, by
+      the operator directly — design-discussion.md §7.9, open question #5
+      RESOLVED): this step instead confirms the concrete implementation
+      shape — node:dns's lookup() (or equivalent) for hostname resolution,
+      node:net's isIP()/a real CIDR-range-membership check (no existing
+      in-repo precedent for either — confirmed via repo-wide grep, this is
+      genuinely new code, not a reuse) for the blocked-range list (127.0.0.0/8,
+      10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 including
+      169.254.169.254, ::1, fc00::/7, fe80::/10), and confirms both the
+      hostname-is-a-name (DNS lookup) and hostname-is-a-literal-IP (direct
+      parse, no DNS round-trip) cases are covered by the same check. Read
+      the existing AbortController/timeout pattern
+      (bin/mnemosyne-skill-helper.mjs) to match it exactly.
     agent: researcher
   - id: test-spec
     description: >
@@ -73,18 +131,26 @@ steps:
       automated suite) covering: single-page default, robots.txt disallow,
       multi-page hard-cap, real-timestamp rate-limit enforcement, non-text
       Content-Type rejection before body read, oversized-body abort, 401/403
-      loud failure, timeout loud failure, and (if research confirms it's
-      warranted) the SSRF guard.
+      loud failure, timeout loud failure, AND the SSRF guard (real DNS
+      lookup mocked/stubbed to resolve a test hostname into each blocked
+      range in turn, confirming the fetch is never attempted and the
+      specific matched range is named in the error; plus a literal-blocked-
+      IP-in-the-URL case with no DNS mocking needed; plus a genuinely-public
+      resolved-IP case proving the guard is a real allow/deny check, not a
+      blanket deny).
     agent: tester
     depends_on: [research]
   - id: implement
     description: >
       Create lib/mnemosyne/ingest/crawlAndIngest.ts implementing the
-      sequence above: robots.txt check -> Content-Type/size-bounded fetch
-      -> naive tag-stripping text extraction -> ro-10's ingestDocument()
-      call. Add a new "crawl_website" MCP tool (same registerTool pattern),
-      a CLI verb, and an HTTP route, mirroring ro-10's own three-surface
-      shape exactly.
+      sequence above: SSRF guard (resolve hostname -> check resolved IP
+      against the blocked-range list -> fail loudly naming the matched
+      range, BEFORE any fetch) -> robots.txt check -> Content-Type/size-
+      bounded fetch -> naive tag-stripping text extraction -> ro-10's
+      ingestDocument() call. Add a new "crawl_website" MCP tool (same
+      registerTool pattern), a CLI verb, and an HTTP route, mirroring
+      ro-10's own three-surface shape exactly. No flag/option/env var
+      anywhere in the module bypasses the SSRF guard.
     agent: developer
     depends_on: [test-spec]
   - id: review
@@ -95,7 +161,11 @@ steps:
       genuinely enforced with real elapsed-time proof, Content-Type checked
       before any body read, byte cap aborts an in-flight read rather than
       buffering first, no credential/auth-bypass code path exists anywhere
-      in the module.
+      in the module, SSRF guard genuinely runs BEFORE EVERY individual
+      fetch (not once per crawl, not a check that races the fetch or runs
+      after a redirect), and confirm by reading the diff (not trusting the
+      description) that no bypass flag was introduced anywhere in the
+      module.
     agent: reviewer
     depends_on: [implement]
   - id: integrate
@@ -117,7 +187,7 @@ context:
 
 files_to_modify:
   - file: lib/mnemosyne/ingest/crawlAndIngest.ts
-    change: "New file: robots.txt check, bounded/rate-limited fetch, naive text extraction, hands off to ingestDocument()."
+    change: "New file: SSRF guard (DNS-resolve + blocked-range check before any fetch), robots.txt check, bounded/rate-limited fetch, naive text extraction, hands off to ingestDocument()."
   - file: lib/mnemosyne/ingest/crawlAndIngest.test.ts
     change: "New file: tests per acceptance criteria against a local throwaway test HTTP server."
   - file: bin/mnemosyne-mcp.mjs
@@ -138,10 +208,12 @@ design_decisions:
     rationale: "Politeness/legal-safety requirement named explicitly by the operator's task instruction. The absence of any bypass code path is a stronger guarantee than a runtime check that merely defaults to respecting it, mirroring ro-06's own 'no delete path exists in the module at all' additive-only discipline."
   - decision: "Content-Type and byte-size checks happen before/during the body read, never after buffering the full response."
     rationale: "Guards against a malicious or merely huge response ballooning memory/storage from a single crawl call — a real, testable bound, not an after-the-fact truncation."
+  - decision: "SSRF guard (reject resolved-IP targets inside loopback/private-network/link-local/cloud-metadata ranges) is FIRM and default-on, with no bypass flag anywhere in the module."
+    rationale: "Amendment, round 3 (design-discussion.md §7.9): the operator's own explicit answer, verbatim, 'SSRF, lets put a guard in place unless that blocks something explicitly.' Round-1/round-2 planning left this as a research-step judgment call (R12); the operator has now made the call directly, resolving open question #5. Research re-reading this story's own §7.3/§7.6 real deployment context found the guard is the safe default regardless of caller trust, since the URL ultimately reaches this codebase's own network-reachable MCP tool/HTTP route, not a code-enforced trust boundary. One real, named tension this decision does NOT resolve (a Mode B product whose 'website' is a legitimate internal staging deployment) is surfaced as a new open question (§7.8 #6) rather than silently worked around with an undocumented bypass."
 
 cross_cutting:
   - concern: external-fetch-safety
-    action: "NEW, named concern (not in the generic .pHive/cross-cutting-concerns.yaml list, mirroring ro-06's own no-Qdrant-wipe precedent) — applies to this story by name. Its own acceptance criteria (robots.txt compliance, rate limiting, size/time ceilings, no-auth-bypass) ARE this concern's implementation checklist."
+    action: "NEW, named concern (not in the generic .pHive/cross-cutting-concerns.yaml list, mirroring ro-06's own no-Qdrant-wipe precedent) — applies to this story by name. Its own acceptance criteria (robots.txt compliance, rate limiting, size/time ceilings, no-auth-bypass, and NOW the firm default-on SSRF guard per the operator's round-3 answer) ARE this concern's implementation checklist."
   - concern: loud-failure
     action: "robots.txt disallow, non-text Content-Type, oversized body, 401/403, and timeout all fail loudly with a distinguishable message each, per acceptance criteria — never a silent skip or a generic error."
   - concern: existing-infrastructure
@@ -158,13 +230,16 @@ risks:
     mitigation: "Named explicitly (R11, design-discussion.md §7.6) and deliberately NOT solved here — deferred to whoever eventually builds dedup/staleness handling, the same class of forward-compatibility note ro-02 already carries toward m-06-continuous-indexing for the file-index manifest."
   - severity: medium
     description: "A caller-supplied crawl target could point at an internal/private-network URL (e.g. a cloud-metadata endpoint or another service on the same host), turning this feature into an unintended network probe (R12, design-discussion.md §7.6)."
-    mitigation: "This story's research step is a BLOCKING first step that must explicitly decide, and document, whether an SSRF guard is warranted for this story's real deployment context — not silently assumed safe because the primitive is 'just fetch().'"
+    mitigation: "RESOLVED, round 3 (design-discussion.md §7.9): no longer a research-step judgment call — the operator's own explicit instruction makes the SSRF guard firm and default-on, with resolved-IP-range checks (127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 including 169.254.169.254, ::1, fc00::/7, fe80::/10) run before every fetch, no bypass flag anywhere in the module. The one real tension this does not resolve (a legitimate internal-staging crawl target) is named as a new open question (§7.8 #6), not silently worked around."
+  - severity: medium
+    description: "R13 (new, grill round 3) — DNS-rebinding TOCTOU gap: the SSRF guard's own DNS resolve-and-check happens as a step separate from fetch()'s own internal DNS resolution at actual connect time; a DNS server designed to rebind between those two resolutions could return a public IP for the guard's check and a private IP for the real connection, bypassing the guard entirely."
+    mitigation: "Not solved in this story's first cut (would require connection-level control over the actual socket address, e.g. a custom fetch dispatcher/agent, beyond plain global fetch()). Named explicitly rather than silently assumed closed by 'the guard exists' — mitigated partially by re-running the guard immediately before EVERY individual fetch (not cached/checked once per whole crawl call), minimizing the exploitable window to a single request's resolve-to-connect gap rather than eliminating it. A full fix is a genuine, separate follow-on decision for whoever hardens this further."
 
 references:
   - path: .pHive/epics/mnemosyne-repo-onboarding/docs/design-discussion.md
-    relevant_excerpt: "§7.3 — the full non-goals list, scope limits, politeness/rate-limiting requirements, size/time bounds, and the new external-fetch-safety concern."
+    relevant_excerpt: "§7.3 — the full non-goals list, scope limits, politeness/rate-limiting requirements, size/time bounds, and the new external-fetch-safety concern. §7.9 — round-3 amendment resolving open question #5: SSRF guard is firm and default-on; new open question #6 (internal-staging-target tension) surfaced, not resolved."
   - path: .pHive/epics/mnemosyne-repo-onboarding/docs/grill-record.md
-    relevant_excerpt: "Round 2, finding 2.3.1 — this story is held to ro-06's exact structural rigor, not treated as lower-risk just because fetch() itself is simple; finding 2.4.1 — cross-cutting concerns explicitly re-run for this story."
+    relevant_excerpt: "Round 2, finding 2.3.1 — this story is held to ro-06's exact structural rigor, not treated as lower-risk just because fetch() itself is simple; finding 2.4.1 — cross-cutting concerns explicitly re-run for this story. Round 3 — real findings/resolutions against the firm SSRF guard's acceptance criteria and implementation shape."
   - path: .pHive/epics/mnemosyne-repo-onboarding/stories/ro-06-collection-creation-and-scope-mapping.yaml
     relevant_excerpt: "The rigor bar this story is held to: research-gated first step, explicit non-goals, independent reviewer re-verification, a new named safety concern not in the generic list."
 

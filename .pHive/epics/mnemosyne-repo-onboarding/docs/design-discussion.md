@@ -630,19 +630,40 @@ mechanism is introduced anywhere in this story.
 
 **Genuinely open — need the operator's explicit answer before `ro-10`/`ro-11` execution:**
 
-4. Should PDF ingestion be added as a fast-follow story once `ro-10`'s
+4. ~~Should PDF ingestion be added as a fast-follow story once `ro-10`'s
    plain-text/Markdown cut ships, and if so, which parsing dependency
    (there is no existing precedent in this codebase to default to)? This
    amendment's `ro-10` deliberately excludes it — named here so it is not
    silently forgotten, not because the operator's "PDF" mention was
-   dropped.
-5. Does `ro-11`'s crawl target ever need SSRF protection (rejecting
+   dropped.~~ **RESOLVED, round 3 — see §7.9.** PDF ingestion is real
+   scope, not a fast-follow: new story `ro-13-pdf-document-ingestion`,
+   `unpdf@^1.8.1` chosen as the parsing dependency.
+5. ~~Does `ro-11`'s crawl target ever need SSRF protection (rejecting
    internal/private-network URLs), or is this story's real deployment
    context (an operator or a product's own agent supplying URLs, not
    arbitrary untrusted end-user input) low-risk enough that the research
    step can document the decision and move on without adding a guard? See
    risk R12 above — resolved as a required, explicit research-step
-   decision inside `ro-11`, not blocking planning.
+   decision inside `ro-11`, not blocking planning.~~ **RESOLVED, round 3
+   — see §7.9.** The operator's own explicit answer makes the SSRF guard
+   firm and default-on, no bypass flag; see `ro-11-bounded-website-crawl
+   .yaml`'s revised acceptance criteria (the new resolved-IP-range-check
+   criteria, immediately following the existing timeout criterion).
+6. **(New, round 3, NOT resolved.)** Does the epic ever need a legitimate
+   way for `ro-11`'s crawl target to reach a private-network address? A
+   concrete, plausible (not merely hypothetical) case surfaced during
+   round-3 research: a Mode B product being onboarded while its own
+   "website" is still an internal-only staging deployment (this epic's
+   own Mode B narrative, §1/§7, is explicitly about products still under
+   active development — an internal-only staging URL for such a product
+   is a realistic, not contrived, scenario). The firm, default-on SSRF
+   guard (§7.9) would reject that legitimate target with no escape hatch
+   in this story's current cut. No bypass flag has been added to resolve
+   this — per the operator's own explicit instruction ("SSRF, lets put a
+   guard in place unless that blocks something explicitly"), the default
+   stays guard-on/no-bypass, and this tension is surfaced here for the
+   operator's own future call rather than silently worked around or
+   silently ignored.
 
 **Resolved during this amendment pass (no longer open):**
 
@@ -652,3 +673,175 @@ mechanism is introduced anywhere in this story.
   covered by `ro-02`'s existing reuse of `syncAllHarnesses()` /
   `la-07`'s already-hook-aware mandate text; one small printed-output line
   added to `ro-03`.
+
+**Resolved during round 3 (see §7.9 for the full trail):**
+
+- Open question #4 (PDF ingestion): resolved yes, real scope now — new
+  story `ro-13-pdf-document-ingestion`.
+- Open question #5 (SSRF guard): resolved firm/default-on, no bypass —
+  `ro-11`'s acceptance criteria revised accordingly.
+
+## 7.9 Amendment, round 3 (2026-08-19, same day) — PDF ingestion is real
+scope, SSRF guard is firm and default-on
+
+Two of this epic's own open questions (§7.8 #4 and #5) were left open
+pending the operator's explicit answer. The operator answered both
+directly, in the same session as this amendment. `docs/grill-record.md`
+round 3 (5/5 findings resolved) grills these two changes at the same
+rigor as rounds 1/2; this section documents the resolutions themselves.
+Everything in §§1-7.8 above stands unchanged except the two open-question
+annotations updated in place, immediately above.
+
+### 7.9.1 Open question #4 RESOLVED — PDF ingestion, new story `ro-13`
+
+**Operator's own words, verbatim:** PDF ingestion must happen, not be
+deferred to an unscoped follow-on.
+
+New story `ro-13-pdf-document-ingestion`
+(`.pHive/epics/mnemosyne-repo-onboarding/stories/ro-13-pdf-document-
+ingestion.yaml`), `depends_on: [ro-10-document-ingestion-primitive]`.
+Extends the SAME `ingestDocument()` primitive `ro-10` ships — never a
+second, parallel ingestion path, per the operator's explicit instruction
+and this epic's own established "one primitive, multiple input formats"
+discipline (`ro-11` already does the same thing for crawled HTML text).
+
+**Real dependency research, npm registry and tarball read directly (not
+assumed):**
+
+| | `pdf-parse@2.4.5` | `unpdf@1.8.1` (chosen) |
+|---|---|---|
+| Required deps | `pdfjs-dist` + `@napi-rs/canvas` (native, REQUIRED) | none (registry-confirmed: no `dependencies` field) |
+| `@napi-rs/canvas` | hard dependency, always installed | `peerDependency`, `peerDependenciesMeta.optional: true` — never installed unless the consumer imports image-rendering features this story never calls |
+| Native/WASM binaries in package | yes (`@napi-rs/canvas` native addon) | zero — tarball-confirmed, zero `.node`/`.wasm` files in 157 packaged files |
+| Vendored PDF engine | pulls external `pdfjs-dist` | vendors Mozilla's own `pdf.js` directly (`dist/pdfjs.mjs`, 1.68MB) — the same parser shipped in every Firefox install |
+| `engines.node` | `>=20.16.0 <21 \|\| >=22.3.0` | `>=22` |
+| Maintainer | community fork (mehmet-kozan) | UnJS collective (`unbuild`/`ofetch`/`h3` maintainers) |
+| Last publish (at research time) | 2025-10-29 | 2026-08-13 (6 days before this amendment) |
+| Weekly downloads | ~6.99M | ~2.35M |
+
+`pdf-parse` was rejected specifically because its hard, required
+dependency on `@napi-rs/canvas` (a native N-API addon) is exactly the
+class of dependency this codebase already has one avoidable instance of
+(`better-sqlite3`, whose native-binding crash is a named, already-
+documented pre-existing test flake per `mnemosyne-memory-levels`'s own
+`horizontal-plan.md`) and has no reason to add a second. `unpdf`'s only
+reference to `@napi-rs/canvas` is an unused, optional peer dependency for
+a feature (`renderPageAsImage`) this story never imports. Depending on
+raw `pdfjs-dist` directly was also considered and rejected: its current
+version (6.2.108) requires an even stricter Node floor
+(`>=22.13.0 || >=24`) with no packaging convenience `unpdf` doesn't
+already provide for text-only extraction. Grill round 3 pushed this
+verification one level deeper than the declared-dependency graph: the
+vendored `dist/pdfjs.mjs` bundle itself was grepped directly for
+`require(`/`process.dlopen`/`.node`-suffixed dynamic-load patterns — zero
+matches, confirming no native module loads at runtime through an
+undeclared path either.
+
+**Real, honest tradeoff, not silently absorbed:** `unpdf`'s `engines.node`
+floor (`>=22`) is stricter than this package's own current declared floor
+(`>=20`). This repo's actual CI (`ci.yml`, `node-version: '22'`) and local
+dev environment (`node --version` -> v24.18.1 at research time) both
+already satisfy it, and the entire modern `pdf.js` ecosystem has moved
+past Node 20 (confirmed by `pdfjs-dist`'s own even-stricter floor above)
+— not a quirk unique to this one dependency choice. `package.json`'s
+`engines.node` is bumped from `>=20` to `>=22` as a real, named,
+package-wide effect of this story (npm's `engines` field is not
+conditional per feature), called out explicitly in `ro-09`'s CHANGELOG
+entry rather than silently absorbed as a PDF-only change.
+
+**Bounded scope, mirroring `ro-10`'s own discipline exactly (never parse
+first, bound later):** a new `MAX_PDF_SOURCE_BYTES` constant caps the raw
+PDF file's byte size BEFORE `unpdf`'s `getDocumentProxy()` is ever
+called — deliberately a separate constant from `ro-10`'s existing
+`MAX_INGEST_BYTES` (the two measure structurally different things:
+compressed binary source bytes vs. already-extracted text bytes; a
+PDF's byte size is dominated by embedded images/fonts, not proportional
+to its text content). After extraction, the resulting text still flows
+through `ro-10`'s existing, unmodified `MAX_INGEST_BYTES` enforcement —
+zero new post-extraction size logic. Corrupt/encrypted PDFs fail loudly:
+confirmed directly from the vendored `pdf.js` source that it throws real,
+named, distinguishable exception classes (`PasswordException` for
+encrypted/password-protected PDFs, `InvalidPDFException` for corrupt/
+malformed structure) — never a silent empty-content ingest.
+Page/chunk granularity is preserved explicitly: `unpdf`'s `extractText()`
+returns one string per page; each page's text runs through `ro-10`'s
+existing chunker independently, and every resulting chunk's tag carries
+BOTH page number and chunk-within-page index — a `recall()` hit's
+provenance traces back to a real page, not an anonymous flattened
+position.
+
+**Full acceptance criteria, dependencies, risks, cross-cutting
+evaluation:** see `ro-13-pdf-document-ingestion.yaml` in full.
+`epic.yaml`'s `stories:` list and `ro-09`'s `depends_on` both extended to
+include `ro-13`.
+
+### 7.9.2 Open question #5 RESOLVED — `ro-11`'s SSRF guard is firm and
+default-on
+
+**Operator's own words, verbatim:** "SSRF, lets put a guard in place
+unless that blocks something explicitly."
+
+This is no longer a research-step judgment call (as rounds 1/2 left it,
+risk R12) — `ro-11-bounded-website-crawl.yaml`'s acceptance criteria are
+revised to make the guard a firm requirement: the target hostname is
+resolved and the resolved IP is checked against the blocked ranges
+(`127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`,
+`169.254.0.0/16` including the `169.254.169.254` cloud-metadata address,
+`::1`, `fc00::/7`, `fe80::/10`) BEFORE any fetch is attempted, failing
+loudly and naming the specific matched range. No flag, option, or
+environment variable exists anywhere in the module to bypass the guard —
+confirmed as its own explicit acceptance criterion, not merely a default
+that a later option could quietly override.
+
+**The escape-hatch instruction, honored explicitly:** the operator's own
+instruction was conditional — "unless that blocks something explicitly."
+Research re-read `ro-11`'s own §7.3/§7.6 real-deployment-context framing
+and grill round 2's finding 2.3.1 (this story's caller is "an operator or
+a product's own agent supplying URLs, not arbitrary untrusted end-user
+input") looking for a genuine conflict. **One real, concrete tension was
+found, named explicitly rather than silently resolved either direction:**
+a Mode B product being onboarded while its own "website" is still an
+internal-only staging deployment — plausible, not contrived, given this
+epic's own Mode B narrative is explicitly about products still under
+active development. That legitimate target would be rejected by the same
+guard, with no escape hatch in this story's current cut. Per the
+operator's own explicit instruction, **no bypass flag was added** to
+resolve this tension — the default stays guard-on/no-bypass, full stop,
+and the tension is now open question #6 (§7.8, newly added) for the
+operator's own future call, not silently worked around or silently
+ignored.
+
+**A second real gap surfaced by grill round 3, finding 3.3.1, and
+resolved (not silently left as a false sense of completeness):** a naive
+"resolve DNS once, then fetch separately" implementation has a
+DNS-rebinding TOCTOU (time-of-check-to-time-of-use) gap — a rebinding DNS
+server could return a public IP for the guard's own check and a private
+IP for `fetch()`'s own later internal resolution, bypassing the guard
+entirely despite it being real, present code. A full fix (pinning the
+exact validated socket for the actual connection while preserving TLS
+SNI correctness) requires connection-level control this story's "first
+cut" (plain global `fetch()`) does not have — named explicitly as a new
+risk, R13, in `ro-11`, not silently treated as closed. Mitigated (not
+eliminated): the guard re-resolves and re-checks immediately before
+EVERY individual fetch, including each page of a multi-page crawl, never
+cached/trusted once for the whole crawl call — a new, explicit
+acceptance criterion requires call-count-instrumented proof of this in
+`ro-11`'s own tests.
+
+**Full acceptance criteria, risks (R12 updated, R13 new), design
+decisions, and implementation-step revisions:** see
+`ro-11-bounded-website-crawl.yaml` in full — no change to `ro-11`'s
+`depends_on`, non-goals, robots.txt/rate-limit/size-bound requirements,
+or three-surface (MCP tool/CLI/HTTP route) shape; this round's changes
+are additive to the existing story, not a re-scope.
+
+### 7.9.3 Scope discipline confirmed
+
+Both changes land as: one new story (`ro-13`) that extends an existing
+primitive rather than duplicating it, and one story's acceptance criteria
+revised in place (`ro-11`) rather than re-architected. `epic.yaml`'s
+`version_bump` stays `minor`: `ro-13` adds a new dependency and bumps
+`engines.node`, but introduces zero breaking changes to any existing
+CLI/MCP/HTTP contract; `ro-11`'s revision only tightens an
+already-planned story's own acceptance criteria before any of its code
+was written. No build-out has started on either story — planning only.

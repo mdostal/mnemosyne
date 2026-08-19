@@ -4,7 +4,7 @@ title: Full-suite regression, version bump, CHANGELOG, README/install docs
 status: pending
 complexity: low
 methodology: classic
-depends_on: [ro-03-agent-init-build-flag, ro-07-onboard-new-collection-full-mode-a, ro-08-role-metadata-reachability-verification, ro-10-document-ingestion-primitive, ro-11-bounded-website-crawl, ro-12-two-explicit-install-paths]
+depends_on: [ro-03-agent-init-build-flag, ro-07-onboard-new-collection-full-mode-a, ro-08-role-metadata-reachability-verification, ro-10-document-ingestion-primitive, ro-11-bounded-website-crawl, ro-12-two-explicit-install-paths, ro-13-pdf-document-ingestion]
 
 description: |
   Closes the epic: full-suite regression (`npm test`, `npx tsc --noEmit`,
@@ -25,6 +25,16 @@ description: |
   verbs + `ingest_document`/`crawl_website` MCP tools + `POST
   /ingest`/`POST /crawl` routes (ro-10/ro-11), and the sidecar/full-system
   install-path documentation fork (ro-12).
+
+  **Amendment, round 3 (design-discussion.md §7.9):** `depends_on` further
+  extended to require `ro-13` (PDF ingestion). The CHANGELOG section
+  additionally names: `.pdf` as a supported `ingestDocument()` format, the
+  new `unpdf` dependency, and the resulting `engines.node` floor raise
+  (`>=20` -> `>=22`) — named explicitly as a package-wide effect, not
+  buried as a PDF-only footnote. This story's regression pass also
+  confirms `npx tsc --noEmit` and `npm test` are clean under the new
+  `engines.node` floor (i.e., the CI/dev Node version actually in use
+  satisfies it), not merely that the PDF-path tests themselves pass.
 
   Also runs one real, end-to-end smoke test per mode against a disposable
   temp repo (mirroring `test/agent-cli.mjs`'s isolated-temp-directory

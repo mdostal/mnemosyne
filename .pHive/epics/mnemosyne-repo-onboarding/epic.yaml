@@ -80,6 +80,26 @@ notes: |
   is additive (new optional CLI flags, new CLI verbs/MCP tools/HTTP routes,
   new printed docs), zero breaking changes to any existing contract.
 
+  **Amendment, round 3 (2026-08-19, same day, still before any story's
+  build started):** the operator answered two of this epic's own open
+  questions (§7.8) directly: (1) PDF ingestion must happen, not be
+  deferred — new story ro-13, extending ro-10's own ingestDocument()
+  primitive with a real PDF-text-extraction path (unpdf@1.8.1 chosen,
+  real registry/tarball research, no second native-binding dependency
+  introduced). (2) ro-11's SSRF guard is now firm and default-on, no
+  bypass flag, per the operator's own words: "SSRF, lets put a guard in
+  place unless that blocks something explicitly." One new, still-open
+  question surfaced by this round's research (§7.8 #6, NOT resolved): a
+  Mode B product whose "website" is a legitimate internal staging
+  deployment would have that crawl target rejected by the same guard — no
+  bypass was added to work around it; named explicitly for the operator's
+  own future call. See docs/design-discussion.md §7.9 and
+  docs/grill-record.md round 3 (5/5 findings resolved) for the full trail.
+  version_bump stays minor: ro-13 adds a new dependency (unpdf) and bumps
+  package.json's engines.node floor (>=20 -> >=22), but introduces zero
+  breaking changes to any existing CLI/MCP/HTTP contract — same standard
+  as round 2's amendment.
+
 stories:
   - id: ro-01-memory-levels-scoped-extraction
     title: Extract GET /memory-levels computation into a repo-scoped, reusable function
@@ -141,7 +161,17 @@ stories:
     complexity: low
     depends_on: [ro-03-agent-init-build-flag, ro-07-onboard-new-collection-full-mode-a]
 
+  # --- Amendment, round 3 (2026-08-19, same day): PDF ingestion into the
+  # SAME ro-10 primitive (open question #4, RESOLVED), and a firm,
+  # default-on SSRF guard for ro-11 (open question #5, RESOLVED). See
+  # docs/design-discussion.md §7.9 / docs/grill-record.md round 3.
+
+  - id: ro-13-pdf-document-ingestion
+    title: PDF text extraction into the SAME ingestDocument() primitive (no second ingestion path)
+    complexity: medium
+    depends_on: [ro-10-document-ingestion-primitive]
+
   - id: ro-09-full-regression-release
     title: Full-suite regression, version bump, CHANGELOG, README/install docs
     complexity: low
-    depends_on: [ro-03-agent-init-build-flag, ro-07-onboard-new-collection-full-mode-a, ro-08-role-metadata-reachability-verification, ro-10-document-ingestion-primitive, ro-11-bounded-website-crawl, ro-12-two-explicit-install-paths]
+    depends_on: [ro-03-agent-init-build-flag, ro-07-onboard-new-collection-full-mode-a, ro-08-role-metadata-reachability-verification, ro-10-document-ingestion-primitive, ro-11-bounded-website-crawl, ro-12-two-explicit-install-paths, ro-13-pdf-document-ingestion]
