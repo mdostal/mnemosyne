@@ -81,6 +81,36 @@ export interface Persona {
    * by both which tier's store to look in and which scopeId within it.
    */
   parentRefs?: { tier: Tier; scopeId: string }[];
+  /**
+   * Post-approval provenance note (puf-03, closing pu-14's FLAGGED finding
+   * D3): once an agent-proposed draft is approved, the resulting live
+   * persona is otherwise indistinguishable from a hand-typed one --
+   * agent-provenance-trust.md named that distinguishability "a distinctive,
+   * concrete strength" of this design lineage, so losing it at approve time
+   * was a real regression, not cosmetic. Populated ONLY by the approve route
+   * (server.ts's `POST /persona/draft/:tier/:scopeId/approve`), and ONLY
+   * when the approved draft itself carried real `proposedBy`/`proposedAt`
+   * values -- a human-typed draft with neither has no `origin` at all,
+   * never a fabricated one (schema-enforced below by `assertValidPersona`,
+   * not left to caller discipline). `proposedBy`/`proposedAt` are copied
+   * verbatim from the draft (persona-draft-store.ts's `DraftPersonaCandidate`);
+   * `approvedAt` is NOT one of those two -- a draft has no notion of its own
+   * future approval time, so this is a fresh, real timestamp the approve
+   * route captures itself at the moment of commit, never copied or
+   * inferred. All three fields travel together or not at all -- see
+   * `assertValidPersona`'s `origin` check.
+   */
+  origin?: PersonaOrigin;
+}
+
+/** {@link Persona.origin}'s shape -- schema-validated by `assertValidPersona`, never an untyped bag. */
+export interface PersonaOrigin {
+  /** Verbatim from the approved draft's own `proposedBy` (e.g. 'agent'; pf-06 also allows other values for a human-attached draft). */
+  proposedBy: string;
+  /** Verbatim from the approved draft's own `proposedAt` (ISO 8601) -- when the draft was originally proposed, not when it was approved. */
+  proposedAt: string;
+  /** When THIS persona was approved -- captured fresh by the approve route itself (server.ts), never copied from the draft. */
+  approvedAt: string;
 }
 
 /**
@@ -262,6 +292,31 @@ export function assertValidPersona(candidate: unknown, expectedTier: Tier): asse
         "Invalid persona: 'parentRefs', if present, must be an array of {tier, scopeId} pairs " +
           "whose tier is one of top-orchestrator, company-director, project-orchestrator -- a " +
           'repo-local persona cannot name another repo-local persona as its parent.',
+      );
+    }
+  }
+
+  // puf-03: origin, if present, is schema-validated -- {proposedBy,
+  // proposedAt, approvedAt}, all non-empty strings, ALL THREE together or
+  // not at all (a partially-populated origin, e.g. proposedBy with no
+  // approvedAt, would render a broken/misleading provenance note --
+  // see ui/app.js). This is the single real enforcement point for that
+  // shape; server.ts's approve route only ever constructs a fully-populated
+  // origin (or omits the key entirely), but this check does not trust that
+  // caller discipline alone -- any future write path (CLI/MCP/skill-harness)
+  // that starts passing an `origin` through gets the same guarantee for free.
+  if (candidate.origin !== undefined) {
+    const origin = candidate.origin;
+    const isNonEmptyString = (v: unknown): v is string => typeof v === 'string' && v.trim() !== '';
+    if (
+      !isPlainRecord(origin) ||
+      !isNonEmptyString(origin.proposedBy) ||
+      !isNonEmptyString(origin.proposedAt) ||
+      !isNonEmptyString(origin.approvedAt)
+    ) {
+      throw new Error(
+        "Invalid persona: 'origin', if present, must be {proposedBy: string, proposedAt: string, " +
+          'approvedAt: string}, all non-empty -- never partially populated.',
       );
     }
   }

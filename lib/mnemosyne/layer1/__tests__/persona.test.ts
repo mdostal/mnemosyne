@@ -178,6 +178,46 @@ describe('assertValidPersona', () => {
     expect(() => assertValidPersona('not-an-object', 'code-architect')).toThrow();
     expect(() => assertValidPersona(42, 'code-architect')).toThrow();
   });
+
+  // puf-03-post-approval-provenance-note: origin schema validation.
+  describe('origin', () => {
+    it('accepts a persona with no origin at all (optional field)', () => {
+      const candidate = validPersona();
+      expect(() => assertValidPersona(candidate, 'code-architect')).not.toThrow();
+    });
+
+    it('accepts a fully-populated origin', () => {
+      const candidate = validPersona({
+        origin: { proposedBy: 'agent', proposedAt: '2026-01-01T00:00:00.000Z', approvedAt: '2026-01-02T00:00:00.000Z' },
+      });
+      expect(() => assertValidPersona(candidate, 'code-architect')).not.toThrow();
+    });
+
+    it('rejects a non-object origin', () => {
+      const candidate = { ...validPersona(), origin: 'agent' };
+      expect(() => assertValidPersona(candidate, 'code-architect')).toThrow(/origin/i);
+    });
+
+    it('rejects an origin missing proposedBy', () => {
+      const candidate = { ...validPersona(), origin: { proposedAt: '2026-01-01T00:00:00.000Z', approvedAt: '2026-01-02T00:00:00.000Z' } };
+      expect(() => assertValidPersona(candidate, 'code-architect')).toThrow(/origin/i);
+    });
+
+    it('rejects an origin missing proposedAt', () => {
+      const candidate = { ...validPersona(), origin: { proposedBy: 'agent', approvedAt: '2026-01-02T00:00:00.000Z' } };
+      expect(() => assertValidPersona(candidate, 'code-architect')).toThrow(/origin/i);
+    });
+
+    it('rejects an origin missing approvedAt', () => {
+      const candidate = { ...validPersona(), origin: { proposedBy: 'agent', proposedAt: '2026-01-01T00:00:00.000Z' } };
+      expect(() => assertValidPersona(candidate, 'code-architect')).toThrow(/origin/i);
+    });
+
+    it('rejects an origin with an empty-string field', () => {
+      const candidate = { ...validPersona(), origin: { proposedBy: '', proposedAt: '2026-01-01T00:00:00.000Z', approvedAt: '2026-01-02T00:00:00.000Z' } };
+      expect(() => assertValidPersona(candidate, 'code-architect')).toThrow(/origin/i);
+    });
+  });
 });
 
 describe('getPersonaContent', () => {

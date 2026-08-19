@@ -1270,6 +1270,29 @@ function personaCell(text) {
   return td;
 }
 
+// puf-03-post-approval-provenance-note: a persistent one-line note
+// ("Originally proposed by <proposedBy>, approved <date>.") rendered
+// directly under a live persona row's display name whenever that row's
+// underlying live record carries a real `origin` (persona.ts's
+// schema-validated {proposedBy, proposedAt, approvedAt} -- populated ONLY
+// by server.ts's approve route, cleared by any direct re-save; see both
+// routes' own comments). Never fabricated: this reads only what's actually
+// on the record, same "never invent provenance" convention
+// isAgentProposedDraft()/draftProvenanceLabel() already follow for drafts.
+// `approvedAt` (an ISO timestamp) is shown as a plain locale date, not the
+// full timestamp -- readable at a glance, matching the note's own "<date>"
+// phrasing. Returns null (renders nothing) when `origin` is absent/partial
+// -- this is the one place that decides whether the note appears at all.
+function personaOriginNote(origin) {
+  if (!origin || typeof origin.proposedBy !== "string" || typeof origin.approvedAt !== "string") return null;
+  const parsed = new Date(origin.approvedAt);
+  const dateText = Number.isNaN(parsed.getTime()) ? origin.approvedAt : parsed.toLocaleDateString();
+  const p = document.createElement("div");
+  p.className = "persona-origin-note";
+  p.textContent = `Originally proposed by ${origin.proposedBy}, approved ${dateText}.`;
+  return p;
+}
+
 // ============================================================================
 // pw-04-layer-stack-visibility: layer-stack visibility section.
 // Own DOM refs, own small loader function. pu-11-layer-stack-integration-
@@ -1759,6 +1782,15 @@ function renderPersonas() {
         snippet.textContent = sourceSummarySnippet(row.draft.sourceSummary);
         displayNameTd.appendChild(snippet);
       }
+
+      // puf-03-post-approval-provenance-note: the live record's own
+      // `origin` -- `row.origin` for a plain live row, `row.live.origin`
+      // for a needs-review-update row (a live record with a pending draft
+      // on top is still the SAME approved persona, still carries its own
+      // real provenance). A needs-review-only row (no live record yet) has
+      // neither, so personaOriginNote() naturally renders nothing for it.
+      const originNote = personaOriginNote(row.origin || (row.live && row.live.origin));
+      if (originNote) displayNameTd.appendChild(originNote);
 
       tr.appendChild(personaCell(row.tier));
       tr.appendChild(personaCell(row.scopeId));

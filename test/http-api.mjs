@@ -863,6 +863,60 @@ async function main() {
       "POST /persona/draft/.../approve -> the archived draft file genuinely exists on disk with the original draft content (archive-by-move, not delete)",
     );
 
+    // --- puf-03-post-approval-provenance-note: acceptance criterion 5 -----
+    // An agent-proposed draft, approved -> the committed persona carries a
+    // real `origin`. Then a DIRECT (non-draft) re-save of that SAME persona
+    // via POST /persona/:tier/:scopeId -- even one whose body still carries
+    // the old `origin` verbatim (e.g. a client that fetched-then-resubmitted
+    // the live record) -- always CLEARS it. This is the explicit, documented
+    // decision server.ts's direct-write route comment names (never an
+    // accidental side effect of whatever a client happens to send).
+    const puf03AgentDraftBody = {
+      tier: "company-director",
+      scopeId: "puf03-origin-direct-resave",
+      displayName: "PUF03 Origin Director",
+      scope: "Owns PUF03's origin-on-direct-resave test scope.",
+      sections: [{ heading: "What this tier owns", body: "PUF03_ORIGIN_MARKER" }],
+      proposedBy: "agent",
+      proposedAt: "2026-01-01T00:00:00.000Z",
+    };
+    await j("POST", "/persona/draft/company-director/puf03-origin-direct-resave", puf03AgentDraftBody);
+    await j("POST", "/persona/draft/company-director/puf03-origin-direct-resave/approve", undefined);
+
+    const puf03AfterApprove = await readWrittenGlobalPersona(fakeHome, "company-director", "puf03-origin-direct-resave");
+    ok(
+      puf03AfterApprove.persona.origin?.proposedBy === "agent" &&
+        puf03AfterApprove.persona.origin?.proposedAt === "2026-01-01T00:00:00.000Z" &&
+        typeof puf03AfterApprove.persona.origin?.approvedAt === "string",
+      `puf-03 AC5 setup: agent-proposed draft approved via the draft route -> committed persona carries a real origin (real filesystem read, got ${JSON.stringify(puf03AfterApprove.persona.origin)})`,
+    );
+
+    const puf03DirectResaveBody = {
+      ...puf03AgentDraftBody,
+      scope: "PUF03_DIRECT_EDIT_MARKER -- edited directly, not through a draft.",
+      origin: puf03AfterApprove.persona.origin, // simulates a client resubmitting the live record's own origin unchanged
+    };
+    delete puf03DirectResaveBody.proposedBy;
+    delete puf03DirectResaveBody.proposedAt;
+    const puf03DirectResave = await j("POST", "/persona/company-director/puf03-origin-direct-resave", puf03DirectResaveBody);
+    ok(
+      puf03DirectResave.status === 201,
+      `puf-03 AC5: direct re-save of the same persona -> 201 (got ${puf03DirectResave.status})`,
+    );
+    const puf03AfterDirectResave = await readWrittenGlobalPersona(fakeHome, "company-director", "puf03-origin-direct-resave");
+    ok(
+      puf03AfterDirectResave.persona.scope === puf03DirectResaveBody.scope,
+      "puf-03 AC5: the direct re-save's own edited content genuinely landed on disk (real filesystem read)",
+    );
+    ok(
+      !Object.prototype.hasOwnProperty.call(puf03AfterDirectResave.persona, "origin"),
+      `puf-03 AC5: a direct (non-draft) re-save CLEARS 'origin' even though the posted body still carried the old one -- the documented decision (real filesystem read, got keys=${JSON.stringify(Object.keys(puf03AfterDirectResave.persona))})`,
+    );
+    ok(
+      !puf03AfterDirectResave.raw.includes("origin:"),
+      "puf-03 AC5: the committed raw YAML after a direct re-save never even mentions 'origin:'",
+    );
+
     // --- POST /persona/draft/:tier/:scopeId/approve -- FAILURE (invalid draft, missing displayName) ---
     const invalidDraftBody = {
       tier: "company-director",
@@ -1468,6 +1522,25 @@ async function testDraftPersonaApproveRemember() {
       `pu-03 remember() proof: remembered.file is a real on-disk path (got ${JSON.stringify(approveBody.remembered?.file)})`,
     );
 
+    // --- puf-03-post-approval-provenance-note: an agent-proposed draft
+    // (real proposedBy/proposedAt above) commits with a real `origin` on
+    // the ACTUAL on-disk persona file -- a direct filesystem read under
+    // apiFakeHome, not just this HTTP response body. -----------------------
+    const provenanceOnDisk = await readWrittenGlobalPersona(apiFakeHome, "company-director", "pu03-remember-global");
+    ok(
+      provenanceOnDisk.persona.origin?.proposedBy === "agent",
+      `puf-03: agent-proposed draft's committed persona file carries origin.proposedBy === 'agent' (real filesystem read, got ${JSON.stringify(provenanceOnDisk.persona.origin)})`,
+    );
+    ok(
+      provenanceOnDisk.persona.origin?.proposedAt === sourceSummaryBody.proposedAt,
+      `puf-03: committed origin.proposedAt is copied verbatim from the draft's own proposedAt (got ${provenanceOnDisk.persona.origin?.proposedAt}, draft had ${sourceSummaryBody.proposedAt})`,
+    );
+    ok(
+      typeof provenanceOnDisk.persona.origin?.approvedAt === "string" &&
+        !Number.isNaN(Date.parse(provenanceOnDisk.persona.origin.approvedAt)),
+      `puf-03: committed origin.approvedAt is a real, freshly-captured ISO timestamp, not copied from the draft (got ${JSON.stringify(provenanceOnDisk.persona.origin?.approvedAt)})`,
+    );
+
     // its landing is INDEPENDENTLY verifiable: a real note file exists on
     // disk, read directly (not just trusting the HTTP response).
     const noteContent = await readFile(approveBody.remembered.file, "utf8");
@@ -1522,6 +1595,20 @@ async function testDraftPersonaApproveRemember() {
     ok(
       notesAfter.length === notesBefore.length,
       `pu-03 remember() proof: approving a draft with no sourceSummary writes NO new note file to disk (before=${notesBefore.length} after=${notesAfter.length})`,
+    );
+
+    // --- puf-03-post-approval-provenance-note: a human-typed draft (no
+    // proposedBy/proposedAt at all) commits with NO origin field whatsoever
+    // -- never a fabricated one. Verified via a real filesystem read of the
+    // committed persona YAML, not just the HTTP response. ------------------
+    const humanOnDisk = await readWrittenGlobalPersona(apiFakeHome, "company-director", "pu03-remember-human-typed");
+    ok(
+      !Object.prototype.hasOwnProperty.call(humanOnDisk.persona, "origin"),
+      `puf-03: human-typed draft's committed persona file has NO 'origin' key at all (real filesystem read, got keys=${JSON.stringify(Object.keys(humanOnDisk.persona))})`,
+    );
+    ok(
+      !humanOnDisk.raw.includes("origin:"),
+      `puf-03: human-typed draft's committed raw YAML never even mentions 'origin:' (got ${JSON.stringify(humanOnDisk.raw)})`,
     );
   } finally {
     swarmChild.kill();

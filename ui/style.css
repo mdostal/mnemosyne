@@ -914,6 +914,18 @@ main {
   padding-left: 0.4rem;
 }
 
+/* puf-03-post-approval-provenance-note: the persistent one-line note under
+   a live persona row that carries a real `origin` -- same quiet, secondary
+   styling as .persona-source-snippet above (this is likewise real, not
+   fabricated, metadata about the row), kept as its own class since it
+   renders on LIVE rows, not draft rows. */
+.persona-origin-note {
+  margin-top: 0.25rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
 .persona-draft-detail-row td {
   padding: 0;
   border-bottom: 1px solid var(--border);
