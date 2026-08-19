@@ -1,12 +1,23 @@
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { Hit, RecallFailure, RecallResult, RecallSuccess } from '../interfaces.js';
+import type { Hit, RecallFailure, RecallResult, RecallSuccess, RememberFailure, RememberResult, RememberSuccess } from '../interfaces.js';
+import { autoDetectWriteContext, GitContextDetectionError } from '../flight-status.js';
 import { DEFAULT_IGNORED_DIRECTORIES, sha256, walk } from './fileWalk.js';
 import { FILE_INDEX_RELATIVE_PATH, type FileIndexEntry, type FileStoreIndexManifest } from './FileStoreIndex.js';
-import type { LayerAdapter, RecallOptions } from './LayerAdapter.js';
+import type { LayerAdapter, RecallOptions, RememberOptions } from './LayerAdapter.js';
 
 export interface FileLayerAdapterOptions {
   ignoredDirectories?: Iterable<string>;
+  /**
+   * Name of the directory (directly under the target root) that remember()
+   * writes note files to. Deliberately NOT dot-prefixed and NOT added to
+   * DEFAULT_IGNORED_DIRECTORIES — recall()'s existing full-tree walk must
+   * pick these notes up with zero special-casing, the same way it finds any
+   * other project file. (Contrast with `.mnemosyne/`, which IS ignored — see
+   * fileWalk.ts's comment on why that one must stay unindexed.) Overridable
+   * mainly for tests. Defaults to `mnemosyne-notes`.
+   */
+  notesDirectoryName?: string;
 }
 
 /**
@@ -31,10 +42,12 @@ export class FileLayerAdapter implements LayerAdapter {
 
   private readonly root: string;
   private readonly ignoredDirectories: Set<string>;
+  private readonly notesDirectory: string;
 
   constructor(targetDirectory: string, options: FileLayerAdapterOptions = {}) {
     this.root = path.resolve(targetDirectory);
     this.ignoredDirectories = new Set(options.ignoredDirectories ?? DEFAULT_IGNORED_DIRECTORIES);
+    this.notesDirectory = path.join(this.root, options.notesDirectoryName ?? 'mnemosyne-notes');
   }
 
   async recall(query: string, options: RecallOptions = {}): Promise<RecallResult> {
@@ -101,6 +114,87 @@ export class FileLayerAdapter implements LayerAdapter {
       escalated: false,
       degraded: false,
     } satisfies RecallSuccess;
+  }
+
+  /**
+   * The file layer's own write path — this is what lets `remember()` degrade
+   * to `file` as a genuine floor (not just a recall-only dead end) when no
+   * other layer is available: no external binary, no network call, nothing
+   * beyond a local write under the same root `recall()` already walks. Notes
+   * land in `notesDirectory` (see constructor) as a timestamped markdown
+   * file with a flight-status header, mirroring `VectorLayerAdapter.remember()`'s
+   * note-file convention exactly (same stamp/tag shape, same header fields)
+   * so both layers' written artifacts look and behave the same to a human
+   * reading them later — the only difference is where the durable copy of
+   * record ends up (Qdrant + the note file for vector; this note file alone
+   * for file).
+   */
+  async remember(content: string, options: RememberOptions = {}): Promise<RememberResult> {
+    const text = content.trim();
+    const scope = options.scope ?? 'project';
+
+    if (!text) {
+      return this.rememberFailure('invalid_content', 'content must not be empty');
+    }
+
+    let status;
+    let sourceRef;
+    if (options.status !== undefined || options.sourceRef !== undefined) {
+      if (options.status === undefined || options.sourceRef === undefined) {
+        return this.rememberFailure(
+          'invalid_flight_status',
+          'options.status and options.sourceRef must both be provided together, or both omitted to auto-detect',
+        );
+      }
+      status = options.status;
+      sourceRef = options.sourceRef;
+    } else {
+      try {
+        const detected = await autoDetectWriteContext({
+          cwd: options.cwd,
+          defaultBranch: options.defaultBranch,
+        });
+        status = detected.status;
+        sourceRef = detected.source_ref;
+      } catch (error) {
+        if (error instanceof GitContextDetectionError) {
+          return this.rememberFailure(
+            'git_context_unresolvable',
+            `flight-status auto-detection failed: ${error.message}. Pass options.status and options.sourceRef explicitly to write anyway.`,
+          );
+        }
+        throw error;
+      }
+    }
+
+    await mkdir(this.notesDirectory, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const tag = (options.tag ?? 'note').replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 40);
+    const file = path.join(this.notesDirectory, `${stamp}-${tag}.md`);
+    const header =
+      `<!-- remembered via Mnemosyne (file layer) @ ${new Date().toISOString()} scope=${scope} ` +
+      `status=${status} branch=${sourceRef.branch} commit=${sourceRef.commit_sha} -->\n`;
+    await writeFile(file, header + text + '\n', 'utf8');
+
+    return {
+      ok: true,
+      layer: 'file',
+      provenance: {
+        layer: 'file',
+        source: file,
+        chunk_span: null,
+        index_timestamp: new Date().toISOString(),
+        content_hash: sha256(text),
+        embedder: null,
+        retrieval_time: null,
+      },
+      status,
+      source_ref: sourceRef,
+    } satisfies RememberSuccess;
+  }
+
+  private rememberFailure(code: string, message: string): RememberFailure {
+    return { ok: false, error: { layer: 'file', message, code } };
   }
 
   /**

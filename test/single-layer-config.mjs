@@ -302,8 +302,8 @@ async function testFileOnly() {
       Array.isArray(layers.body.layers) &&
         layers.body.layers.length === 1 &&
         layers.body.layers[0].layer === "file" &&
-        layers.body.layers[0].writable === false,
-      `GET /layers -> exactly [{layer:file,writable:false}] (got ${JSON.stringify(layers.body.layers)})`,
+        layers.body.layers[0].writable === true,
+      `GET /layers -> exactly [{layer:file,writable:true}] (OSS release-readiness pass gave FileLayerAdapter a real remember() floor) (got ${JSON.stringify(layers.body.layers)})`,
     );
 
     const hitRecall = await j(base, "POST", "/recall", { query: "target", scope: "project" });
@@ -322,28 +322,44 @@ async function testFileOnly() {
       "POST /recall (file zero-hit query) -> clean ok:true, hits:[]",
     );
 
-    // remember() defaults to vector, which isn't configured here — must
-    // fail cleanly, never silently redirect to the file layer either.
+    // remember() cascades through configured writable layers when no layer
+    // is given (OSS release-readiness pass) — with only 'file' configured,
+    // 'file' IS that cascade's sole candidate, so this now succeeds and
+    // writes a real note, rather than failing layer_not_writable.
     const remember = await j(base, "POST", "/remember", {
-      content: { text: "should not be writable" },
+      content: { text: "should be writable now" },
       scope: "project",
     });
-    ok(remember.status === 200, `POST /remember (default layer, unconfigured) -> 200 (got ${remember.status})`);
+    ok(remember.status === 200, `POST /remember (default layer, file-only) -> 200 (got ${remember.status})`);
     ok(
-      remember.body.ok === false && remember.body.error?.code === "layer_not_writable",
-      `POST /remember (default layer, unconfigured) -> ok:false, layer_not_writable (got ${JSON.stringify(remember.body)})`,
+      remember.body.ok === true && remember.body.layer === "file" && !!remember.body.provenance,
+      `POST /remember (default layer, file-only) -> ok:true, layer:file, has provenance (got ${JSON.stringify(remember.body)})`,
     );
 
-    // Explicitly targeting the configured 'file' layer also fails cleanly —
-    // FileLayerAdapter doesn't implement remember() at all.
+    // Explicitly targeting the configured 'file' layer also succeeds now —
+    // FileLayerAdapter implements a real remember() write path.
     const rememberFile = await j(base, "POST", "/remember", {
-      content: { text: "should not be writable either" },
+      content: { text: "explicitly targeted file layer" },
       scope: "project",
       layer: "file",
     });
     ok(
-      rememberFile.body.ok === false && rememberFile.body.error?.code === "layer_not_writable",
-      `POST /remember (layer:file, recall-only adapter) -> ok:false, layer_not_writable (got ${JSON.stringify(rememberFile.body)})`,
+      rememberFile.body.ok === true && rememberFile.body.layer === "file",
+      `POST /remember (layer:file, explicit) -> ok:true, layer:file (got ${JSON.stringify(rememberFile.body)})`,
+    );
+
+    // The written note lands under <root>/mnemosyne-notes/, which recall()'s
+    // existing full-tree walk picks up with zero special-casing -- proof
+    // this is a real, discoverable floor, not just a write that goes nowhere.
+    const findWrittenNote = await j(base, "POST", "/recall", {
+      query: "explicitly targeted file layer",
+      scope: "project",
+    });
+    ok(
+      findWrittenNote.status === 200 &&
+        findWrittenNote.body.ok === true &&
+        findWrittenNote.body.hits.some((h) => h.content.includes("explicitly targeted file layer")),
+      `POST /recall finds the note remember() just wrote to the file layer (got ${JSON.stringify(findWrittenNote.body)})`,
     );
 
     // The definitive proof for this scenario's acceptance criterion: the

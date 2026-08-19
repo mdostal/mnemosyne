@@ -2,6 +2,31 @@
 
 All notable changes to Mnemosyne are documented here.
 
+## [0.13.1] — 2026-08-19
+
+OSS release-readiness pass, triggered by making the repo public and a real
+external dogfood run against the published install script.
+
+### Fixed
+
+- **`bin/mnemosyne --version` / `--help` no longer starts the live server.**
+  Any unrecognized first argument fell through to `exec node src/server.mjs`,
+  so a first-time user's most likely first command silently bound the memory
+  service and hung instead of printing version/usage. Caught running the
+  published `install.sh` end to end for the first time.
+- **`remember()` now has a real floor when `vector` (swarm-memory) is
+  unavailable**, instead of hard-failing. `FileLayerAdapter` gained a real
+  `remember()` write path — notes land in `<root>/mnemosyne-notes/`, a
+  directory `recall()`'s existing file walk already picks up with zero
+  special-casing — and `MnemosyneClient.remember()` now cascades through
+  configured writable layers by default (`vector` then `file`), falling back
+  and reporting `degraded` instead of failing outright. An explicit `layer`
+  argument still targets exactly that layer with no fallback, unchanged. This
+  closes the gap a live dogfood session hit directly: `swarm-memory` is a
+  private dependency, so every external OSS user previously got a hard
+  `POST /remember` failure by default. `GET /layers` now reports
+  `file: writable:true`.
+
 ## [0.13.0] — 2026-08-18
 
 `mnemosyne-agent-harness-install` epic (`aha-01`..`aha-05`) — every agent or

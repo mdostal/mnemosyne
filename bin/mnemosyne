@@ -51,4 +51,19 @@ if [ "${1:-}" = "agent" ]; then
   exec node "$HERE/bin/mnemosyne-agent.mjs" "$@"
 fi
 
+# --version/--help must be handled BEFORE the catch-all server exec below --
+# any unrecognized first arg otherwise silently starts the live HTTP server
+# and blocks, which is exactly what a first-time user typing `mnemosyne
+# --version` would hit (caught for real running the published install.sh
+# end to end during the OSS release-readiness review).
+if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-v" ] || [ "${1:-}" = "version" ]; then
+  node -e "console.log('mnemosyne v' + require('$HERE/package.json').version)"
+  exit 0
+fi
+
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "help" ]; then
+  sed -n '2,10p' "$HERE/bin/mnemosyne" | sed 's/^# \{0,1\}//'
+  exit 0
+fi
+
 exec node "$HERE/src/server.mjs"

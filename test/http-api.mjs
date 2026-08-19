@@ -76,12 +76,20 @@ async function rawText(method, pathname) {
 // against this is a genuine byte-for-byte proof that GET /layers's
 // response is unaffected by this story's changes, not merely "the
 // function wasn't edited."
+//
+// file: writable flipped false -> true (OSS release-readiness pass): the
+// file layer gained a real remember() write path (notes under
+// <root>/mnemosyne-notes/, picked up by recall()'s existing walk with no
+// special-casing) so a write genuinely floors at file when 'vector'
+// (swarm-memory) is unavailable -- see MnemosyneClient.remember()'s
+// cascade and FileLayerAdapter.remember()'s own doc comment. This baseline
+// intentionally moves forward with that fix; it is not a regression.
 const EXPECTED_LAYERS_BODY = JSON.stringify(
   {
     layers: [
       { layer: "code-graph", writable: false },
       { layer: "vector", writable: true },
-      { layer: "file", writable: false },
+      { layer: "file", writable: true },
     ],
   },
   null,

@@ -446,49 +446,91 @@ export class MnemosyneClient {
 
   async remember(content: Content, scope: Scope, layer?: Layer): Promise<RememberResult> {
     const startedAt = Date.now();
-    // Auto-routing beyond a fixed default is a later story's concern (per
-    // interfaces.ts's RememberFn docs) — 'vector' remains the default
-    // target, matching pre-pl-01 behavior exactly when no layer is given.
-    const resolvedLayer = layer ?? 'vector';
     const contentHash = sha256(content.text);
 
     this.logInfo('remember_start', {
       scope,
-      layer: resolvedLayer,
+      layer: layer ?? 'auto',
       content_hash: contentHash,
     });
 
-    // Resolve by NAME against the configured stack (pl-01) rather than a
-    // hardcoded field — any registered, configured, writable layer can be
-    // targeted this way, not only 'vector'. A name absent from the current
-    // stack, or present but recall-only (no remember()), is the same
-    // caller-facing error as before: 'layer_not_writable', never a silent
-    // no-op or a fake success.
-    const targetAdapter = this.layers.find((candidate) => candidate.layer === resolvedLayer);
+    // Explicit target: exactly the pre-existing behavior, no fallback — a
+    // caller naming a layer gets that layer or a clear error, never a
+    // silent redirect elsewhere.
+    //
+    // No explicit target (the common case): cascade through the configured
+    // writable layers in stack order (mirrors recall()'s cascade), so a
+    // write degrades to the next writable layer — today that means 'vector'
+    // then the 'file' floor — instead of hard-failing the instant the
+    // preferred layer is unavailable. This is the auto-routing
+    // interfaces.ts's RememberFn docs always described as legal, just not
+    // yet implemented (see that file's RememberFn comment).
+    const candidateAdapters = layer
+      ? this.layers.filter((candidate) => candidate.layer === layer)
+      : this.layers.filter((candidate) => typeof candidate.remember === 'function');
 
     let result: RememberResult;
-    if (!targetAdapter) {
-      result = {
-        ok: false,
-        error: {
-          layer: resolvedLayer,
-          message: `remember() to layer '${resolvedLayer}' is not supported — that layer is not in the configured stack`,
-          code: 'layer_not_writable',
-        },
-      };
-    } else if (typeof targetAdapter.remember !== 'function') {
-      result = {
-        ok: false,
-        error: {
-          layer: resolvedLayer,
-          message: `the configured '${resolvedLayer}' layer adapter does not implement remember()`,
-          code: 'layer_not_writable',
-        },
-      };
+    const failedLayers: Layer[] = [];
+
+    if (candidateAdapters.length === 0) {
+      result = layer
+        ? {
+            ok: false,
+            error: {
+              layer,
+              message: `remember() to layer '${layer}' is not supported — that layer is not in the configured stack`,
+              code: 'layer_not_writable',
+            },
+          }
+        : {
+            ok: false,
+            error: {
+              layer: null,
+              message: 'remember() has no writable layer configured',
+              code: 'layer_not_writable',
+            },
+          };
     } else {
-      result = await targetAdapter.remember(content.text, { scope });
+      result = {
+        ok: false,
+        error: { layer: null, message: 'unreachable', code: 'unreachable' },
+      };
+      for (const targetAdapter of candidateAdapters) {
+        if (typeof targetAdapter.remember !== 'function') {
+          // An explicitly-targeted layer that exists but isn't writable is
+          // still the caller-facing 'layer_not_writable' error, never
+          // silently skipped — preserved from the pre-fallback behavior.
+          result = {
+            ok: false,
+            error: {
+              layer: targetAdapter.layer,
+              message: `the configured '${targetAdapter.layer}' layer adapter does not implement remember()`,
+              code: 'layer_not_writable',
+            },
+          };
+          break;
+        }
+
+        result = await targetAdapter.remember(content.text, { scope });
+        if (result.ok) {
+          if (failedLayers.length > 0) {
+            result = {
+              ...result,
+              degraded: {
+                reason: `preferred layer(s) [${failedLayers.join(', ')}] unavailable, wrote to '${result.layer}' instead`,
+                failed_parts: failedLayers,
+              },
+            };
+          }
+          break;
+        }
+
+        failedLayers.push(targetAdapter.layer);
+        if (layer) break; // explicit target: surface this failure as-is, no fallback
+      }
     }
 
+    const resolvedLayer = result.ok ? result.layer : (result.error.layer ?? layer ?? 'vector');
     const durationMs = elapsedMs(startedAt);
 
     this.logInfo('remember_end', {
@@ -505,6 +547,15 @@ export class MnemosyneClient {
     });
     if (!result.ok) {
       this.recordLayerDegraded(resolvedLayer, scope, result.error.code ?? 'remember_failed', result.error.message);
+    } else {
+      // Mirrors recall()'s own convention (recordDegradation, layers_skipped
+      // loop) of surfacing every layer that failed along the way even when
+      // the cascade ultimately succeeded — an operator watching
+      // layer_degraded should learn 'vector' is down the moment remember()
+      // starts quietly floor-ing at 'file', not just when everything fails.
+      for (const failed of failedLayers) {
+        this.recordLayerDegraded(failed, scope, 'remember_fallback', `superseded by successful write to '${resolvedLayer}'`);
+      }
     }
 
     return result;

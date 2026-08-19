@@ -269,21 +269,21 @@ describe('MnemosyneClient', () => {
     expect(result.provenance.source).not.toContain('stub:remember');
   });
 
-  it('remember() rejects a non-vector layer request — only vector is writable today', async () => {
+  it('remember() rejects an explicit target naming a recall-only layer', async () => {
     const root = await makeTempRoot();
-    const client = makeClient({ rootDirectory: root });
+    const client = makeClient({ rootDirectory: root, codeGraphLayer: emptyCodeGraphLayer() });
 
-    const result = await client.remember({ text: 'remember this' }, 'project', 'file');
+    const result = await client.remember({ text: 'remember this' }, 'project', 'code-graph');
 
     expect(result.ok).toBe(false);
     if (result.ok) {
       throw new Error('expected remember to fail');
     }
-    expect(result.error.layer).toBe('file');
+    expect(result.error.layer).toBe('code-graph');
     expect(result.error.code).toBe('layer_not_writable');
   });
 
-  it('remember() returns RememberFailure (not a fake success) when the vector layer adapter has no remember()', async () => {
+  it('remember() falls back to the file layer when vector has no remember() (auto-routing, no explicit layer)', async () => {
     const root = await makeTempRoot();
     const recallOnlyVectorLayer = stubVectorLayer(async (query, options) => ({
       ok: true,
@@ -300,14 +300,44 @@ describe('MnemosyneClient', () => {
 
     const result = await client.remember({ text: 'remember this' }, 'project');
 
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.error.message);
+    }
+    expect(result.layer).toBe('file');
+  });
+
+  it('remember() returns RememberFailure (not a fake success) when NO configured layer is writable', async () => {
+    const root = await makeTempRoot();
+    const recallOnlyVectorLayer = stubVectorLayer(async (query, options) => ({
+      ok: true,
+      query,
+      scope: options?.scope ?? 'project',
+      intent: options?.intent ?? 'narrow',
+      hits: [],
+      layers_queried: ['vector'],
+      layers_skipped: [],
+      escalated: false,
+      degraded: false,
+    }));
+    const recallOnlyFileLayer: LayerAdapter = { layer: 'file', recall: recallOnlyVectorLayer.recall };
+    const client = makeClient({
+      rootDirectory: root,
+      vectorLayer: recallOnlyVectorLayer,
+      layerAdapter: recallOnlyFileLayer,
+    });
+
+    const result = await client.remember({ text: 'remember this' }, 'project');
+
     expect(result.ok).toBe(false);
     if (result.ok) {
       throw new Error('expected remember to fail');
     }
     expect(result.error.code).toBe('layer_not_writable');
+    expect(result.error.layer).toBeNull();
   });
 
-  it('remember() propagates a real RememberFailure from the vector layer without swallowing it', async () => {
+  it('remember() propagates a real RememberFailure from an explicitly-targeted vector layer without swallowing it', async () => {
     const root = await makeTempRoot();
     const failingRemember = vi.fn(async (): Promise<RememberResult> => ({
       ok: false,
@@ -315,7 +345,8 @@ describe('MnemosyneClient', () => {
     }));
     const client = makeClient({ rootDirectory: root, vectorLayer: stubWritableVectorLayer(failingRemember) });
 
-    const result = await client.remember({ text: 'remember this' }, 'project');
+    // Explicit 'vector' target — no fallback, unlike the auto-routing default.
+    const result = await client.remember({ text: 'remember this' }, 'project', 'vector');
 
     expect(result.ok).toBe(false);
     if (result.ok) {
@@ -429,6 +460,7 @@ describe('MnemosyneClient', () => {
   });
 
   it('logs remember_start and remember_end with duration metrics', async () => {
+    const root = await makeTempRoot();
     const { logger, metrics } = makeObservabilityMocks();
     const rememberSpy = vi.fn(async (): Promise<RememberResult> => ({
       ok: true,
@@ -443,18 +475,23 @@ describe('MnemosyneClient', () => {
         retrieval_time: null,
       },
     }));
-    const client = makeClient({ logger, metrics, vectorLayer: stubWritableVectorLayer(rememberSpy) });
+    const client = makeClient({ rootDirectory: root, logger, metrics, vectorLayer: stubWritableVectorLayer(rememberSpy) });
 
     await client.remember({ text: 'remember this' }, 'project');
 
+    // remember_start logs BEFORE a layer is resolved (that's the whole point
+    // of auto-routing) — 'auto' when no explicit layer was requested, never
+    // a hardcoded 'vector' that presumes the outcome.
     expect(logger.info).toHaveBeenCalledWith(
       'remember_start',
       expect.objectContaining({
         scope: 'project',
-        layer: 'vector',
+        layer: 'auto',
         content_hash: expect.any(String),
       }),
     );
+    // remember_end logs the layer that ACTUALLY resolved — vector succeeded
+    // on the first cascade attempt here, so file is never reached.
     expect(logger.info).toHaveBeenCalledWith(
       'remember_end',
       expect.objectContaining({
@@ -475,15 +512,18 @@ describe('MnemosyneClient', () => {
     );
   });
 
-  it('logs and counts layer_degraded when remember() fails', async () => {
+  it('logs and counts layer_degraded when an explicitly-targeted remember() fails', async () => {
+    const root = await makeTempRoot();
     const { logger, metrics } = makeObservabilityMocks();
     const failingRemember = vi.fn(async (): Promise<RememberResult> => ({
       ok: false,
       error: { layer: 'vector', message: 'qdrant upsert failed', code: 'swarm_memory_error' },
     }));
-    const client = makeClient({ logger, metrics, vectorLayer: stubWritableVectorLayer(failingRemember) });
+    const client = makeClient({ rootDirectory: root, logger, metrics, vectorLayer: stubWritableVectorLayer(failingRemember) });
 
-    await client.remember({ text: 'remember this' }, 'project');
+    // Explicit 'vector' target — isolates "the target itself failed" from
+    // the auto-routing fallback-to-file case covered separately below.
+    await client.remember({ text: 'remember this' }, 'project', 'vector');
 
     expect(logger.warn).toHaveBeenCalledWith('layer_degraded', {
       layer: 'vector',
@@ -496,6 +536,36 @@ describe('MnemosyneClient', () => {
       scope: 'project',
       reason: 'swarm_memory_error',
       detail: 'qdrant upsert failed',
+    });
+  });
+
+  it('logs and counts layer_degraded for the layer skipped along the way when remember() auto-falls-back to file', async () => {
+    const root = await makeTempRoot();
+    const { logger, metrics } = makeObservabilityMocks();
+    const failingRemember = vi.fn(async (): Promise<RememberResult> => ({
+      ok: false,
+      error: { layer: 'vector', message: 'qdrant upsert failed', code: 'swarm_memory_error' },
+    }));
+    const client = makeClient({ rootDirectory: root, logger, metrics, vectorLayer: stubWritableVectorLayer(failingRemember) });
+
+    const result = await client.remember({ text: 'remember this' }, 'project');
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.error.message);
+    }
+    expect(result.layer).toBe('file');
+    expect(logger.warn).toHaveBeenCalledWith('layer_degraded', {
+      layer: 'vector',
+      scope: 'project',
+      reason: 'remember_fallback',
+      detail: "superseded by successful write to 'file'",
+    });
+    expect(metrics.counter).toHaveBeenCalledWith('layer_degraded_total', 1, {
+      layer: 'vector',
+      scope: 'project',
+      reason: 'remember_fallback',
+      detail: "superseded by successful write to 'file'",
     });
   });
 
