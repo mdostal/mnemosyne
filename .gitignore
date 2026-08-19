@@ -69,3 +69,5 @@ config/minerva.local.yaml
 !.pHive/epics/mnemosyne-ui-redesign/**
 !.pHive/epics/mnemosyne-agent-harness-install/
 !.pHive/epics/mnemosyne-agent-harness-install/**
+!.pHive/epics/mnemosyne-repo-onboarding/
+!.pHive/epics/mnemosyne-repo-onboarding/**

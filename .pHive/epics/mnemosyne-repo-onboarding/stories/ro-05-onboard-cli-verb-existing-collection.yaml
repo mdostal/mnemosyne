@@ -1,0 +1,128 @@
+id: ro-05-onboard-cli-verb-existing-collection
+epic: mnemosyne-repo-onboarding
+title: "mnemosyne onboard CLI verb (Mode A, existing collection)"
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [ro-02-onboard-repo-core-orchestrator, ro-04-org-tree-registry]
+
+description: |
+  Mode A's real entry point for a repo whose Qdrant collection ALREADY
+  exists (created by hand, or by prior swarm-memory usage) — proves the
+  full Mode A pipeline end-to-end against safe, already-provisioned infra
+  before ro-06/ro-07 introduce the higher-risk "create a brand-new
+  collection" path (docs/vertical-plan.md Slice 2, deliberately sequenced
+  before Slice 3).
+
+  New CLI verb: `mnemosyne onboard <path> --collection <name> [--scope-id
+  <id>] [--override project|enterprise]`, wired into `bin/mnemosyne`'s
+  existing dispatch pattern (matching the exact `reindex`/`persona`/`agent`
+  shape — same "add an `if [ "${1:-}" = "onboard" ]` branch, exec node/tsx"
+  convention).
+
+  Sequence: shell out to the existing, unmodified
+  `mnemosyne.placement_engine.classify_collection(name)` (new
+  `lib/mnemosyne/onboarding/classify.ts` wrapper, mirroring
+  `VectorLayerAdapter`'s established shell-out-to-CLI discipline) →
+  `onboardRepo({ mode: 'tree', repoRoot, scopeId, collection })` (ro-02) →
+  `appendOrgTreeEntry(...)` (ro-04) with the classification result → print
+  the base-level report.
+
+acceptance_criteria:
+  - "Given a repo path and an existing collection name classified by placement_engine as project-scoped, when `mnemosyne onboard <path> --collection <name>` runs, then it completes and ~/.mnemosyne/org-tree.yaml gains an entry with scope: project and the exact org_tree_path classify_collection would compute"
+  - "Given the same run, when it completes, then onboardRepo()'s full effects (Layer-1 sync, persona seed, L4/L2 index, base-level report) are present on disk, identical to calling onboardRepo() directly with mode: 'tree'"
+  - "Given a collection name with no scope hint (ambiguous per placement_engine's own heuristic), when `mnemosyne onboard` runs WITHOUT --override, then it completes with needs_override: true recorded in the org-tree entry, printed clearly to the operator, never silently defaulted without a visible flag"
+  - "Given the same ambiguous case WITH --override project, then the org-tree entry records scope: project, needs_override: false, and org_tree_path reflects the operator's explicit override, not the heuristic's own default"
+  - "Given `mnemosyne onboard <path> --collection <name>` where <name> does NOT actually exist in Qdrant (confirmed via a real, read-only inventory check before proceeding), when the command runs, then it fails loudly with a clear message directing the operator to --create (ro-07) instead of silently proceeding against a nonexistent collection"
+
+steps:
+  - id: research
+    description: >
+      Read bin/mnemosyne's existing dispatch branches (reindex/persona/
+      agent) for the exact wiring shape, and placement_engine.py's
+      classify_collection signature/output shape, to keep the new
+      classify.ts wrapper's shell-out call faithful to the real CLI.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Write failing real-subprocess tests (mirroring test/agent-cli.mjs's
+      convention) for the new `mnemosyne onboard` verb: project-scoped
+      collection, ambiguous without --override, ambiguous with --override,
+      nonexistent-collection loud failure. Use a fake/stubbed inventory
+      check (never a live Qdrant call in tests).
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Create lib/mnemosyne/onboarding/classify.ts (execFile wrapper around
+      placement_engine.classify_collection) and bin/mnemosyne-onboard.mjs
+      (the CLI entry point, composing classify.ts + onboardRepo() (ro-02)
+      + appendOrgTreeEntry() (ro-04)). Wire a new `onboard` branch into
+      bin/mnemosyne's dispatch, matching the existing pattern exactly.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm the nonexistent-collection check is real (an actual read, not assumed present) and that --override's precedence over the heuristic default is unambiguous in both code and printed output.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-repo-onboarding.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: mnemosyne/placement_engine.py
+      purpose: "classify_collection — the exact, unmodified heuristic this story's classify.ts wrapper shells out to."
+    - path: bin/mnemosyne
+      purpose: "Existing dispatch pattern (reindex/persona/agent branches) this story's new `onboard` branch must match exactly."
+    - path: mnemosyne/inventory/qdrant_inventory.py
+      purpose: "Existing read-only collection-listing primitive reused for this story's 'collection must already exist' pre-check."
+
+files_to_modify:
+  - file: lib/mnemosyne/onboarding/classify.ts
+    change: "New file: execFile wrapper around placement_engine.classify_collection."
+  - file: bin/mnemosyne-onboard.mjs
+    change: "New file: mnemosyne onboard CLI entry point."
+  - file: bin/mnemosyne
+    change: "New `onboard` dispatch branch, matching the existing reindex/persona/agent shape."
+  - file: test/onboard-cli.mjs
+    change: "New file: real-subprocess tests per acceptance criteria."
+
+design_decisions:
+  - decision: "Collection must already exist for this story's verb (no --create yet)."
+    rationale: "Vertical slicing (docs/vertical-plan.md Slice 2) — proves the full Mode A pipeline against safe, already-provisioned infra before the higher-risk collection-creation path (ro-06/ro-07) is introduced."
+  - decision: "--collection is a required, explicit flag — no auto-derivation from repo path/git remote."
+    rationale: "Open question #2 in design-discussion.md — explicit and unambiguous is the safe starting point; naming-convention auto-derivation is deferred pending real operator usage, not silently guessed at."
+
+cross_cutting:
+  - concern: documentation
+    action: "New CLI verb needs a discoverable doc entry — README gains an 'onboard a repo into the tree' section; bin/mnemosyne's own usage comment header gains the onboard line, matching its existing style for reindex/persona/agent."
+  - concern: loud-failure
+    action: "Nonexistent-collection and ambiguous-without-override cases both fail/flag loudly per acceptance criteria #3 and #5 — never a silent default."
+
+risks:
+  - severity: low
+    description: "The nonexistent-collection pre-check adds a real Qdrant Cloud read on every onboard invocation, even for a repo whose collection genuinely exists."
+    mitigation: "Reuses qdrant_inventory.py's already-proven, already-tested read-only list_collections path — no new Qdrant-touching code, just an existing safe primitive called at a new call site."
+
+references:
+  - path: .pHive/epics/ingest-a10ab2c1/docs/placement-rules.md
+    relevant_excerpt: "The override process this story's --override flag maps directly onto."
+  - path: .pHive/epics/mnemosyne-repo-onboarding/docs/vertical-plan.md
+    relevant_excerpt: "Slice 2 — Mode A onboarding of an already-existing collection, sequenced before Slice 3's collection-creation risk."
+
+metric:
+  applies: true
+  name: onboarding.mode_a_existing_collection_success_rate
+  direction: up
+  unit: percent
+  baseline: 0
+  target: 100
+  window: story-integrate
+  source:
+    kind: manual
+    ref: "test/onboard-cli.mjs scenario run output"
+  verify_at: integrate
+  owner: tester

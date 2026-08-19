@@ -1,0 +1,176 @@
+id: ro-10-document-ingestion-primitive
+epic: mnemosyne-repo-onboarding
+title: Bounded document-ingestion primitive (text/Markdown, CV/description) over the existing remember() floor
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [ro-02-onboard-repo-core-orchestrator]
+
+description: |
+  Amendment story (design-discussion.md §7.2), added after the operator's
+  new ask: "product can get its own multi-level memory created and updated
+  and can upload files, CV, description, crawl website, etc to improve
+  memory." This story closes the "upload files, CV, description" half;
+  `ro-11` closes "crawl website" by reusing this story's own primitive.
+
+  Real reuse root, confirmed by reading the code, not assumed:
+  `MnemosyneClient.remember()` (shipped, v0.14.0) already cascades a single
+  write through every WRITABLE configured layer in stack order
+  (`client.ts:447-531`) — the exact "multi-level memory... created and
+  updated" mechanism the operator is asking for. This story does not
+  reimplement that cascade; it feeds it.
+
+  `lib/mnemosyne/ingest/ingestDocument.ts` (new): `ingestDocument(client,
+  { content, filename?, tag?, scope? })` — chunks bounded input content and
+  calls `client.remember()` once per chunk, sequentially (never parallel —
+  no precedent for concurrent remember() calls anywhere in this codebase,
+  and `VectorLayerAdapter.remember()`'s own doc comment already notes a
+  single index call can take several seconds against live Qdrant Cloud).
+  Each chunk's `tag`/`Content.metadata` (both already-existing fields,
+  `interfaces.ts:368-372`, `LayerAdapter.ts:21-36` — no interface change
+  needed) carry the source filename and chunk index, so a later recall()
+  hit's provenance traces back to "chunk N of <filename>," never an
+  anonymous blob.
+
+  Bounded, explicit scope for this story's cut (never hand-waved): plain
+  text (`.txt`) and Markdown (`.md`) content only — confirmed via
+  `package.json` that no PDF-parsing dependency exists anywhere in this
+  codebase today; adding one is named an explicit, separate follow-on (see
+  design-discussion.md §7.8 open question #4), not silently promised in
+  this story. A free-text description or CV/resume supplied as a plain
+  string (no file at all) is the trivial subcase of the same path.
+
+  Mirrors this codebase's one existing precedent for "read external content
+  safely, without overdoing it" —
+  `skills/mnemosyne-persona-interview/crawl-context.mjs`'s named-cap
+  discipline (`MAX_LINES_PER_SOURCE`/`MAX_CHARS_PER_SOURCE`/
+  `MAX_SOURCE_SUMMARY_CHARS`, every cap enforced in code, not just
+  documented) — as a PATTERN only; that module is persona-interview- and
+  local-file-specific and is not imported here.
+
+acceptance_criteria:
+  - "Given plain-text content under MAX_INGEST_BYTES, when ingestDocument(client, { content, filename: 'notes.txt' }) is called, then it produces exactly one remember() call whose tag/metadata identify 'notes.txt' chunk 0, and returns { ok: true, chunks: [...] } with that one chunk's real RememberResult"
+  - "Given content larger than one chunk's bound but under MAX_INGEST_BYTES, when ingestDocument() is called, then it produces N sequential remember() calls (never concurrent — verified by call-order instrumentation in the test), each tagged with the same filename and its own chunk index 0..N-1"
+  - "Given content that exceeds MAX_INGEST_BYTES, when ingestDocument() is called, then it fails loudly (ok: false, a clear oversized-content error) BEFORE calling remember() at all — never a silent partial ingest of only the first MAX_INGEST_BYTES"
+  - "Given a .pdf filename hint (or any extension outside the explicit .txt/.md allowlist), when ingestDocument() is called, then it fails loudly naming the unsupported format, directing the caller to convert to text/Markdown — never a best-effort attempt to read binary content as text"
+  - "Given one chunk's remember() call fails mid-sequence (e.g. layer degraded to failure), when ingestDocument() completes, then it reports EXACTLY which chunks succeeded and which failed (partial-result array, mirroring ro-06's own partial-state loud-failure convention) — never a generic all-or-nothing error that hides which chunks actually landed"
+  - "Given ingestDocument() completes successfully for a multi-chunk document, when recall() is subsequently called against the same scope, then hits from at least one chunk are returned with full 7-field provenance (layer, source, chunk_span, index_timestamp, content_hash, embedder, retrieval_time) — proving real content landed, not merely that remember() returned ok:true"
+
+steps:
+  - id: research
+    description: >
+      Read client.ts's remember() cascade (lines ~447-531), interfaces.ts's
+      Content/RememberOptions shapes, crawl-context.mjs's cap-enforcement
+      pattern, and bin/mnemosyne-mcp.mjs's registerTool wiring (lines
+      106-136) to confirm every call shape before composing them. Confirm
+      no PDF/binary-parsing dependency exists in package.json.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Write failing tests for ingestDocument() against a stubbed/fake
+      MnemosyneClient (mirroring this codebase's existing fake-swarm-memory
+      test convention, never a live Qdrant call), covering: single-chunk,
+      multi-chunk sequential ordering, oversized-content loud rejection,
+      unsupported-format loud rejection, partial mid-sequence failure
+      reporting, and a real recall() provenance round-trip.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Create lib/mnemosyne/ingest/ingestDocument.ts per the acceptance
+      criteria. Add the "ingest_document" MCP tool to bin/mnemosyne-mcp.mjs
+      (same registerTool/wrapAction pattern as "recall"/"remember"), a new
+      CLI verb bin/mnemosyne-ingest.mjs (mirrors bin/mnemosyne-reindex.mjs's
+      thin-HTTP-client shape), and a new POST /ingest route in server.ts
+      (added to its existing route-list header comment alongside POST
+      /remember).
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: >
+      Confirm chunk calls are genuinely sequential (not Promise.all/
+      parallel), confirm the oversized/unsupported-format checks run BEFORE
+      any remember() call (never a partial attempt), confirm partial-failure
+      reporting names exactly which chunks succeeded.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-repo-onboarding.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/client.ts
+      purpose: "remember()'s existing multi-layer write cascade (lines ~447-531) — the exact mechanism this story feeds, never reimplements."
+    - path: lib/mnemosyne/interfaces.ts
+      purpose: "Content (text, metadata) and RememberOptions (tag, etc.) shapes this story's chunk-tagging reuses unchanged, lines 368-372."
+    - path: skills/mnemosyne-persona-interview/crawl-context.mjs
+      purpose: "This codebase's one existing bounded-safe-external-content-reading precedent — pattern mirrored (named caps, enforced in code), not imported."
+    - path: bin/mnemosyne-mcp.mjs
+      purpose: "registerTool(name, {title, description, inputSchema}, wrapAction(...)) pattern (lines 106-136) this story's new ingest_document tool follows exactly."
+    - path: lib/mnemosyne/layers/VectorLayerAdapter.ts
+      purpose: "remember()'s own doc comment on real per-call latency against live Qdrant Cloud — the reason chunks are ingested sequentially, never in parallel."
+
+files_to_modify:
+  - file: lib/mnemosyne/ingest/ingestDocument.ts
+    change: "New file: the chunking/bounding/tagging ingestion primitive."
+  - file: lib/mnemosyne/ingest/ingestDocument.test.ts
+    change: "New file: tests per acceptance criteria, against a stubbed client."
+  - file: bin/mnemosyne-mcp.mjs
+    change: "New 'ingest_document' MCP tool, same registerTool/wrapAction pattern as recall/remember."
+  - file: bin/mnemosyne-ingest.mjs
+    change: "New file: CLI verb, mirrors bin/mnemosyne-reindex.mjs's thin-HTTP-client shape."
+  - file: lib/mnemosyne/server.ts
+    change: "New POST /ingest route; add one line to the existing route-list header comment."
+  - file: bin/mnemosyne
+    change: "New 'ingest' dispatch branch, matching the existing reindex/persona/agent/onboard shape."
+
+design_decisions:
+  - decision: "This story's cut supports .txt/.md content only; PDF/binary formats are an explicit, separate, not-yet-scoped follow-on."
+    rationale: "package.json confirms no PDF-parsing dependency exists in this codebase today. Bundling a new binary-parsing dependency into the same story as the safe, zero-new-dependency text/markdown path would conflate two different risk profiles — named explicitly in design-discussion.md §7.8 rather than silently promised."
+  - decision: "Chunks are ingested sequentially, never in parallel, and no background queue/worker system is introduced."
+    rationale: "No precedent for concurrent remember() calls exists anywhere in this codebase; VectorLayerAdapter's own doc comment already flags real multi-second per-call latency against live Qdrant Cloud. A queue/worker system is materially bigger scope than 'a document-ingestion primitive' and is an explicit non-goal."
+  - decision: "Oversized-content and unsupported-format checks run BEFORE any remember() call, never as a partial-then-fail sequence."
+    rationale: "Loud-failure cross-cutting concern — an operator uploading a CV/description should get one clear reason for rejection up front, never a half-ingested document with no clear signal of what's missing."
+
+cross_cutting:
+  - concern: loud-failure
+    action: "Oversized content and unsupported formats reject loudly before any write; mid-sequence chunk failures report exactly which chunks succeeded/failed, per acceptance criteria #3-5."
+  - concern: provenance-completeness
+    action: "Ingested chunks must produce recall() hits with full 7-field provenance, verified directly in acceptance criterion #6, not assumed from remember()'s own separately-tested contract."
+  - concern: existing-infrastructure
+    action: "All writes go through the existing, unmodified remember() cascade (additive-only, per VectorLayerAdapter's --no-prune design) — no new storage mechanism, no Qdrant/swarm-memory state touched outside that already-proven path."
+  - concern: documentation
+    action: "New MCP tool, CLI verb, and HTTP route each need a discoverable doc entry — README gains an 'ingest a document into memory' mention; bin/mnemosyne's usage comment header gains the ingest line."
+
+risks:
+  - severity: medium
+    description: "A chosen MAX_INGEST_BYTES value that's too small rejects legitimate CVs/descriptions; too large risks a very slow multi-chunk sequential ingest tying up a single CLI/MCP/HTTP call for a long time."
+    mitigation: "Value is a named, single constant (not scattered magic numbers), documented and easily revisited post-ship without a breaking change; the sequential-chunk design means a caller always gets partial results even if a large document times out partway, never total silent loss."
+  - severity: low
+    description: "Uploaded CV/description content could contain sensitive personal information (the operator's own literal example) landing in the SAME collection/scope other content uses."
+    mitigation: "Out of scope for this story to solve (no new PII-redaction mechanism invented) — explicitly named so it is not silently assumed handled; ingested content is scoped exactly the same way any other remember() call already is (repo/product-local scope, never a shared/global default)."
+
+references:
+  - path: .pHive/epics/mnemosyne-repo-onboarding/docs/design-discussion.md
+    relevant_excerpt: "§7.2 — the full bounded-scope design (file types, size bound, chunking/attribution, sequential-not-parallel decision, surface reuse)."
+  - path: .pHive/epics/mnemosyne-repo-onboarding/docs/grill-record.md
+    relevant_excerpt: "Round 2, finding 2.2.2 — confirms no multipart-file-upload HTTP mechanism exists or is invented here; content arrives as a string, same shape recall()/remember() already use."
+  - path: skills/mnemosyne-persona-interview/crawl-context.mjs
+    relevant_excerpt: "The named-cap, enforce-in-code discipline this story's own MAX_INGEST_BYTES/chunking mirrors."
+
+metric:
+  applies: true
+  name: onboarding.document_ingestion_success_rate
+  direction: up
+  unit: percent
+  baseline: 0
+  target: 100
+  window: story-integrate
+  source:
+    kind: manual
+    ref: "ingestDocument.test.ts run output across all acceptance-criteria scenarios"
+  verify_at: integrate
+  owner: tester

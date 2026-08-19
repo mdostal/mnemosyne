@@ -1,0 +1,173 @@
+id: ro-02-onboard-repo-core-orchestrator
+epic: mnemosyne-repo-onboarding
+title: Shared onboardRepo() orchestrator (Layer-1 sync, persona seed, first-time index, base-level report)
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [ro-01-memory-levels-scoped-extraction]
+
+description: |
+  The one piece of new code both deployment modes share, per the design
+  discussion's own elicitation Q5 proof: a mode-parameterized
+  (`'tree' | 'standalone'`) orchestrator, `onboardRepo()`, that sequences
+  ALREADY-SHIPPED primitives into one repeatable "bring a repo online"
+  action:
+
+  1. Layer 1 sync — `syncAllHarnesses(repoRoot, 'code-architect', scopeId)`
+     (lib/mnemosyne/layer1/sync.ts, shipped, la-01). Installs Level 0
+     (operator rules, hard-fails if missing — never swallowed by this
+     orchestrator) + Level 1 (mnemosyne.md, if present) + code-architect
+     tier content, INCLUDING the la-07 memory-lifecycle mandate (already
+     spliced by syncAllHarnesses today) into CLAUDE.md/AGENTS.md/GEMINI.md.
+     This is the concrete mechanism behind the operator's "continue to grow
+     ... over time" ask — installing the mandate is what drives ongoing
+     recall-on-entry/remember-on-exit usage by whatever agent works in this
+     repo next.
+  2. Persona seed — `writeRepoLocalPersona(repoRoot, ...)`
+     (layer1/persona-store-repo-local.ts, shipped, pf-01), only if
+     `repoLocalPersonaPath(repoRoot, scopeId)` doesn't already exist
+     (never overwrite an operator-authored persona).
+  3. First-time index — Level 4 via `writeFileStoreIndex` (ml-06/ml-08,
+     shipped, same call path bin/mnemosyne-file-index.mjs already uses).
+     Level 2 (graphify) only when the `graphify` binary is on PATH,
+     reusing config.ts's exact `isCommandOnPath` check — never a
+     re-implementation of that availability logic.
+  4. Base-level report — constructs its OWN scoped
+     `new MnemosyneClient({ rootDirectory: repoRoot })` and calls
+     ro-01's extracted `computeMemoryLevels(scopedClient, repoRoot)`.
+
+  Mode 'tree' additionally runs a vector-index sub-step (stubbed
+  `{ ran: false, reason: 'not yet implemented' }` until ro-07 lands, which
+  wires the real collection-creation path); mode 'standalone' never
+  attempts it. No other branching exists between the two modes inside this
+  orchestrator — confirming the design discussion's "one coherent
+  capability" framing at the implementation level.
+
+  **Amendment (design-discussion.md §7.1, grill round 2 finding 2.5.1):**
+  when constructing its scoped client, if the resolved layer stack for this
+  `repoRoot` includes `vector`, `onboardRepo()` now passes `notesDirectory:
+  path.join(repoRoot, 'mnemosyne-notes')` as that layer's per-layer option
+  — colocating the vector layer's note-staging directory under the SAME
+  `repoRoot` the file layer/persona store/file-index manifest already use,
+  instead of leaving it at `VectorLayerAdapter`'s machine-global default
+  (`~/.local/share/mnemosyne/notes`, `VectorLayerAdapter.ts:97-100`). This
+  is a real behavior change ONLY for a repo whose layer stack already
+  configures `vector` (Mode B's own default `docs/embedded-layers.json`
+  omits `vector`, per ro-03's existing design, so this affects Mode A and
+  any Mode B install that explicitly opted `vector` back in) — never a
+  retroactive move of already-written note files, only the DEFAULT a
+  freshly-run `onboardRepo()` call resolves to.
+
+acceptance_criteria:
+  - "Given a fresh temp directory with no prior Mnemosyne state, when onboardRepo({ mode: 'standalone', repoRoot, scopeId }) runs, then CLAUDE.md/AGENTS.md/GEMINI.md are created with the managed block present (Level 0 + tier content, la-07 mandate section included)"
+  - "Given the same fresh temp directory, when onboardRepo() completes, then <repoRoot>/.mnemosyne/personas/<scopeId>.yaml exists and passes assertValidPersona"
+  - "Given the same fresh temp directory, when onboardRepo() completes, then <repoRoot>/.mnemosyne/file-index.json exists with a non-empty files list"
+  - "Given a temp directory where a persona file ALREADY exists at repoLocalPersonaPath, when onboardRepo() runs again, then the existing persona file is left byte-unchanged (never overwritten)"
+  - "Given Level 0's ~/.mnemosyne/level0-rules.md is missing, when onboardRepo() runs, then it throws the same loud error readLevel0Content already throws — never silently completes a partial onboarding"
+  - "Given the graphify binary is NOT on PATH, when onboardRepo() runs, then it completes successfully with graphIndex: { ran: false, reason: <matches config.ts's own soft-fallback reasoning> }, never a hard failure"
+  - "Given onboardRepo() completes for either mode, when its return value's baseLevel field is inspected, then it matches exactly what GET /memory-levels would report for a service actually rooted at repoRoot (cross-checked against ro-01's computeMemoryLevels called directly)"
+  - "Given a layer stack (mnemosyne.layers.json) that includes vector for this repoRoot, when onboardRepo() runs, then the vector adapter it constructs resolves notesDirectory to <repoRoot>/mnemosyne-notes, not VectorLayerAdapter's own machine-global default — verified by inspecting the constructed adapter's options, not merely asserted (design-discussion.md §7.1)"
+  - "Given a layer stack that does NOT include vector for this repoRoot (e.g. Mode B's own default docs/embedded-layers.json), when onboardRepo() runs, then no vector-adapter notesDirectory resolution happens at all — this amendment adds zero behavior for a repo that never configures vector"
+
+steps:
+  - id: research
+    description: >
+      Read syncAllHarnesses (layer1/sync.ts), writeRepoLocalPersona +
+      repoLocalPersonaPath (layer1/persona-store-repo-local.ts),
+      writeFileStoreIndex (layers/FileStoreIndex.ts), isCommandOnPath
+      (layers/GraphifyLayerAdapter.ts, referenced from config.ts), and
+      ro-01's computeMemoryLevels signature — confirm exact call shapes
+      before composing them.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Write failing tests for onboardRepo() against real temp directories
+      (mirroring test/agent-cli.mjs's mkdtemp-per-test-block isolation
+      convention — never the operator's real $HOME or repo state): fresh
+      repo (all steps run), already-personaed repo (persona step
+      no-ops), missing Level 0 (loud throw), graphify absent (soft
+      degrade), and a base-level cross-check against ro-01's function
+      called directly on the same scoped client.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Create lib/mnemosyne/onboarding/onboardRepo.ts implementing the
+      sequence above. Compose, never reimplement, each already-shipped
+      primitive. Each sub-step's soft failure records { ran: false, reason
+      } in the result rather than throwing; only Level 0's hard failure
+      (already loud by design) is allowed to propagate uncaught.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: >
+      Confirm no primitive is reimplemented (grep for duplicated logic
+      from sync.ts/persona-store-repo-local.ts/FileStoreIndex.ts/
+      GraphifyLayerAdapter.ts), confirm the mode field only gates whether
+      Mode-A-only steps run (never changes shared-step behavior), confirm
+      loud-failure contract for Level 0.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-repo-onboarding.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/layer1/sync.ts
+      purpose: "syncAllHarnesses — the exact Layer-1 sync call this story wires, unmodified."
+    - path: lib/mnemosyne/layer1/persona-store-repo-local.ts
+      purpose: "writeRepoLocalPersona + repoLocalPersonaPath — the exact persona-seed call this story wires, unmodified."
+    - path: lib/mnemosyne/layers/FileStoreIndex.ts
+      purpose: "writeFileStoreIndex — the exact first-time L4 index call this story wires, unmodified."
+    - path: lib/mnemosyne/layers/config.ts
+      purpose: "isCommandOnPath / graphify soft-availability check — reused exactly, not re-implemented, for the L2 build gate."
+
+files_to_modify:
+  - file: lib/mnemosyne/onboarding/onboardRepo.ts
+    change: "New file: the shared orchestrator."
+  - file: lib/mnemosyne/onboarding/onboardRepo.test.ts
+    change: "New file: real-temp-directory tests per acceptance criteria."
+
+design_decisions:
+  - decision: "Vector-index sub-step is stubbed { ran: false, reason: 'not yet implemented' } in this story, wired for real in ro-07."
+    rationale: "Vertical slicing (docs/vertical-plan.md Slice 1) — this story delivers Mode B fully working with zero live Qdrant Cloud dependency before any collection-creation risk is introduced."
+  - decision: "Each sub-step records soft failure in its own result field rather than the orchestrator throwing on any partial failure."
+    rationale: "Mirrors MnemosyneClient's own established recordDegradation/layers_skipped convention (client.ts) — never silently drop a failure, but also never let one optional sub-step (e.g. no graphify) block the rest of onboarding from completing."
+  - decision: "Amendment (design-discussion.md §7.1): when the resolved layer stack includes vector, onboardRepo() colocates that layer's notesDirectory under repoRoot rather than leaving VectorLayerAdapter's machine-global default in effect."
+    rationale: "Operator ask: 'the standalone should be able to run with it specifying the location of storage... so that product can get its own multi-level memory created and updated' — a product-controlled repoRoot/storage-dir (ro-03) is only a real guarantee of 'ALL memory state under one directory' if the vector layer's own note-staging files are colocated too, not left at a machine-global default that may not even be writable/persistent in a containerized sidecar deployment."
+
+cross_cutting:
+  - concern: loud-failure
+    action: "Level 0 missing must propagate as a hard, uncaught error through onboardRepo() — verified explicitly in review, not assumed from readLevel0Content's own existing contract."
+  - concern: provenance-completeness
+    action: "N/A for this story directly (no recall() hits produced yet) — flagged for ro-07 once the vector-index sub-step is real."
+
+risks:
+  - severity: medium
+    description: "Two independently-maintained graphify-availability checks exist in this codebase (TS config.ts vs the JS zero-dep server's bin/graphify-bridge.mjs, per cr-01's own doc comment) — onboardRepo() only reuses the TS side."
+    mitigation: "Explicitly named as a known, accepted gap in this story's design decisions and in structured-outline.md's risk registry (R4) rather than silently assumed fine."
+
+references:
+  - path: .pHive/epics/mnemosyne-repo-onboarding/docs/structured-outline.md
+    relevant_excerpt: "Part 2.1 — the OnboardRepoOptions/OnboardRepoResult contract this story implements."
+  - path: .pHive/epics/mnemosyne-foundation/stories/m-06-continuous-indexing.yaml
+    relevant_excerpt: "Forward-compatibility note (grill finding 5.1): this story's L4 first-index writes the same manifest m-06's future continuous-indexing design will eventually also write to on a schedule — no coordination code needed yet, but the question is inherited explicitly."
+  - path: .pHive/epics/mnemosyne-repo-onboarding/docs/design-discussion.md
+    relevant_excerpt: "§7.1 — the amendment adding notesDirectory colocation under repoRoot when vector is configured, and grill round 2 finding 2.5.1's explicit non-hedged statement that this is a real (if narrow) behavior change, not risk-free."
+
+metric:
+  applies: true
+  name: onboarding.orchestrator_step_success_rate
+  direction: up
+  unit: percent
+  baseline: null
+  target: 100
+  window: story-integrate
+  source:
+    kind: manual
+    ref: "onboardRepo.test.ts run output across all acceptance-criteria scenarios"
+  verify_at: integrate
+  owner: tester

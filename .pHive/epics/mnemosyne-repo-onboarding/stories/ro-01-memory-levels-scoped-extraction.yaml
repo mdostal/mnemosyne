@@ -1,0 +1,146 @@
+id: ro-01-memory-levels-scoped-extraction
+epic: mnemosyne-repo-onboarding
+title: Extract GET /memory-levels computation into a repo-scoped, reusable function
+status: complete
+complexity: low
+methodology: tdd
+depends_on: []
+
+note_on_completion: >
+  Merged via branch feat/ro-01-memory-levels-scoped-extraction. TDD: wrote a
+  failing vitest suite first (computeMemoryLevels.test.ts, 5 tests, all
+  failing on "module does not exist"), then created
+  lib/mnemosyne/memory-levels/computeMemoryLevels.ts by copying
+  server.ts's GET /memory-levels computation verbatim, parameterized on
+  (client, repoRoot, level0Path = DEFAULT_LEVEL0_PATH). server.ts's GET
+  /memory-levels handler is now a thin caller of the extracted function
+  against its existing singleton client + ROOT_DIRECTORY -- zero behavior
+  change. Verified directly: two MnemosyneClient instances rooted at two
+  different temp dirs (one with mnemosyne.md, one without) report level 1
+  differently; level 0 resolves against the level0Path parameter, never
+  repoRoot; levels 2-4 call client.getConfiguredLayers() exactly once (call-
+  count-instrumented). Reran the real regression suite myself: `tsc
+  --noEmit` clean; `node test/http-api.mjs` -- every existing GET
+  /memory-levels assertion and the byte-for-byte GET /layers baseline check
+  pass unchanged; full `npm test` (852 CLI/HTTP assertions across 20 .mjs
+  suites + 741 vitest tests across 55 files) all green, zero failures. No
+  changes to MEMORY_LEVELS or any adapter/layer code, per the story's own
+  scope boundary.
+
+description: |
+  `lib/mnemosyne/server.ts`'s `GET /memory-levels` route (story ml-04,
+  shipped) computes, for each of the 5 canonical memory levels
+  (memory-levels/levels.ts's MEMORY_LEVELS), whether it is "configured
+  right now" against ONE ambient, module-level MnemosyneClient singleton
+  scoped to the running service's own ROOT_DIRECTORY. This story extracts
+  that computation into a standalone function parameterized on
+  `(client, repoRoot, level0Path?)` so it can be called against an
+  ARBITRARY repo — the "get the base level" primitive every later story in
+  this epic's onboarding orchestrator (ro-02) depends on.
+
+  Grill finding 3.1 (docs/grill-record.md): this is real, new extraction
+  work, not a zero-effort reuse — the route today reads its ambient
+  singleton directly; there is no existing parameterized entry point.
+
+  Zero behavior change for the existing route: GET /memory-levels becomes
+  a thin caller of the extracted function with its own existing client +
+  ROOT_DIRECTORY, byte-identical output to today.
+
+acceptance_criteria:
+  - "Given the existing test/http-api.mjs GET /memory-levels assertions, when this story's extraction lands, then every assertion passes unchanged (byte-identical route output, zero regression)"
+  - "Given a MnemosyneClient constructed with an arbitrary rootDirectory (not the running service's own ROOT_DIRECTORY), when computeMemoryLevels(client, repoRoot) is called directly, then it returns the same 5-level configured/not-configured shape GET /memory-levels would return for a repo actually rooted there"
+  - "Given level 0 (existsSync check) and level 1 (existsSync check), when repoRoot differs from the calling process's own ROOT_DIRECTORY, then the existsSync checks resolve against repoRoot's own paths (DEFAULT_LEVEL0_PATH is operator-global and unaffected; the mnemosyne.md check must resolve to path.join(repoRoot, 'mnemosyne.md'), not the server's own root)"
+  - "Given levels 2-4, when computeMemoryLevels reads client.getConfiguredLayers(), then it reads ONLY that already-resolved cascade — never a second, independent layer-resolution call"
+
+steps:
+  - id: research
+    description: >
+      Read lib/mnemosyne/server.ts's GET /memory-levels handler in full
+      (lines ~415-460) plus lib/mnemosyne/memory-levels/levels.ts's
+      MEMORY_LEVELS taxonomy and test/http-api.mjs's existing assertions
+      for this route, to confirm the exact current computation before
+      extracting it.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Write a failing test for the new standalone computeMemoryLevels(client,
+      repoRoot, level0Path?) function BEFORE extraction: construct two
+      MnemosyneClient instances rooted at two different temp directories
+      with different mnemosyne.md presence, assert the function reports
+      level 1 differently for each. Also add/adapt a regression assertion
+      confirming GET /memory-levels' real HTTP response is unchanged.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Create lib/mnemosyne/memory-levels/computeMemoryLevels.ts by copying
+      the route handler's existing computation verbatim, parameterizing
+      `client`/`repoRoot`/`level0Path` (default DEFAULT_LEVEL0_PATH).
+      Update server.ts's GET /memory-levels handler to call it with its
+      existing client + ROOT_DIRECTORY. Do not modify MEMORY_LEVELS or
+      any adapter/layer code.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: Confirm zero behavior change for the existing route and that the extracted function makes no new I/O calls beyond what the original inline computation made.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-repo-onboarding.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/server.ts
+      purpose: "Contains the exact inline computation (GET /memory-levels handler, ~lines 415-460) to extract, parameterized, into a standalone function."
+    - path: lib/mnemosyne/memory-levels/levels.ts
+      purpose: "MEMORY_LEVELS taxonomy the computation maps over — read-only reference, never modified by this story."
+
+files_to_modify:
+  - file: lib/mnemosyne/memory-levels/computeMemoryLevels.ts
+    change: "New file: extracted, parameterized (client, repoRoot, level0Path?) computation."
+  - file: lib/mnemosyne/server.ts
+    change: "GET /memory-levels handler calls the extracted function instead of computing inline."
+  - file: lib/mnemosyne/memory-levels/computeMemoryLevels.test.ts
+    change: "New file: unit tests against two differently-rooted MnemosyneClient instances."
+
+code_examples:
+  - title: "Current inline computation to extract (server.ts)"
+    file: lib/mnemosyne/server.ts
+    snippet: |
+      const activeAdapterNames = new Set<string>(client.getConfiguredLayers().map((l) => l.layer));
+      const level0Configured = existsSync(DEFAULT_LEVEL0_PATH);
+      const level1Configured = existsSync(path.join(ROOT_DIRECTORY, 'mnemosyne.md'));
+      const levels = MEMORY_LEVELS.map((level) => {
+        const configured =
+          level.id === 0 ? level0Configured
+          : level.id === 1 ? level1Configured
+          : level.adapterNames.some((name) => activeAdapterNames.has(name));
+        // ...
+
+design_decisions:
+  - decision: "Extraction is copy-then-parameterize, never a rewrite."
+    rationale: "Minimizes regression risk for an already-shipped, tested route (ml-04); the new function's own tests plus the existing route's unchanged tests together prove behavior preservation."
+  - decision: "level0Path stays a parameter with DEFAULT_LEVEL0_PATH as its default, not hardcoded."
+    rationale: "Level 0 is operator-global by design (level0.ts) — every caller (route and onboarding orchestrator alike) should share the same default while still being test-overridable, mirroring level0.ts's own SyncOptions.level0Path convention."
+
+cross_cutting:
+  - concern: documentation
+    action: "No user-facing doc change needed — GET /memory-levels' response contract is unchanged; this is an internal refactor only."
+
+risks:
+  - severity: medium
+    description: "A subtle divergence between the extracted function and the original inline computation (e.g. a missed level0Path default) could silently change GET /memory-levels' real output."
+    mitigation: "test/http-api.mjs's existing GET /memory-levels assertions run unmodified against the refactored route as the primary regression gate."
+
+references:
+  - path: .pHive/epics/mnemosyne-memory-levels/stories/ml-04-memory-levels-route.yaml
+    relevant_excerpt: "Original story shipping GET /memory-levels — this story extracts its computation, never changes its contract."
+  - path: .pHive/epics/mnemosyne-repo-onboarding/docs/grill-record.md
+    relevant_excerpt: "Finding 3.1: GET /memory-levels' live-check design is single-repo singleton; Mode A onboarding is inherently multi-repo."
+
+metric:
+  applies: false
+  justification: "Pure internal refactor/extraction of an already-shipped route's computation — correctness is proven by regression-test output equality (byte-identical GET /memory-levels response), not a trend metric with a baseline/target."
