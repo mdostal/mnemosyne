@@ -342,6 +342,35 @@
            region. -->
       <p id="personas-live-region" class="sr-only" aria-live="polite"></p>
 
+      <!-- puf-02-batch-approve-strip (epic mnemosyne-persona-panel-fidelity-
+           followups): the reviewed-queue batch-approve strip pu-14's
+           fidelity-review.md flagged as D2 -- synthesized/option-2.md's own
+           §6 calls it "the synthesis's own central bet" for answering
+           operator-efficiency.md/information-density.md's batch-latency
+           complaint WITHOUT reopening Option 1's blind-approve failure mode
+           (§3/§4.3 -- the read-before-edit trust gate this epic exists to
+           protect). Lists ONLY drafts already individually read this
+           session (readDraftIdentities, ui/app.js) -- never a way to batch-
+           approve a draft that hasn't passed that gate. Static markup here
+           is only the outer shell, following this same section's own
+           "row/item shape lives in JS, static markup is only the outer
+           container" convention already established for #personas-table
+           above -- renderBatchApproveStrip() (ui/app.js) populates the
+           checkbox list and toggles `hidden` on every renderPersonas() call,
+           so it always reflects the current session's read-before-edit gate
+           state and disappears entirely (not just empties) once nothing is
+           reviewed-and-pending. A native <div role="group"> of
+           <label><input type="checkbox">…</label> pairs, the same
+           label-wraps-input idiom the group-by .mode-toggle radiogroup above
+           already uses for radios -- plus one real <button type="button">,
+           both natively keyboard-operable (Tab + Space/Enter), no new
+           interaction vocabulary and no `disabled` attribute anywhere. -->
+      <div id="personas-batch-strip" class="persona-toolbar" hidden>
+        <p class="panel-status" id="personas-batch-status"></p>
+        <div id="personas-batch-checkboxes" role="group" aria-label="reviewed drafts ready to commit"></div>
+        <button type="button" id="personas-batch-approve-btn" class="persona-action-btn">Approve all</button>
+      </div>
+
       <!-- Outer shape (section -> h2 -> panel-status -> table) unchanged,
            per selection.md/synthesized option-2.md §1: "#personas keeps its
            existing <section class="panel panel-wide"> -> <h2> ->
