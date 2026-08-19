@@ -1,4 +1,13 @@
-"""Read-only Qdrant collection inventory for Mnemosyne ingestion."""
+"""Qdrant collection inventory for Mnemosyne ingestion.
+
+Read-only by design for every symbol that predates story ro-06
+(mnemosyne-repo-onboarding). ``HttpQdrantClient.create_collection()``
+(added by ro-06) is the one deliberate, narrow, additive-only exception --
+it creates a brand-new collection and nothing else; no delete/drop method
+exists anywhere in this module. Callers needing safe, idempotent
+create-if-missing behaviour should use ``mnemosyne.onboarding.
+create_collection_and_scope()``, not this method directly.
+"""
 
 from __future__ import annotations
 
@@ -44,11 +53,16 @@ class HttpQdrantClient:
         self.timeout = timeout
         self._ssl = ssl.create_default_context()
 
-    def _request(self, method: str, path: str) -> dict[str, Any]:
+    def _request(
+        self, method: str, path: str, body: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         headers = {"content-type": "application/json"}
         if self.api_key:
             headers["api-key"] = self.api_key
-        req = urllib.request.Request(self.url + path, headers=headers, method=method)
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        req = urllib.request.Request(
+            self.url + path, data=data, headers=headers, method=method
+        )
         try:
             with urllib.request.urlopen(
                 req, timeout=self.timeout, context=self._ssl
@@ -75,6 +89,32 @@ class HttpQdrantClient:
         if not isinstance(result, dict):
             raise QdrantInventoryError(f"Qdrant returned no metadata for {name!r}")
         return result
+
+    def create_collection(self, name: str, dim: int) -> None:
+        """Create a NEW Qdrant collection (unnamed vector, cosine distance).
+
+        Additive-only, story ro-06 (epic mnemosyne-repo-onboarding): this is
+        the confirmed fallback path -- research found no swarm-memory-native
+        collection-create CLI verb (see mnemosyne/onboarding.py's module
+        docstring for the full research record). Mirrors the request shape
+        swarm-memory's own internal QdrantClient.ensure_collection() already
+        uses (swarm_memory/qdrant.py in the installed swarm-memory package):
+        ``PUT /collections/{name}`` with ``{"vectors": {"size": dim,
+        "distance": "Cosine"}}``.
+
+        Callers MUST confirm via a read-only check (e.g. list_collections())
+        that ``name`` does not already exist before calling this -- Qdrant's
+        own PUT /collections/{name} RECREATES (silently replaces) an
+        existing collection rather than erroring, so this method is never
+        safe to call blindly against a name that might already exist. This
+        class has no delete/drop method anywhere -- ways_of_working.md's
+        hard "never wipe Qdrant" rule.
+        """
+        self._request(
+            "PUT",
+            f"/collections/{name}",
+            body={"vectors": {"size": dim, "distance": "Cosine"}},
+        )
 
 
 def read_qdrant_key(path: str | Path = DEFAULT_KEY_PATH) -> str:
