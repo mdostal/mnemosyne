@@ -65,7 +65,12 @@
  *                               via the SAME writeGlobalPersona/
  *                               writeRepoLocalPersona POST /persona/:tier/
  *                               :scopeId already uses (draft-only metadata
- *                               stripped first), archives the draft
+ *                               stripped first; proposedBy/proposedAt, when
+ *                               BOTH real, are re-attached as `origin`
+ *                               {proposedBy, proposedAt, approvedAt} --
+ *                               puf-03-post-approval-provenance-note --
+ *                               omitted entirely for a human-typed draft),
+ *                               archives the draft
  *                               (disposeDraftPersona('approved'), never
  *                               deleted), and -- ONLY when the draft carries
  *                               a real `sourceSummary` (agent-proposed via
@@ -75,7 +80,11 @@
  *                               resolveRememberScope() (persona.ts), AFTER
  *                               the write succeeds. A human-typed draft (no
  *                               sourceSummary) never fires remember() --
- *                               there is no real source material to index
+ *                               there is no real source material to index.
+ *                               POST /persona/:tier/:scopeId (direct write,
+ *                               above) always CLEARS `origin` even if its
+ *                               body carries one -- see that route's own
+ *                               comment for the full rationale (puf-03 AC5)
  *   DELETE /persona/draft/:tier/:scopeId  -> discard the active draft --
  *                               ALWAYS disposeDraftPersona('discarded')
  *                               (archive-by-move), never a bare filesystem
@@ -666,8 +675,29 @@ const server = http.createServer(async (req, res) => {
         }
 
         // Strip draft-only metadata (proposedBy/proposedAt/sourceSummary)
-        // BEFORE calling the real write primitive.
-        const { proposedBy: _proposedBy, proposedAt: _proposedAt, sourceSummary, ...candidate } = draft;
+        // BEFORE calling the real write primitive -- proposedBy/proposedAt
+        // are re-attached below as `origin`, in the shape persona.ts's
+        // `Persona.origin` actually defines; sourceSummary never survives
+        // into the real store at all (it stays draft-only source material,
+        // consumed instead by fireDraftApprovalRemember below).
+        const { proposedBy, proposedAt, sourceSummary, ...rest } = draft;
+
+        // puf-03-post-approval-provenance-note: populate `origin` ONLY when
+        // the draft genuinely carried BOTH proposedBy and proposedAt -- a
+        // human-typed draft (pf-05/pf-06: a human can attach real source
+        // material too, but that alone doesn't set proposedBy/proposedAt)
+        // commits with NO origin field at all, never a fabricated one
+        // (puf-03's own acceptance criteria). `approvedAt` is captured HERE,
+        // fresh, at the real moment of commit -- it is not, and cannot be,
+        // copied from the draft (persona.ts's `PersonaOrigin` doc comment).
+        const hasRealProvenance =
+          typeof proposedBy === 'string' &&
+          proposedBy.trim() !== '' &&
+          typeof proposedAt === 'string' &&
+          proposedAt.trim() !== '';
+        const candidate = hasRealProvenance
+          ? { ...rest, origin: { proposedBy, proposedAt, approvedAt: new Date().toISOString() } }
+          : rest;
 
         let filePath: string;
         try {
@@ -793,7 +823,28 @@ const server = http.createServer(async (req, res) => {
       // candidate routed at the global store, or vice versa), so re-checking
       // it here would be the reimplemented-validation this story explicitly
       // rules out.
-      const { repo: bodyRepo, ...candidate } = body;
+      // puf-03-post-approval-provenance-note, acceptance criterion 5 (an
+      // explicit, DOCUMENTED decision, not an accidental side effect): a
+      // direct (non-draft) write through THIS route always CLEARS `origin`,
+      // even if the posted body happens to still carry one (e.g. a caller
+      // fetched the live persona, edited a field, and POSTed the whole
+      // object back unchanged). Decision: CLEAR, not keep. Rationale --
+      // `origin` is a provenance claim ("this content traces back to an
+      // agent's proposal, approved on this date"); this route is NOT the
+      // draft-approve flow (server.ts's own POST /persona/draft/:tier/
+      // :scopeId/approve, above) and has no draft to read a genuine
+      // proposedBy/proposedAt/approvedAt from, so it cannot construct a new,
+      // truthful origin for whatever changed. Passing an old one through
+      // unchanged would silently misrepresent freshly hand-edited content as
+      // still being "as the agent proposed it," which is exactly the kind
+      // of fabricated/stale provenance puf-03's own acceptance criteria rule
+      // out for the CREATE path -- the same standard applies here. This also
+      // keeps a single, unambiguous answer to "where did this persona's
+      // `origin` come from?": only ever the approve route above, never this
+      // one, regardless of what a client sends -- mirrors this file's
+      // existing "no second write path" guardrail (design-discussion.md §5)
+      // by making sure no second path can plant/preserve `origin` either.
+      const { repo: bodyRepo, origin: _originClearedOnDirectWrite, ...candidate } = body;
 
       try {
         if (PERSONA_STORE_BY_TIER[tier] === 'global') {
