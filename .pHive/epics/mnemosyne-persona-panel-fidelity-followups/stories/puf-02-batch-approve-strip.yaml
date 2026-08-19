@@ -1,7 +1,7 @@
 id: puf-02-batch-approve-strip
 epic: mnemosyne-persona-panel-fidelity-followups
 title: "Build the design's \"central bet\": a reviewed-queue batch-approve strip"
-status: planned
+status: complete
 complexity: medium
 methodology: tdd
 depends_on: []

@@ -1,7 +1,7 @@
 id: puf-04-repo-scoped-personas-reachable
 epic: mnemosyne-persona-panel-fidelity-followups
 title: Wire a repo selector so code-architect (repo-scoped) personas/drafts are reachable in the Personas panel
-status: planned
+status: complete
 complexity: medium
 methodology: tdd
 depends_on: []

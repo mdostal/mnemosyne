@@ -2,6 +2,54 @@
 
 All notable changes to Mnemosyne are documented here.
 
+## [0.14.0] — 2026-08-19
+
+Backlog cleanup pass: closes all 4 flagged design-fidelity gaps from pu-14's
+review of the Personas panel, extends the memory-consistency e2e suite with
+real drift detection, and adds the Qdrant org-tree placement engine.
+
+### Added
+
+- **Personas panel now defaults its status filter to "Needs review"**
+  instead of "All" (`puf-01`), matching the original design brief — an
+  operator opening the panel sees only actionable rows by default.
+- **Batch-approve strip for reviewed persona drafts** (`puf-02`) — the
+  design's "central bet" for clearing N reviewed drafts in one action
+  (checkboxes + "Approve all") instead of N independent reloads. Only
+  drafts that have already individually passed the read-before-edit gate
+  this session are ever selectable — never a way to approve a draft that
+  hasn't been opened. Fully keyboard-operable.
+- **Post-approval provenance note** (`puf-03`) — an agent-proposed persona
+  now carries a schema-validated `origin` field (`proposedBy`, `proposedAt`,
+  `approvedAt`), persisted to the real on-disk file at approve time and
+  rendered as a persistent "Originally proposed by \<agent\>, approved
+  \<date\>" note in the panel. A human-typed persona never gets a
+  fabricated one. A direct (non-draft) re-save explicitly clears `origin`
+  — documented as a deliberate choice, not an accident.
+- **Repo-scoped (code-architect) personas are now reachable** (`puf-04`) —
+  a real repo-path selector in the Personas panel toolbar; selecting a repo
+  passes `?repo=` through to `loadPersonas()`/`loadDrafts()`, finally
+  exercising the repo-grouping/sub-group rendering that existed but was
+  structurally unreachable. Fully additive — default (no repo selected)
+  behavior is unchanged.
+- **`mnemosyne/placement_engine.py`** — heuristic Qdrant collection → org-tree
+  placement (`project-`/`enterprise-` prefix detection, default-to-enterprise
+  with an operator-override flag for ambiguous/unmarked collections), plus
+  `.pHive/epics/ingest-a10ab2c1/docs/placement-rules.md` documenting the
+  heuristics and override process.
+
+### Fixed
+
+- **`test/e2e.mjs` now covers real layer-consistency drift detection**
+  (`mc-06`) — after `POST /remember`, `GET /health`'s `drift_count` is
+  asserted `0`; a simulated Qdrant upsert failure is asserted to report
+  `drift_count > 0` via the real, unmocked reconcile path. The story's own
+  prior state notes turned out to be stale on two counts, both verified
+  directly rather than assumed: AC1/AC2 (file-exists, provenance match)
+  were not actually present yet either, and a previously-noted
+  better-sqlite3 native-binding crash no longer reproduces in this
+  environment.
+
 ## [0.13.1] — 2026-08-19
 
 OSS release-readiness pass, triggered by making the repo public and a real

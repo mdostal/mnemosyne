@@ -1,7 +1,7 @@
 id: puf-03-post-approval-provenance-note
 epic: mnemosyne-persona-panel-fidelity-followups
 title: Persist a post-approval provenance note (Persona schema + render)
-status: planned
+status: complete
 complexity: medium
 methodology: tdd
 depends_on: []

@@ -1,7 +1,7 @@
 id: puf-01-status-filter-default-needs-review
 epic: mnemosyne-persona-panel-fidelity-followups
 title: Default the Personas panel's status filter to "Needs review" instead of "All"
-status: planned
+status: complete
 complexity: low
 methodology: tdd
 depends_on: []

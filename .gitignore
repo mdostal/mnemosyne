@@ -1,6 +1,7 @@
 node_modules/
 .DS_Store
 *.log
+__pycache__/
 
 # Playwright MCP tool session output (console logs, page snapshots) --
 # tooling byproduct from browser-based verification checks, never repo content.
