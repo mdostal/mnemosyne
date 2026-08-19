@@ -1685,6 +1685,13 @@ function mergedPersonaRows() {
 function renderPersonas() {
   personasTbodyEl.textContent = "";
 
+  // puf-02-batch-approve-strip: always kept in sync with THIS render, even
+  // on the two early-return (empty/filtered-empty) branches below -- the
+  // reviewed-queue strip is independent of the status filter/group-by mode
+  // (selection.md/synthesized option-2.md §1: it sits above the grouped
+  // list, not inside any one group).
+  renderBatchApproveStrip();
+
   const merged = mergedPersonaRows();
 
   if (merged.length === 0) {
@@ -2153,6 +2160,150 @@ async function loadDrafts() {
   }
 }
 // ==================== end pu-12-draft-review-approve-ui ====================
+
+// ==================== puf-02-batch-approve-strip (epic mnemosyne-persona-
+// panel-fidelity-followups): reviewed-queue batch-approve strip. Closes
+// pu-14's fidelity-review.md FLAGGED finding D2 -- synthesized/option-2.md's
+// own §6 calls this mechanism "the synthesis's own central bet" for
+// answering operator-efficiency.md/information-density.md's batch-latency
+// complaint (today, N drafts approved one at a time costs N independent
+// approveDraft() calls, each with its own loadDrafts()/loadPersonas() pair)
+// WITHOUT reopening Option 1's blind-approve failure mode -- the read-
+// before-edit trust gate (readDraftIdentities, pu-12, above) stays the ONLY
+// way a draft ever becomes eligible here. ===================================
+
+const personasBatchStripEl = document.getElementById("personas-batch-strip");
+const personasBatchStatusEl = document.getElementById("personas-batch-status");
+const personasBatchChecklistEl = document.getElementById("personas-batch-checkboxes");
+const personasBatchApproveBtn = document.getElementById("personas-batch-approve-btn");
+
+// Session-scoped "is this reviewed identity currently checked in the strip"
+// state -- separate from readDraftIdentities (the trust gate itself) so an
+// operator can uncheck one reviewed draft without un-reading it.
+// Reconciled against the CURRENT reviewed set on every
+// renderBatchApproveStrip() call below: an identity that stops being
+// reviewed-and-pending (approved, discarded, or never read) is dropped here
+// too, so it can never linger as a stale, invisible "selected" entry.
+const personasBatchSelected = new Set();
+
+// The one and only definition of "batch-approve-eligible": already read
+// this session (readDraftIdentities -- the trust gate pu-12 built, reused
+// completely unchanged here, never a second/looser gate) AND still an
+// active, pending draft (still present in loadedDrafts -- approveDraft()/
+// discardDraft() already delete an identity from readDraftIdentities the
+// moment its draft leaves the active set, so a stale identity can never
+// appear here either). A draft that has never been opened/read this
+// session is structurally absent from loadedDrafts-filtered-by-
+// readDraftIdentities -- it can never become selectable/includable below.
+function reviewedPendingDrafts() {
+  return loadedDrafts.filter((d) => readDraftIdentities.has(personaRowKey(d.tier, d.scopeId)));
+}
+
+// Pure render, called from renderPersonas() on every load/toggle -- never
+// fetches, matching every other render function in this file. Pre-checks
+// every newly-reviewed identity by default (selection.md/synthesized
+// option-2.md §1: "listing each reviewed-but-not-yet-committed draft... with
+// a checkbox (all pre-checked)"), and hides the whole strip (not merely
+// empties it) once nothing is reviewed-and-pending.
+function renderBatchApproveStrip() {
+  const reviewed = reviewedPendingDrafts();
+  const reviewedKeys = new Set(reviewed.map((d) => personaRowKey(d.tier, d.scopeId)));
+
+  for (const key of Array.from(personasBatchSelected)) {
+    if (!reviewedKeys.has(key)) personasBatchSelected.delete(key);
+  }
+  for (const key of reviewedKeys) {
+    if (!personasBatchSelected.has(key)) personasBatchSelected.add(key);
+  }
+
+  personasBatchChecklistEl.textContent = "";
+
+  if (reviewed.length === 0) {
+    personasBatchStripEl.hidden = true;
+    return;
+  }
+
+  personasBatchStripEl.hidden = false;
+  personasBatchStatusEl.textContent = `reviewed, ready to commit (${reviewed.length})`;
+
+  for (const draft of reviewed) {
+    const key = personaRowKey(draft.tier, draft.scopeId);
+    const label = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = personasBatchSelected.has(key);
+    cb.addEventListener("change", () => {
+      if (cb.checked) personasBatchSelected.add(key);
+      else personasBatchSelected.delete(key);
+    });
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode(` ${draft.tier} / ${draft.scopeId}`));
+    personasBatchChecklistEl.appendChild(label);
+  }
+}
+
+// [Approve all] -- fires the checked subset of reviewedPendingDrafts()
+// through the SAME real per-draft approve call approveDraft() (above) uses
+// (personaDraftServiceUrl(tier, scopeId, "/approve", repo), POST) -- never a
+// new/second write path -- once per selected draft, but issues exactly ONE
+// combined loadDrafts()/loadPersonas() reload at the very end, not N
+// reloads, closing pu-14's D2 finding. A native confirm() lists every
+// identity about to be committed before anything fires, mirroring §4.5's
+// per-draft confirm copy at batch scale (§6's own quoted example: "Approve 3
+// drafts: ..."). Loading-state disable on the button during the in-flight
+// batch mirrors #persona-form's own submit-button precedent (an ordinary
+// loading-state disable unrelated to the read-before-edit trust gate, which
+// is enforced structurally above by never rendering an unread draft into
+// this strip at all -- not by a `disabled` attribute on it).
+personasBatchApproveBtn.addEventListener("click", async () => {
+  const targets = reviewedPendingDrafts().filter((d) =>
+    personasBatchSelected.has(personaRowKey(d.tier, d.scopeId))
+  );
+  if (targets.length === 0) return;
+
+  const identityList = targets.map((d) => `${d.tier} / ${d.scopeId}`).join(", ");
+  const confirmed = window.confirm(
+    `Approve ${targets.length} draft${targets.length === 1 ? "" : "s"}: ${identityList}? ` +
+      "This writes to the real persona store and cannot be undone from here."
+  );
+  if (!confirmed) return;
+
+  personasBatchApproveBtn.disabled = true;
+  const failures = [];
+  try {
+    for (const draft of targets) {
+      const identity = `${draft.tier} / ${draft.scopeId}`;
+      try {
+        const res = await fetch(
+          personaDraftServiceUrl(draft.tier, draft.scopeId, "/approve", draft.repo),
+          { method: "POST" }
+        );
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const message = (body.error && (body.error.message || body.error)) || `HTTP ${res.status}`;
+          failures.push(`${identity}: ${message}`);
+          continue;
+        }
+        readDraftIdentities.delete(personaRowKey(draft.tier, draft.scopeId));
+        personasBatchSelected.delete(personaRowKey(draft.tier, draft.scopeId));
+      } catch (err) {
+        failures.push(`${identity}: ${err && err.message ? err.message : err}`);
+      }
+    }
+
+    personasLiveRegionEl.textContent =
+      failures.length === 0
+        ? `Approved ${targets.length} draft${targets.length === 1 ? "" : "s"} — now live.`
+        : `Approved ${targets.length - failures.length} of ${targets.length} draft(s); failed: ${failures.join("; ")}`;
+
+    // Exactly ONE combined reload for the whole batch -- pu-14 D2's own fix
+    // -- never one loadDrafts()/loadPersonas() pair per approved draft.
+    await Promise.all([loadDrafts(), loadPersonas()]);
+  } finally {
+    personasBatchApproveBtn.disabled = false;
+  }
+});
+// ==================== end puf-02-batch-approve-strip ====================
 
 async function loadPersonas() {
   setStatus(personasStatusEl, "loading", "loading…");
