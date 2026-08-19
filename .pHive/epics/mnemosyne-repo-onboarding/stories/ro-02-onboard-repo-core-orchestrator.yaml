@@ -43,6 +43,21 @@ description: |
   orchestrator — confirming the design discussion's "one coherent
   capability" framing at the implementation level.
 
+  **Amendment (design-discussion.md §7.1, grill round 2 finding 2.5.1):**
+  when constructing its scoped client, if the resolved layer stack for this
+  `repoRoot` includes `vector`, `onboardRepo()` now passes `notesDirectory:
+  path.join(repoRoot, 'mnemosyne-notes')` as that layer's per-layer option
+  — colocating the vector layer's note-staging directory under the SAME
+  `repoRoot` the file layer/persona store/file-index manifest already use,
+  instead of leaving it at `VectorLayerAdapter`'s machine-global default
+  (`~/.local/share/mnemosyne/notes`, `VectorLayerAdapter.ts:97-100`). This
+  is a real behavior change ONLY for a repo whose layer stack already
+  configures `vector` (Mode B's own default `docs/embedded-layers.json`
+  omits `vector`, per ro-03's existing design, so this affects Mode A and
+  any Mode B install that explicitly opted `vector` back in) — never a
+  retroactive move of already-written note files, only the DEFAULT a
+  freshly-run `onboardRepo()` call resolves to.
+
 acceptance_criteria:
   - "Given a fresh temp directory with no prior Mnemosyne state, when onboardRepo({ mode: 'standalone', repoRoot, scopeId }) runs, then CLAUDE.md/AGENTS.md/GEMINI.md are created with the managed block present (Level 0 + tier content, la-07 mandate section included)"
   - "Given the same fresh temp directory, when onboardRepo() completes, then <repoRoot>/.mnemosyne/personas/<scopeId>.yaml exists and passes assertValidPersona"
@@ -51,6 +66,8 @@ acceptance_criteria:
   - "Given Level 0's ~/.mnemosyne/level0-rules.md is missing, when onboardRepo() runs, then it throws the same loud error readLevel0Content already throws — never silently completes a partial onboarding"
   - "Given the graphify binary is NOT on PATH, when onboardRepo() runs, then it completes successfully with graphIndex: { ran: false, reason: <matches config.ts's own soft-fallback reasoning> }, never a hard failure"
   - "Given onboardRepo() completes for either mode, when its return value's baseLevel field is inspected, then it matches exactly what GET /memory-levels would report for a service actually rooted at repoRoot (cross-checked against ro-01's computeMemoryLevels called directly)"
+  - "Given a layer stack (mnemosyne.layers.json) that includes vector for this repoRoot, when onboardRepo() runs, then the vector adapter it constructs resolves notesDirectory to <repoRoot>/mnemosyne-notes, not VectorLayerAdapter's own machine-global default — verified by inspecting the constructed adapter's options, not merely asserted (design-discussion.md §7.1)"
+  - "Given a layer stack that does NOT include vector for this repoRoot (e.g. Mode B's own default docs/embedded-layers.json), when onboardRepo() runs, then no vector-adapter notesDirectory resolution happens at all — this amendment adds zero behavior for a repo that never configures vector"
 
 steps:
   - id: research
@@ -119,6 +136,8 @@ design_decisions:
     rationale: "Vertical slicing (docs/vertical-plan.md Slice 1) — this story delivers Mode B fully working with zero live Qdrant Cloud dependency before any collection-creation risk is introduced."
   - decision: "Each sub-step records soft failure in its own result field rather than the orchestrator throwing on any partial failure."
     rationale: "Mirrors MnemosyneClient's own established recordDegradation/layers_skipped convention (client.ts) — never silently drop a failure, but also never let one optional sub-step (e.g. no graphify) block the rest of onboarding from completing."
+  - decision: "Amendment (design-discussion.md §7.1): when the resolved layer stack includes vector, onboardRepo() colocates that layer's notesDirectory under repoRoot rather than leaving VectorLayerAdapter's machine-global default in effect."
+    rationale: "Operator ask: 'the standalone should be able to run with it specifying the location of storage... so that product can get its own multi-level memory created and updated' — a product-controlled repoRoot/storage-dir (ro-03) is only a real guarantee of 'ALL memory state under one directory' if the vector layer's own note-staging files are colocated too, not left at a machine-global default that may not even be writable/persistent in a containerized sidecar deployment."
 
 cross_cutting:
   - concern: loud-failure
@@ -136,6 +155,8 @@ references:
     relevant_excerpt: "Part 2.1 — the OnboardRepoOptions/OnboardRepoResult contract this story implements."
   - path: .pHive/epics/mnemosyne-foundation/stories/m-06-continuous-indexing.yaml
     relevant_excerpt: "Forward-compatibility note (grill finding 5.1): this story's L4 first-index writes the same manifest m-06's future continuous-indexing design will eventually also write to on a schedule — no coordination code needed yet, but the question is inherited explicitly."
+  - path: .pHive/epics/mnemosyne-repo-onboarding/docs/design-discussion.md
+    relevant_excerpt: "§7.1 — the amendment adding notesDirectory colocation under repoRoot when vector is configured, and grill round 2 finding 2.5.1's explicit non-hedged statement that this is a real (if narrow) behavior change, not risk-free."
 
 metric:
   applies: true

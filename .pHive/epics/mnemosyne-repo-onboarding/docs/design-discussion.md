@@ -278,3 +278,377 @@ has real, confirmed overlap with two other epics' open backlog
 (`mnemosyne-foundation`'s `m-06`/`m-07`/`m-08`, `ingest-a10ab2c1`'s
 `repo-*` chain) that must be reconciled rather than ignored. Full H/V +
 structured outline with risk registry and elicitation required.
+
+## 7. Amendment (2026-08-19) — configurable storage, document ingestion,
+web crawl, two explicit install paths
+
+The operator added three more real requirements after the design above was
+already grilled (round 1) and verified sound, before any story's build
+started. Authorized, real scope, folded into THIS epic now rather than
+deferred — per the operator's explicit instruction. Everything in §§1-6
+above stands unchanged; this section is additive.
+
+**Operator's own words, verbatim (session 2):**
+
+> "the standalone should be able to run with it specifying the location of
+> storage -- as we will often want to package mnemosyne AS the memory agent
+> for a product so that product can get its own multi-level memory created
+> and updated and can upload files, CV, description, crawl website, etc to
+> improve memory and then use the context fully to verify and inject as it
+> works along"
+
+> "we ALSO want the big one going that allows the bigger full framework on a
+> system when you install it on your system and are using your harness with
+> it and specifying the collection etc -- so i should be able to do 2
+> installs -- 1 packaged as a sidecar with an application behind the scenes
+> -- another as part of pantheon OR on a system to run and work with my
+> harness /agents"
+
+One quote decomposes into four sub-asks (§7.1-7.4 below); the second is one
+coherent ask (§7.5).
+
+### 7.1 (A) Configurable storage location for Mode B — small addition to ro-02/ro-03, not a new story
+
+Read the real code before designing this (not assumed): `FileLayerAdapter`'s
+constructor already takes an explicit `targetDirectory` (`FileLayerAdapter.ts:47`),
+and `registry.ts`'s `file` factory already wires it straight from
+`MnemosyneClientOptions.rootDirectory` (`registry.ts:74`) — the file layer,
+the file-index manifest (`<root>/.mnemosyne/file-index.json`), and the
+repo-local persona store (`<root>/.mnemosyne/personas/`) are ALL already
+fully colocated under whatever `repoRoot` the caller passes. **No gap
+there.** `VectorLayerAdapter`'s `notesDirectory`, however, defaults to
+`MNEMOSYNE_NOTES_DIR` env or `~/.local/share/mnemosyne/notes`
+(`VectorLayerAdapter.ts:97-100`) — a **machine-global** default,
+independent of `repoRoot` — unless a caller explicitly overrides it via
+constructor options (already plumbed: `registry.ts:73` passes per-layer
+`options` straight into `new VectorLayerAdapter(options)`, so
+`notesDirectory` is technically already settable per-layer via
+`mnemosyne.layers.json`, just never surfaced as a CLI flag or colocated by
+default).
+
+The one genuine, concrete gap: `bin/mnemosyne-agent.mjs`'s planned `agent
+init --build` (`ro-03`) hardcodes `repoRoot: process.cwd()` — a product
+that wants to "package mnemosyne AS the memory agent for a product" cannot
+say "put ALL of my memory state under `/var/lib/my-product/mnemosyne`"
+without first `cd`-ing there, which is real friction for install
+tooling/entrypoints/systemd units that don't want to be coupled to a
+specific invocation cwd.
+
+**Resolution — small, additive changes to already-planned stories, not a
+new story** (confirms the task's own framing; my own research agrees):
+
+- `ro-03` gains a new, optional `--storage-dir <dir>` flag on `agent init
+  --build`. When passed, `onboardRepo()`'s `repoRoot` becomes
+  `options.storageDir` instead of `process.cwd()` (mkdir -p'd first if it
+  doesn't exist yet — a real, new, tiny piece of code, not assumed).
+  Omitted: byte-identical to `ro-03`'s already-planned behavior
+  (`repoRoot: process.cwd()`), zero regression.
+- `ro-02`'s orchestrator gains one small enhancement: when it constructs its
+  scoped client and the resolved layer stack includes `vector` (only
+  possible today if a Mode B product explicitly added `vector` back to its
+  own `mnemosyne.layers.json`, since `docs/embedded-layers.json` omits it by
+  default per `ro-03`'s existing design), it passes `notesDirectory:
+  path.join(repoRoot, 'mnemosyne-notes')` as that layer's per-layer option —
+  colocating vector's note-staging directory under the SAME
+  product-controlled `repoRoot`/`storageDir`, instead of leaking to the
+  machine-global default. Without this, a containerized sidecar deployment
+  (where `~/.local/share/mnemosyne` may not even be a writable/persistent
+  path relative to the product's own container) would silently write
+  outside the directory the product asked for.
+- Mode A (`mnemosyne onboard <path> ...`, `ro-05`/`ro-07`) already has an
+  explicit storage-location parameter — its `<path>` positional argument —
+  so this amendment does not touch Mode A's CLI surface at all.
+
+### 7.2 (B) Document-ingestion primitive — new story `ro-10`
+
+**Real reuse root, confirmed by reading the code, not assumed:**
+`MnemosyneClient.remember()` (already shipped, v0.14.0) already cascades a
+single write through every WRITABLE configured layer in stack order
+(`client.ts:447-531`, cited in `research-brief.md` §2) — this is already
+the multi-level write path the operator's "product can get its own
+multi-level memory created and updated" describes; `ro-10` does not
+reimplement it, only feeds it.
+
+**What already exists that this reuses, not reinvents:**
+`skills/mnemosyne-persona-interview/crawl-context.mjs` (`pu-07-bounded-
+crawl-context`) already establishes this codebase's one existing precedent
+for "read external content safely, without overdoing it": a FIXED,
+named source list, three explicit caps (`MAX_LINES_PER_SOURCE`,
+`MAX_CHARS_PER_SOURCE`, `MAX_SOURCE_SUMMARY_CHARS`) applied in order, and a
+truncation marker rather than a silent cut. `ro-10` mirrors this PATTERN
+(named caps, truncate-not-silently-drop) for a structurally different input
+(arbitrary uploaded content, not a fixed local-file list) — it does not
+import or extend `crawl-context.mjs` itself, which is persona-interview-
+specific and repo-local-file-only.
+
+**Bounded, concrete scope (real, not hand-waved):**
+
+- File types, this story's cut: **plain text (`.txt`) and Markdown (`.md`)
+  only.** Confirmed by reading `package.json`: no PDF-parsing dependency
+  exists anywhere in this codebase today. PDF support is named an explicit,
+  separate, NOT-in-this-story follow-on (a new binary-parsing dependency is
+  its own risk surface, deliberately not bundled into the same story as the
+  safe, zero-new-dependency text/markdown path) — surfaced in Open
+  Questions below, not silently promised.
+- A free-text description or CV/resume-style document supplied as a plain
+  string (no file at all) is the trivial subcase of the same path — no
+  parsing needed.
+- Size bound: a hard byte ceiling on any single ingested document
+  (`MAX_INGEST_BYTES`), oversized input rejected loudly (never silently
+  truncated to a misleadingly-partial memory) — a policy choice distinct
+  from `crawl-context.mjs`'s "truncate and mark it," because losing part of
+  an operator-uploaded CV/description silently would misrepresent what the
+  product now "knows," where `crawl-context.mjs`'s persona-interview
+  context is explicitly advisory/best-effort by design.
+- Chunking/attribution: content is split into bounded chunks (mirroring the
+  same named-cap discipline); each chunk becomes its own `remember()` call,
+  tagged via the ALREADY-EXISTING `RememberOptions.tag` and `Content.metadata`
+  fields (`interfaces.ts:368-372`, no interface change needed) with the
+  source document's filename/description-id and chunk index — so a later
+  `recall()` hit's provenance traces back to "chunk 3 of resume.md,
+  ingested at T," not an anonymous blob.
+- Synchronous, sequential, never parallel: `VectorLayerAdapter.remember()`'s
+  own doc comment already notes a single index call can take several
+  seconds against live Qdrant Cloud; chunks are indexed one at a time,
+  returning a per-chunk result array (mirrors `ro-06`'s own "report which
+  half succeeded" loud-failure convention) rather than an all-or-nothing
+  result. A background queue/worker system is an explicit non-goal — this
+  codebase has no such infrastructure today, and inventing one is
+  materially bigger than "a document-ingestion primitive."
+- Surface: reuses the SAME three surfaces `recall()`/`remember()` already
+  have — a new MCP tool (`bin/mnemosyne-mcp.mjs` already has the exact
+  `registerTool(name, {title, description, inputSchema}, wrapAction(...))`
+  pattern this reuses verbatim, e.g. lines 106-136 for `recall`/`remember`),
+  a new CLI verb (mirrors `bin/mnemosyne-reindex.mjs`'s thin-HTTP-client
+  shape), and a new HTTP route (`server.ts` already documents its route
+  list in a header comment including `POST /remember`, ~line 93 — this
+  story adds one more line to that same list, the established convention).
+
+### 7.3 (C) Website crawling — new story `ro-11`, deliberately isolated
+
+The highest-new-risk piece of this amendment, per the operator's own
+instruction — treated with `ro-06`'s exact rigor (research-gated, explicit
+non-goals, a NEW named cross-cutting safety concern not in the generic
+`.pHive/cross-cutting-concerns.yaml` list, exactly as `ro-06` added
+no-Qdrant-wipe).
+
+**Real research first:** this codebase already uses the Node 20+ global
+`fetch()` repeatedly (`server.ts:248`, `bin/mnemosyne-reindex.mjs:39`,
+`bin/mnemosyne-skill-helper.mjs:104/122/195`, `bin/mnemosyne-install-hooks:108`)
+with `AbortController`/`signal`-based timeouts — a real, established
+in-codebase pattern this story reuses for its own per-request timeout,
+rather than inventing a new HTTP-client convention. **No HTML-parsing
+library** (no cheerio/jsdom/etc.) exists in this codebase — confirmed via
+`package.json`. This story's first cut therefore does **naive,
+best-effort tag-stripping text extraction**, explicitly named as such (not
+a readability-grade content-extraction engine) — adding a real HTML-parser
+dependency is named an explicit non-goal / open question, not silently
+assumed.
+
+**Explicit non-goals (never hand-waved):**
+- Not a general-purpose web scraper/spider.
+- Not unbounded or recursive crawling by default.
+- Not able to authenticate, inject credentials, use cookies, or otherwise
+  bypass any access control on a target URL — plain, unauthenticated GET
+  only; a 401/403 response fails loudly, never worked around.
+- Not a scheduled/background crawler — one bounded, on-demand call.
+- Not a readability/content-extraction engine — naive tag-stripping only,
+  in this story's cut.
+
+**Scope limits (smallest safe default, explicit opt-in for more):**
+- Default: **exactly one page** (the given URL). Multi-page (same-domain
+  only, never cross-domain) crawling is a separate, explicit opt-in
+  parameter, hard-capped at a small maximum page count regardless of what
+  the caller requests — never truly unbounded even when opted in.
+
+**Politeness / rate limiting (real, testable, not "best effort"):**
+- `robots.txt` for the target host is fetched and checked BEFORE any page
+  fetch; disallowed paths fail loudly with a clear message — never silently
+  skipped, never silently ignored.
+- An honest, self-identifying `User-Agent` (names Mnemosyne + this repo's
+  URL) — never a spoofed browser UA to dodge robots.txt/rate limits,
+  matching this project's own loud-failure-never-silent-workaround ethos.
+- A minimum, real, enforced delay between requests to the same host when
+  multi-page crawling is opted into (a named constant, tested directly —
+  mirrors `crawl-context.mjs`'s own "every cap enforced in code, not just
+  documented" discipline).
+
+**Size/time bounds (real ceilings, not assumed safe):**
+- A hard per-request timeout (mirrors the existing `AbortController`
+  precedent cited above).
+- A hard total-crawl wall-clock ceiling when multi-page.
+- A hard per-page byte-size cap, reusing the SAME `MAX_INGEST_BYTES`
+  constant `ro-10` defines (one shared cap, not two independently-drifting
+  ones) — oversized or non-text (`Content-Type` checked before reading the
+  body) responses are rejected, never partially buffered into memory
+  unbounded.
+- Landing mechanism: extracted text is fed through `ro-10`'s
+  `ingestDocument()` unchanged — never a second, parallel storage path.
+
+**New, named safety concern** (mirroring `ro-06`'s own precedent — not in
+the generic `.pHive/cross-cutting-concerns.yaml` list, which has no entry
+for outbound network fetches): **external-fetch-safety** — applies to
+`ro-11` by name, with its own explicit acceptance criteria for robots.txt
+compliance, rate limiting, and the size/time ceilings above.
+
+**Named, accepted risk (not solved here):** repeated crawls of the same URL
+create new, additive chunks each time (`remember()`'s vector write path is
+`--no-prune`, additive-only by design, per `VectorLayerAdapter.ts`'s own
+doc comment) — unbounded storage growth from repeat crawls is a real risk,
+explicitly named and deferred to whoever eventually builds staleness/dedup
+handling (the same class of forward-compatibility note `ro-02` already
+carries toward `m-06-continuous-indexing` for the file-index manifest — see
+grill finding 5.1), not solved inside `ro-11` itself.
+
+### 7.4 (D) Verify-and-inject usage loop — already fully covered by shipped infrastructure, zero new code
+
+Read `hooks/README.md` and `lib/mnemosyne/layer1/tiers.ts` in full before
+concluding anything here (not assumed). Finding: **this is already real and
+already reused — no new story, no new code.**
+
+- `hooks/pre-recall.mjs` / `hooks/post-remember.mjs` (`hooks/README.md`) are
+  the actual, already-shipped, automated "recall before work, remember
+  after work" loop — installed via `bin/mnemosyne-install-hooks` into a
+  harness's own `settings.json` (Claude Code today), firing on
+  `UserPromptSubmit`/`Stop`/`SubagentStop`.
+- `lib/mnemosyne/layer1/tiers.ts`'s own doc comment (lines ~86-96,
+  `la-07-layer1-enforcement-mandate`) ALREADY names this exact mechanism
+  explicitly in the mandate text every `syncAllHarnesses()` call splices
+  into a synced repo's `CLAUDE.md`/`AGENTS.md`/`GEMINI.md`: *"Where a
+  harness has a real startup-hook mechanism, this text says so and names
+  it -- Claude Code's `hooks/pre-recall.mjs`/`hooks/post-remember.mjs`... is
+  real and already fires automatically once installed... Codex and Gemini
+  CLI have no equivalent hook mechanism -- for those, this instruction text
+  IS the enforcement surface, degraded but not absent."*
+- `ro-02`'s Layer-1-sync sub-step ALREADY calls `syncAllHarnesses()`
+  unmodified — which already splices this exact, already-hook-aware mandate
+  text into whatever repo/product `onboardRepo()` runs against, Mode A or
+  Mode B alike. **A Mode-B-onboarded product's agent gets the identical
+  mandate text — naming the identical real hook mechanism — as the
+  operator's own harness. Not a second, bespoke mechanism; the same one,
+  reached through the same already-planned `ro-02` call.**
+
+**The one real, small gap, closed as a tiny addition (not a new story):**
+`bin/mnemosyne-install-hooks` is a machine-global action
+(`~/.claude/settings.json`) that nothing in this epic (or the shipped
+`mnemosyne-agent-harness-install` epic) ever auto-runs — consistent with
+this codebase's own established "heavy/mutating steps stay separate,
+explicit, operator-confirmed" convention (`install.sh`'s header comment,
+`grill 3.2`'s resolution for `--build` itself). `ro-03`'s `agent init
+--build` completion output gains one more printed line surfacing `bin/
+mnemosyne-install-hooks` as a next step (same "print, never auto-run"
+convention, one more line in the same style `install.sh` already uses for
+`agent init` itself and `ro-03` already uses for `--build` itself) — making
+the ALREADY-real mechanism discoverable at the exact moment a Mode B
+operator most needs to know about it, never inventing a new one.
+
+### 7.5 (E) Two explicit install paths — new story `ro-12`
+
+Read `docs/install.sh` and `README.md`'s Quickstart in full before
+designing this (not assumed). Today there is genuinely **one** flow:
+`curl|bash install.sh` (clone + `npm install` + symlink `bin/mnemosyne`)
+→ prints (never runs) `mnemosyne agent init` as the single next step.
+`agent init --build` (`ro-03`, this epic) and `mnemosyne onboard`
+(`ro-05`/`ro-07`, this epic) both build ON TOP of that one flow — but
+nothing in the docs or CLI output ever frames them as two DELIBERATE,
+named, discoverable choices. This confirms the task's own framing: **the
+new work is discoverability, not re-architecture.** No third install
+mechanism is introduced anywhere in this story.
+
+- **Sidecar / embedded install** — the README/CLI-facing name for exactly
+  what design-discussion.md already calls **Mode B**: `mnemosyne agent
+  init --build [--storage-dir <dir>]` (`ro-03` + §7.1's amendment above).
+  Same thing, one more name for the same concept, not a third mode.
+- **Full / system install** — the README/CLI-facing name for **Mode A**:
+  `mnemosyne agent init` (unchanged, no `--build`) to register the
+  operator's own harness, plus `mnemosyne onboard <path> --collection
+  <name> [--create]` (`ro-05`/`ro-07`) to join the operator's own Pantheon
+  tree — or, on a standalone system running its own harness/agents with no
+  Pantheon tree of its own, the same `mnemosyne onboard` verb against
+  whatever collection that system's own `swarm-memory`/Qdrant Cloud
+  configuration resolves to. Confirmed via real code reading: `mnemosyne
+  onboard` has no dependency on being "inside" any particular tree beyond
+  the collection name it's given — "part of Pantheon" vs. "standalone on a
+  system" is an operator-side Qdrant/collection-naming choice, not a
+  code-level branch this story needs to add.
+
+**Concrete, small, docs/CLI-output-only changes:**
+1. `README.md`'s Quickstart gains an explicit "choose your install path"
+   fork right after the existing `curl|bash install.sh` step, naming both
+   paths above with their real commands.
+2. `docs/install.sh`'s existing step-4 print block (today: prints only
+   `mnemosyne agent init`) gains a short, additive "two ways to finish
+   setup" section naming both `agent init --build` (sidecar) and `agent
+   init` + `mnemosyne onboard` (full/system) — no new script logic, no new
+   mutating step, same print-only discipline the file already has.
+3. `mnemosyne agent status` (already-shipped, already read-only) gains one
+   printed line surfacing which path is/isn't yet run for the current repo
+   (e.g., "Onboarding: not yet run. Sidecar: `agent init --build`. Full
+   (join your tree): `mnemosyne onboard <path> --collection <name>`").
+
+### 7.6 Updated risks (additive to §3 above)
+
+- **R10 (new) — a naive HTML tag-stripper produces low-quality extracted
+  text for complex pages**, degrading `recall()` hit quality for crawled
+  content. Mitigation: named as an explicit limitation in `ro-11`'s own
+  docs/acceptance criteria, not silently promised as high-fidelity;
+  upgrading to a real HTML-parsing dependency is named as a genuine,
+  separate open question, not bundled into this story.
+- **R11 (new) — unbounded storage growth from repeated crawls/ingests of
+  the same source** (both `ro-10` and `ro-11`'s writes are additive-only,
+  matching `VectorLayerAdapter`'s `--no-prune` design) — named explicitly,
+  deferred to whoever eventually builds dedup/staleness handling (same
+  class of note as `ro-02`'s existing forward-compatibility pointer to
+  `m-06-continuous-indexing`), not solved by this amendment.
+- **R12 (new) — a crawl call to an internal/private URL** (e.g.
+  `http://169.254.169.254/...` cloud-metadata endpoints, or another service
+  on the same host/network) **could be used as a network probe** if the
+  crawl target is ever caller-supplied without validation. Mitigation:
+  `ro-11`'s research step must confirm whether a real SSRF guard (reject
+  non-public/loopback/link-local targets) is warranted for this story's
+  real deployment context, and its acceptance criteria must state the
+  decision explicitly — not silently assumed safe because "it's just
+  fetch()."
+
+### 7.7 Updated dependencies (additive to §4 above)
+
+- `lib/mnemosyne/client.ts`'s `MnemosyneClient.remember()` cascade
+  (shipped, v0.14.0) — reused as-is by `ro-10`/`ro-11`, no changes to its
+  own contract.
+- `bin/mnemosyne-mcp.mjs`'s `registerTool(...)` pattern (shipped) — reused
+  for `ro-10`'s new `ingest_document` MCP tool.
+- Node 20+ global `fetch()` (already used repeatedly across this codebase,
+  cited above) — reused for `ro-11`'s HTTP fetches; no new HTTP-client
+  dependency.
+- `skills/mnemosyne-persona-interview/crawl-context.mjs` (shipped,
+  `pu-07`) — its bounded-cap PATTERN is mirrored by `ro-10`/`ro-11`, its
+  code is not imported (different domain).
+- `lib/mnemosyne/layer1/tiers.ts`'s `la-07` mandate text (shipped) — cited,
+  not modified, by §7.4's finding that D is already fully covered.
+
+### 7.8 Open questions added by this amendment
+
+**Genuinely open — need the operator's explicit answer before `ro-10`/`ro-11` execution:**
+
+4. Should PDF ingestion be added as a fast-follow story once `ro-10`'s
+   plain-text/Markdown cut ships, and if so, which parsing dependency
+   (there is no existing precedent in this codebase to default to)? This
+   amendment's `ro-10` deliberately excludes it — named here so it is not
+   silently forgotten, not because the operator's "PDF" mention was
+   dropped.
+5. Does `ro-11`'s crawl target ever need SSRF protection (rejecting
+   internal/private-network URLs), or is this story's real deployment
+   context (an operator or a product's own agent supplying URLs, not
+   arbitrary untrusted end-user input) low-risk enough that the research
+   step can document the decision and move on without adding a guard? See
+   risk R12 above — resolved as a required, explicit research-step
+   decision inside `ro-11`, not blocking planning.
+
+**Resolved during this amendment pass (no longer open):**
+
+- Whether (A) needed a new story: resolved no — small, additive changes to
+  already-planned `ro-02`/`ro-03`.
+- Whether (D) needed a new story or new code: resolved no — already fully
+  covered by `ro-02`'s existing reuse of `syncAllHarnesses()` /
+  `la-07`'s already-hook-aware mandate text; one small printed-output line
+  added to `ro-03`.

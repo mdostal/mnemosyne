@@ -4,7 +4,7 @@ title: Full-suite regression, version bump, CHANGELOG, README/install docs
 status: pending
 complexity: low
 methodology: classic
-depends_on: [ro-03-agent-init-build-flag, ro-07-onboard-new-collection-full-mode-a, ro-08-role-metadata-reachability-verification]
+depends_on: [ro-03-agent-init-build-flag, ro-07-onboard-new-collection-full-mode-a, ro-08-role-metadata-reachability-verification, ro-10-document-ingestion-primitive, ro-11-bounded-website-crawl, ro-12-two-explicit-install-paths]
 
 description: |
   Closes the epic: full-suite regression (`npm test`, `npx tsc --noEmit`,
@@ -14,6 +14,17 @@ description: |
   section, and final README/`docs/install.sh` pass confirming both modes'
   documentation is discoverable and accurate end to end (not just each
   individual story's own local doc update).
+
+  **Amendment (design-discussion.md §7):** `depends_on` extended to also
+  require `ro-10`/`ro-11`/`ro-12` (document ingestion, website crawl, and
+  the two-explicit-install-paths documentation story) — this story's own
+  regression pass and final README/install.sh cross-reference must cover
+  the amendment's additions too, not just the original six stories'
+  surface. The CHANGELOG section (acceptance criterion #4) additionally
+  lists: `--storage-dir` (ro-03 amendment), the `ingest`/`crawl` CLI
+  verbs + `ingest_document`/`crawl_website` MCP tools + `POST
+  /ingest`/`POST /crawl` routes (ro-10/ro-11), and the sidecar/full-system
+  install-path documentation fork (ro-12).
 
   Also runs one real, end-to-end smoke test per mode against a disposable
   temp repo (mirroring `test/agent-cli.mjs`'s isolated-temp-directory
@@ -111,6 +122,8 @@ references:
     relevant_excerpt: "Precedent for this epic's own final regression+release story shape and independent-reviewer-reruns-it-themselves discipline."
   - path: .pHive/cross-cutting-concerns.yaml
     relevant_excerpt: "versioning concern's implementation_checklist — 'Bump commit is the LAST commit on the epic branch.'"
+  - path: .pHive/epics/mnemosyne-repo-onboarding/docs/design-discussion.md
+    relevant_excerpt: "§7 — the full amendment (configurable storage, document ingestion, website crawl, two install paths) this story's extended regression/CHANGELOG/doc pass must cover."
 
 metric:
   applies: true

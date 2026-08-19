@@ -1,5 +1,17 @@
 # Structured Outline — mnemosyne-repo-onboarding
 
+> **Amendment addendum (2026-08-19):** three new stories (`ro-10` document
+> ingestion, `ro-11` website crawl, `ro-12` two explicit install paths) and
+> two small in-place amendments (`ro-02`, `ro-03` — configurable storage
+> location) were added after this outline was written. See
+> `docs/design-discussion.md` §7 and `docs/grill-record.md` round 2 for the
+> full design/grill trail, and `vertical-plan.md`'s own addendum for where
+> the new stories sit in slice order. The parts below (summary, file
+> manifest, risk registry, elicitation) describe the ORIGINAL six-story
+> scope only and are left as originally written, not retrofitted — treat
+> §7 of the design discussion as the amendment's own structured detail
+> rather than interleaving it here.
+
 ## Part 1 — Summary
 
 One onboarding capability, two deployment modes, built entirely by

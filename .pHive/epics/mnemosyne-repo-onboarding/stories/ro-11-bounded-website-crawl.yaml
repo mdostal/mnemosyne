@@ -1,0 +1,183 @@
+id: ro-11-bounded-website-crawl
+epic: mnemosyne-repo-onboarding
+title: Bounded, polite, single-page-default website crawl into the document-ingestion primitive
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [ro-10-document-ingestion-primitive]
+
+description: |
+  Amendment story (design-discussion.md §7.3), deliberately isolated from
+  `ro-10` — the highest-new-risk piece of this amendment per the
+  operator's own instruction, held to `ro-06`'s exact rigor (research-
+  gated, explicit non-goals, a NEW named cross-cutting safety concern, real
+  before/after scrutiny) rather than treated as "just a fetch() call."
+
+  Closes the "crawl website" third of the operator's ask: "product can...
+  crawl website, etc to improve memory." Fetches a given URL (default:
+  exactly that one page — same-domain multi-page crawling is a separate,
+  explicit opt-in, hard-capped even when used), extracts best-effort text
+  content, and feeds it through `ro-10`'s `ingestDocument()` UNCHANGED —
+  never a second, parallel storage/ingestion mechanism.
+
+  Real research first, not assumed: this codebase already uses the Node
+  20+ global `fetch()` repeatedly (`server.ts:248`,
+  `bin/mnemosyne-reindex.mjs:39`, `bin/mnemosyne-skill-helper.mjs:104/122/195`,
+  `bin/mnemosyne-install-hooks:108`) with `AbortController`/`signal`-based
+  timeouts — this story reuses that established pattern for its own
+  per-request timeout rather than inventing a new HTTP-client convention.
+  No HTML-parsing library (cheerio/jsdom/etc.) exists in this codebase
+  (confirmed via `package.json`) — this story's first cut therefore does
+  naive, best-effort tag-stripping text extraction, named explicitly as
+  such, never claimed to be a readability-grade extraction engine.
+
+  Explicit non-goals (never hand-waved, verified in review):
+  - Not a general-purpose web scraper/spider.
+  - Not unbounded or recursive crawling by default.
+  - Not able to authenticate, inject credentials, use cookies, or bypass
+    any access control — plain, unauthenticated GET only; 401/403 fails
+    loudly, never worked around.
+  - Not a scheduled/background crawler — one bounded, on-demand call.
+  - Not a readability/content-extraction engine in this story's cut.
+
+acceptance_criteria:
+  - "Given a single URL and no depth/page-count option, when crawlAndIngest(url) runs, then it fetches EXACTLY that one page (never following any link) and feeds its extracted text through ro-10's ingestDocument() unchanged"
+  - "Given a real robots.txt at the target host disallows the requested path, when crawlAndIngest(url) runs, then it fails loudly with a clear message naming the robots.txt disallow — the page is never fetched"
+  - "Given multi-page crawling IS explicitly opted into (same-domain only) with a requested page count above this story's hard maximum, when crawlAndIngest() runs, then it caps at the hard maximum regardless of what was requested — never truly unbounded even when opted in"
+  - "Given multi-page crawling is opted into, when successive same-host requests are made, then a real, enforced minimum delay elapses between them — measured directly in the test (real timestamps), not merely asserted present in code"
+  - "Given a target URL responds with a Content-Type that is not text/* or application/xhtml+xml (e.g. an image or binary octet-stream), when crawlAndIngest() runs, then the response body is never read/buffered — the crawl fails loudly citing the rejected content type, checked from the header alone before consuming the body"
+  - "Given a target URL's response body exceeds the SAME MAX_INGEST_BYTES constant ro-10 defines, when crawlAndIngest() runs, then it aborts the read once the cap is hit (never buffers the full oversized body into memory first) and fails loudly — one shared cap with ro-10, not a second, independently-drifting limit"
+  - "Given a target URL returns 401 or 403, when crawlAndIngest() runs, then it fails loudly surfacing that status — no retry, no credential injection, no workaround attempted"
+  - "Given a real per-request timeout is exceeded, when crawlAndIngest() runs, then the fetch is aborted (via the same AbortController/signal pattern already used elsewhere in this codebase) and the call fails loudly with a timeout-specific message, never hangs indefinitely"
+
+steps:
+  - id: research
+    description: >
+      Confirm real robots.txt fetch/parse behavior needed (no existing
+      robots.txt parser in this codebase — decide a minimal, testable
+      disallow-check implementation, not a full spec-compliant parser, and
+      document that scope decision explicitly). Confirm this story's real
+      deployment context (operator-supplied or a product's own agent-
+      supplied URLs, not arbitrary untrusted end-user input) to decide
+      whether an SSRF guard (reject non-public/loopback/link-local target
+      hosts) is warranted for this story's acceptance criteria — document
+      the decision explicitly either way (design-discussion.md §7.8 open
+      question #5), never silently assumed safe. Read the existing
+      AbortController/timeout pattern (bin/mnemosyne-skill-helper.mjs) to
+      match it exactly.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Write failing tests for crawlAndIngest() against a real, local,
+      throwaway HTTP test server (never a live external site in the
+      automated suite) covering: single-page default, robots.txt disallow,
+      multi-page hard-cap, real-timestamp rate-limit enforcement, non-text
+      Content-Type rejection before body read, oversized-body abort, 401/403
+      loud failure, timeout loud failure, and (if research confirms it's
+      warranted) the SSRF guard.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Create lib/mnemosyne/ingest/crawlAndIngest.ts implementing the
+      sequence above: robots.txt check -> Content-Type/size-bounded fetch
+      -> naive tag-stripping text extraction -> ro-10's ingestDocument()
+      call. Add a new "crawl_website" MCP tool (same registerTool pattern),
+      a CLI verb, and an HTTP route, mirroring ro-10's own three-surface
+      shape exactly.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: >
+      Independently re-verify every safety bound is real code, not
+      documentation-only (mirrors ro-06's own independent-reviewer-re-runs-
+      it precedent): robots.txt genuinely checked before fetch, rate-limit
+      genuinely enforced with real elapsed-time proof, Content-Type checked
+      before any body read, byte cap aborts an in-flight read rather than
+      buffering first, no credential/auth-bypass code path exists anywhere
+      in the module.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-repo-onboarding.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: bin/mnemosyne-skill-helper.mjs
+      purpose: "Existing AbortController/signal-based fetch timeout pattern (lines ~104,122,195) this story's own per-request timeout mirrors exactly."
+    - path: lib/mnemosyne/ingest/ingestDocument.ts
+      purpose: "ro-10's ingestion primitive — the ONLY landing mechanism this story's extracted text is fed through, never a second storage path."
+    - path: lib/mnemosyne/layers/VectorLayerAdapter.ts
+      purpose: "remember()'s --no-prune, additive-only write contract — the reason repeated crawls are a named, accepted storage-growth risk (R11) rather than solved by this story."
+    - path: .pHive/cross-cutting-concerns.yaml
+      purpose: "The generic concern list, confirmed to have NO entry for outbound network fetches — the reason this story adds a new, named external-fetch-safety concern by name, mirroring ro-06's own no-Qdrant-wipe precedent."
+
+files_to_modify:
+  - file: lib/mnemosyne/ingest/crawlAndIngest.ts
+    change: "New file: robots.txt check, bounded/rate-limited fetch, naive text extraction, hands off to ingestDocument()."
+  - file: lib/mnemosyne/ingest/crawlAndIngest.test.ts
+    change: "New file: tests per acceptance criteria against a local throwaway test HTTP server."
+  - file: bin/mnemosyne-mcp.mjs
+    change: "New 'crawl_website' MCP tool, same registerTool/wrapAction pattern as recall/remember/ingest_document."
+  - file: bin/mnemosyne-crawl.mjs
+    change: "New file: CLI verb, mirrors ro-10's bin/mnemosyne-ingest.mjs shape."
+  - file: lib/mnemosyne/server.ts
+    change: "New POST /crawl route; add one line to the existing route-list header comment."
+  - file: bin/mnemosyne
+    change: "New 'crawl' dispatch branch, matching the existing reindex/persona/agent/onboard/ingest shape."
+
+design_decisions:
+  - decision: "Default scope is exactly one page; same-domain multi-page crawling is a separate, explicit opt-in, hard-capped regardless of what's requested."
+    rationale: "Operator's own task instruction: 'pick the SMALLEST safe default and make deeper crawling an explicit opt-in.' A single-page default has the smallest possible blast radius while still closing the literal 'crawl website' ask for the common case (a product's own about/description page, a CV hosted at a URL, etc.)."
+  - decision: "First cut does naive tag-stripping text extraction, not a readability-grade content-extraction engine."
+    rationale: "No HTML-parsing dependency exists anywhere in this codebase today (package.json, confirmed). Adding one is a genuinely separate risk/dependency decision, named as an explicit open question rather than silently bundled into an already-high-risk story."
+  - decision: "robots.txt is checked and respected unconditionally — no flag exists anywhere in this module to bypass it."
+    rationale: "Politeness/legal-safety requirement named explicitly by the operator's task instruction. The absence of any bypass code path is a stronger guarantee than a runtime check that merely defaults to respecting it, mirroring ro-06's own 'no delete path exists in the module at all' additive-only discipline."
+  - decision: "Content-Type and byte-size checks happen before/during the body read, never after buffering the full response."
+    rationale: "Guards against a malicious or merely huge response ballooning memory/storage from a single crawl call — a real, testable bound, not an after-the-fact truncation."
+
+cross_cutting:
+  - concern: external-fetch-safety
+    action: "NEW, named concern (not in the generic .pHive/cross-cutting-concerns.yaml list, mirroring ro-06's own no-Qdrant-wipe precedent) — applies to this story by name. Its own acceptance criteria (robots.txt compliance, rate limiting, size/time ceilings, no-auth-bypass) ARE this concern's implementation checklist."
+  - concern: loud-failure
+    action: "robots.txt disallow, non-text Content-Type, oversized body, 401/403, and timeout all fail loudly with a distinguishable message each, per acceptance criteria — never a silent skip or a generic error."
+  - concern: existing-infrastructure
+    action: "Extracted content lands through ro-10's unmodified ingestDocument()/remember() cascade — no second storage mechanism, no new Qdrant/swarm-memory touchpoint outside that already-proven, additive-only path."
+  - concern: documentation
+    action: "New MCP tool/CLI verb/HTTP route each need a discoverable doc entry, PLUS this story's own non-goals (not a general scraper, no auth bypass, single-page default) must be stated in the same doc, not just this YAML."
+
+risks:
+  - severity: high
+    description: "A naive tag-stripper could produce low-quality/garbled extracted text for complex pages (scripts, nav chrome, ads all stripped indiscriminately alongside real content), degrading recall() hit quality for crawled content without an obvious signal to the operator that quality is degraded."
+    mitigation: "Named explicitly in this story's own docs/acceptance criteria as a known limitation (R10, design-discussion.md §7.6), not silently promised as high-fidelity; a real HTML-parsing dependency is named as a genuine, separate follow-on decision."
+  - severity: medium
+    description: "Repeated crawls of the same URL create new, additive chunks each time (remember()'s vector write path is --no-prune by design) — unbounded storage growth from repeat crawls over time."
+    mitigation: "Named explicitly (R11, design-discussion.md §7.6) and deliberately NOT solved here — deferred to whoever eventually builds dedup/staleness handling, the same class of forward-compatibility note ro-02 already carries toward m-06-continuous-indexing for the file-index manifest."
+  - severity: medium
+    description: "A caller-supplied crawl target could point at an internal/private-network URL (e.g. a cloud-metadata endpoint or another service on the same host), turning this feature into an unintended network probe (R12, design-discussion.md §7.6)."
+    mitigation: "This story's research step is a BLOCKING first step that must explicitly decide, and document, whether an SSRF guard is warranted for this story's real deployment context — not silently assumed safe because the primitive is 'just fetch().'"
+
+references:
+  - path: .pHive/epics/mnemosyne-repo-onboarding/docs/design-discussion.md
+    relevant_excerpt: "§7.3 — the full non-goals list, scope limits, politeness/rate-limiting requirements, size/time bounds, and the new external-fetch-safety concern."
+  - path: .pHive/epics/mnemosyne-repo-onboarding/docs/grill-record.md
+    relevant_excerpt: "Round 2, finding 2.3.1 — this story is held to ro-06's exact structural rigor, not treated as lower-risk just because fetch() itself is simple; finding 2.4.1 — cross-cutting concerns explicitly re-run for this story."
+  - path: .pHive/epics/mnemosyne-repo-onboarding/stories/ro-06-collection-creation-and-scope-mapping.yaml
+    relevant_excerpt: "The rigor bar this story is held to: research-gated first step, explicit non-goals, independent reviewer re-verification, a new named safety concern not in the generic list."
+
+metric:
+  applies: true
+  name: onboarding.crawl_safety_bound_violations
+  direction: down
+  unit: count
+  baseline: null
+  target: 0
+  window: "every run, permanently"
+  source:
+    kind: manual
+    ref: "Reviewer's independently-run check of every safety bound (robots.txt, rate-limit, Content-Type/size, no-auth-bypass), every merge and every subsequent release regression pass — mirrors ro-06's own metric shape"
+  verify_at: integrate
+  owner: reviewer

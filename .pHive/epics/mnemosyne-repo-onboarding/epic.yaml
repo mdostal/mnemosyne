@@ -68,6 +68,18 @@ notes: |
     integration), m-08 (bulk reindex command) remain untouched, separate
     backlog — referenced, not re-planned.
 
+  **Amendment (2026-08-19, same day, before any story's build started):**
+  the operator added three more real requirements after round-1 planning
+  was already grilled and verified sound — folded into THIS epic now, per
+  the operator's explicit instruction, not deferred to a fast-follow epic.
+  See docs/design-discussion.md §7 and docs/grill-record.md round 2 (5/5
+  findings resolved) for the full trail. Three new stories added
+  (ro-10/ro-11/ro-12); two already-planned stories (ro-02, ro-03) amended
+  in place with small, additive changes — see each story YAML's own
+  "Amendment" paragraph. version_bump stays minor: every amendment addition
+  is additive (new optional CLI flags, new CLI verbs/MCP tools/HTTP routes,
+  new printed docs), zero breaking changes to any existing contract.
+
 stories:
   - id: ro-01-memory-levels-scoped-extraction
     title: Extract GET /memory-levels computation into a repo-scoped, reusable function
@@ -109,7 +121,27 @@ stories:
     complexity: low
     depends_on: [ro-02-onboard-repo-core-orchestrator]
 
+  # --- Amendment (2026-08-19): configurable storage (folded into ro-02/ro-03
+  # above, not a new story — see each story's own "Amendment" paragraph),
+  # document ingestion, website crawl, and two explicit install paths.
+  # docs/design-discussion.md §7 / docs/grill-record.md round 2.
+
+  - id: ro-10-document-ingestion-primitive
+    title: Bounded document-ingestion primitive (text/Markdown, CV/description) over the existing remember() floor
+    complexity: medium
+    depends_on: [ro-02-onboard-repo-core-orchestrator]
+
+  - id: ro-11-bounded-website-crawl
+    title: Bounded, polite, single-page-default website crawl into the document-ingestion primitive
+    complexity: high
+    depends_on: [ro-10-document-ingestion-primitive]
+
+  - id: ro-12-two-explicit-install-paths
+    title: Make sidecar (Mode B) vs. full/system (Mode A) install paths explicit and discoverable
+    complexity: low
+    depends_on: [ro-03-agent-init-build-flag, ro-07-onboard-new-collection-full-mode-a]
+
   - id: ro-09-full-regression-release
     title: Full-suite regression, version bump, CHANGELOG, README/install docs
     complexity: low
-    depends_on: [ro-03-agent-init-build-flag, ro-07-onboard-new-collection-full-mode-a, ro-08-role-metadata-reachability-verification]
+    depends_on: [ro-03-agent-init-build-flag, ro-07-onboard-new-collection-full-mode-a, ro-08-role-metadata-reachability-verification, ro-10-document-ingestion-primitive, ro-11-bounded-website-crawl, ro-12-two-explicit-install-paths]

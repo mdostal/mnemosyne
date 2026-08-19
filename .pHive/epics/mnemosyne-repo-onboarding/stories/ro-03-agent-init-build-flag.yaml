@@ -32,12 +32,36 @@ description: |
   operator deciding how to configure a fresh embedded install with no
   swarm-memory credential.
 
+  **Amendment (design-discussion.md §7.1, §7.4):** two small, additive
+  changes closing the operator's newer "specifying the location of
+  storage" and "use the context fully to verify and inject as it works
+  along" asks:
+  1. A new, optional `--storage-dir <dir>` flag. When passed, `onboardRepo()`'s
+     `repoRoot` becomes this directory (created via mkdir -p first if it
+     doesn't exist) instead of `process.cwd()` — so a product packaging
+     Mnemosyne as its own sidecar memory agent can pin ALL of its memory
+     state under one directory it controls, from install tooling that
+     isn't coupled to a specific invocation cwd. Omitted: byte-identical to
+     this story's already-planned `repoRoot: process.cwd()` behavior.
+  2. `--build`'s completion output gains one more printed line naming `bin/
+     mnemosyne-install-hooks` as the next step for the SAME already-shipped
+     pre-recall/post-remember hook loop (`hooks/README.md`) the operator's
+     own harness already uses — never a second, bespoke verify-and-inject
+     mechanism. This is a docs/printed-output addition only: the hook
+     mechanism itself, and the mandate text naming it (already spliced into
+     the onboarded repo's harness files by ro-02's existing
+     syncAllHarnesses() call, per la-07/tiers.ts), are both already fully
+     shipped and require zero new code (design-discussion.md §7.4).
+
 acceptance_criteria:
   - "Given `mnemosyne agent init` run with no --build flag, when it completes, then it behaves byte-identically to today (MCP registration + skill copy only) and onboardRepo() is never called"
   - "Given `mnemosyne agent init --build` run in a fresh repo with no prior Mnemosyne state, when it completes, then onboardRepo({ mode: 'standalone', ... }) has run and its printed summary includes the base-level report (which of the 5 levels are now configured)"
   - "Given `mnemosyne agent init` run WITHOUT --build, when its output is inspected, then it prints a 'next step (not run automatically): mnemosyne agent init --build' line, mirroring install.sh's own existing 'prints, never runs agent init' convention"
   - "Given docs/embedded-layers.json, when read, then it is a valid mnemosyne.layers.json (per layers/config.ts's isLayerStackConfig shape) containing only graphify and file (vector omitted)"
   - "Given `mnemosyne agent init --build` run a second time (already built), when it completes, then it makes zero redundant writes beyond what onboardRepo() itself already guarantees idempotent (persona/harness-sync idempotency, inherited from ro-02, re-verified here at the CLI-flag level)"
+  - "Given `mnemosyne agent init --build --storage-dir <dir>` where <dir> does not yet exist, when it completes, then <dir> was created (mkdir -p) and onboardRepo() ran with repoRoot: <dir> — every artifact (CLAUDE.md/AGENTS.md/GEMINI.md, persona, file-index.json) lands under <dir>, none under process.cwd()"
+  - "Given `mnemosyne agent init --build` run WITHOUT --storage-dir, when it completes, then repoRoot resolves to process.cwd(), byte-identical to this story's pre-amendment behavior — --storage-dir is purely additive"
+  - "Given `mnemosyne agent init --build` completes (with or without --storage-dir), when its printed output is inspected, then it includes a 'next step (not run automatically): bin/mnemosyne-install-hooks' line naming the same pre-recall/post-remember loop hooks/README.md documents — never a second, differently-named mechanism"
 
 steps:
   - id: research
@@ -83,7 +107,7 @@ context:
 
 files_to_modify:
   - file: bin/mnemosyne-agent.mjs
-    change: "Add --build flag; wire onboardRepo() call in runInit(); print base-level report + not-run-automatically guidance."
+    change: "Add --build flag; wire onboardRepo() call in runInit(); print base-level report + not-run-automatically guidance. Amendment: add --storage-dir <dir> flag (overrides repoRoot, default process.cwd() unchanged); print bin/mnemosyne-install-hooks next-step line on --build completion."
   - file: docs/embedded-layers.json
     change: "New file: recommended layer-stack config for a bare embedded install (graphify + file, no vector)."
   - file: docs/install.sh
@@ -96,6 +120,10 @@ design_decisions:
     rationale: "Grill finding 3.2 — matches install.sh's own established convention for heavy/mutating steps staying separate and explicit, rather than introducing a second, inconsistent default one layer up."
   - decision: "docs/embedded-layers.json omits vector rather than including it unconfigured."
     rationale: "The unconfigured-vector-layer-degrades-safely behavior already works (client.ts's cascade), but leaving it in an embedded install's config silently attempts and fails a layer on every call — an explicit, documented recommended config avoids that noise without removing the option to add vector back later."
+  - decision: "--storage-dir is a new, optional flag; omitted behavior is byte-identical to this story's pre-amendment design (repoRoot: process.cwd())."
+    rationale: "design-discussion.md §7.1 — real research confirmed FileLayerAdapter/persona-store/file-index manifest already accept an arbitrary rootDirectory; the only gap was agent init --build never exposing that as a CLI-level override. Purely additive, no regression risk to this story's already-planned acceptance criteria."
+  - decision: "--build's printed output names bin/mnemosyne-install-hooks as a next step, but does not run it."
+    rationale: "design-discussion.md §7.4 — mirrors this story's own established --build opt-in convention (grill 3.2) one more level: hooks/settings.json is a machine-global, harness-scoped file, and auto-mutating it as a side effect of onboarding ONE repo would be exactly the kind of surprise action this story's own --build design was written to avoid. The mechanism itself needs zero new code — only discoverability."
 
 cross_cutting:
   - concern: documentation
@@ -112,7 +140,11 @@ references:
   - path: .pHive/epics/mnemosyne-agent-harness-install/stories/aha-03-install-script-and-readme.yaml
     relevant_excerpt: "Established 'print, never auto-run agent init' convention — this story's --build guidance text mirrors it one level up."
   - path: .pHive/epics/mnemosyne-repo-onboarding/docs/design-discussion.md
-    relevant_excerpt: "§2.3 Mode B entry point — the full design decision trail, including the grill 3.2 reversal."
+    relevant_excerpt: "§2.3 Mode B entry point — the full design decision trail, including the grill 3.2 reversal. §7.1/§7.4 — the --storage-dir and install-hooks-reminder amendments."
+  - path: hooks/README.md
+    relevant_excerpt: "The already-shipped pre-recall/post-remember hook loop and bin/mnemosyne-install-hooks installer this story's amendment surfaces as a next step, never reimplements."
+  - path: lib/mnemosyne/layer1/tiers.ts
+    relevant_excerpt: "la-07's mandate text (lines ~86-96) already names hooks/pre-recall.mjs/post-remember.mjs explicitly — confirms D needs no new mechanism, only discoverability."
 
 metric:
   applies: true

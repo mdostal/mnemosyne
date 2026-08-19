@@ -1,0 +1,127 @@
+id: ro-12-two-explicit-install-paths
+epic: mnemosyne-repo-onboarding
+title: Make sidecar (Mode B) vs. full/system (Mode A) install paths explicit and discoverable
+status: pending
+complexity: low
+methodology: classic
+depends_on: [ro-03-agent-init-build-flag, ro-07-onboard-new-collection-full-mode-a]
+
+description: |
+  Amendment story (design-discussion.md §7.5), closing the operator's
+  second new-session ask verbatim: "I should be able to do 2 installs -- 1
+  packaged as a sidecar with an application behind the scenes -- another as
+  part of pantheon OR on a system to run and work with my harness /agents."
+
+  Read `docs/install.sh` and `README.md`'s Quickstart in full before
+  designing this (not assumed). Today there is genuinely ONE documented
+  flow: `curl|bash install.sh` (clone + npm install + symlink
+  `bin/mnemosyne`) -> prints (never runs) `mnemosyne agent init` as the
+  single next step. `agent init --build` (`ro-03`, this epic, gains
+  `--storage-dir` via this amendment's ro-02/ro-03 changes) and `mnemosyne
+  onboard` (`ro-05`/`ro-07`, this epic) both already build on top of that
+  one flow — but nothing in the docs or CLI output today frames them as
+  two deliberate, named, discoverable choices. **The work here is
+  discoverability, not re-architecture** — confirmed by real code reading:
+  no new install mechanism, no third path, is introduced anywhere in this
+  story.
+
+  - **Sidecar / embedded install** — the README/CLI-facing name for exactly
+    what design-discussion.md already calls Mode B: `mnemosyne agent init
+    --build [--storage-dir <dir>]`.
+  - **Full / system install** — the README/CLI-facing name for exactly what
+    design-discussion.md already calls Mode A: `mnemosyne agent init`
+    (unchanged, no `--build`) to register the operator's own harness, plus
+    `mnemosyne onboard <path> --collection <name> [--create]` to join the
+    operator's own Pantheon tree, or the same verb against whatever
+    collection a standalone system's own swarm-memory/Qdrant Cloud
+    configuration resolves to when there's no Pantheon tree involved at
+    all — confirmed via real code reading that `mnemosyne onboard` has no
+    dependency on "being inside" any particular tree beyond the collection
+    name it's given; "part of Pantheon" vs. "standalone on a system" is an
+    operator-side Qdrant/collection-naming choice, not a code branch this
+    story adds.
+
+acceptance_criteria:
+  - "Given README.md's Quickstart section, when read top to bottom after the existing curl|bash install.sh step, then it names BOTH 'sidecar / embedded' and 'full / system' as explicit, labeled install paths, each with its real command(s), and each explicitly cross-referenced to the SAME 'Mode A'/'Mode B' vocabulary design-discussion.md already uses (never a third, unmapped term)"
+  - "Given docs/install.sh's own printed output (real execution, not just source reading), when it runs to completion, then its final print block names both `agent init --build` (sidecar) and `agent init` + `mnemosyne onboard` (full/system) as two explicit next-step choices, in addition to (not replacing) its existing `mnemosyne agent init` line"
+  - "Given `mnemosyne agent status` run in a repo where onboarding has not yet run, when its output is inspected, then it prints one line naming both the sidecar path (`agent init --build`) and the full/system path (`mnemosyne onboard <path> --collection <name>`) as discoverable next steps"
+  - "Given docs/install.sh, when diffed before/after this story, then its existing clone/npm-install/symlink steps 1-3 are byte-unchanged — only the step-4 print block gains additive text, no new script logic, no new mutating step"
+  - "Given this story's full diff, when reviewed against 'no third install mechanism,' then every new line traces to an ALREADY-shipped command (agent init, agent init --build, mnemosyne onboard, mnemosyne onboard --create) — zero new CLI verbs, zero new scripts beyond printed-text/output changes"
+
+steps:
+  - id: research
+    description: >
+      Re-read docs/install.sh and README.md's Quickstart in full (both
+      already read during this amendment's own design pass — re-confirm
+      exact current text before editing) plus bin/mnemosyne-agent.mjs's
+      existing statusClaude/statusCodex output shape, to place new text
+      consistently with each file's own existing style/conventions.
+    agent: researcher
+  - id: implement
+    description: >
+      Add the "choose your install path" fork to README.md's Quickstart;
+      extend docs/install.sh's step-4 print block additively; add one
+      printed line to `mnemosyne agent status`'s existing output naming
+      both paths.
+    agent: developer
+    depends_on: [research]
+  - id: review
+    description: >
+      Confirm docs/install.sh's steps 1-3 are byte-unchanged (diff-based,
+      not assumed), confirm both README and install.sh use the same
+      sidecar/full-system <-> Mode B/Mode A vocabulary mapping stated in
+      design-discussion.md §7.5, confirm zero new CLI verbs were
+      introduced anywhere in this story's diff.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-repo-onboarding.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: docs/install.sh
+      purpose: "Existing step-4 print-only block (lines ~89-101) this story extends additively — never adds a new mutating step, matching this file's own established discipline."
+    - path: README.md
+      purpose: "Existing Quickstart section (lines ~107-137) this story's fork is inserted into, immediately after the existing curl|bash step."
+    - path: bin/mnemosyne-agent.mjs
+      purpose: "agent status's existing, already-read-only output — this story adds one discoverability line, no new command."
+
+files_to_modify:
+  - file: README.md
+    change: "Quickstart gains an explicit 'choose your install path' fork naming sidecar (Mode B) vs. full/system (Mode A), each with real commands."
+  - file: docs/install.sh
+    change: "Additive-only extension of the existing step-4 print block naming both install paths; steps 1-3 unchanged."
+  - file: bin/mnemosyne-agent.mjs
+    change: "agent status gains one printed line naming both install paths as discoverable next steps."
+
+design_decisions:
+  - decision: "No new CLI verb, script, or install mechanism is introduced — every command this story documents already exists (agent init, agent init --build, mnemosyne onboard, mnemosyne onboard --create) by the time this story's own dependencies (ro-03, ro-07) land."
+    rationale: "design-discussion.md §7.5 / operator's own task instruction: 'the new work is making the CHOICE between the two paths explicit and discoverable... never a third parallel install mechanism.' Confirmed via real code reading of docs/install.sh and README.md before design, not assumed."
+  - decision: "'Sidecar' and 'full/system' are stated explicitly as the SAME concepts design-discussion.md already calls Mode B and Mode A, in both directions, not a silently-parallel vocabulary."
+    rationale: "Grill round 2 finding 2.1.1 — mirrors round 1's own finding 1.1 resolution discipline (state the relationship between two names explicitly, never leave it to be inferred)."
+
+cross_cutting:
+  - concern: documentation
+    action: "This IS the documentation story for the amendment's two-install-paths ask — README Quickstart, install.sh printed output, and agent status output all gain the same, consistently-worded fork."
+  - concern: versioning
+    action: "Docs/printed-output only, no consumer-visible API/CLI-flag change — folds into this epic's existing minor version bump (ro-09), no additional bump-level implication."
+
+risks:
+  - severity: low
+    description: "Adding a third place (README, install.sh, agent status) that states the same fork risks the three drifting out of sync over time if one is edited later without the others."
+    mitigation: "Acceptance criterion #1 requires all three to use the identical Mode A/Mode B <-> full-system/sidecar vocabulary; ro-09's own final cross-reference pass (its existing acceptance criterion for README/install.sh coherence) is extended by this story's own reference below to also re-check agent status's line."
+
+references:
+  - path: .pHive/epics/mnemosyne-repo-onboarding/docs/design-discussion.md
+    relevant_excerpt: "§7.5 — the full sidecar<->Mode B / full-system<->Mode A mapping and the three concrete, additive doc/CLI-output changes."
+  - path: .pHive/epics/mnemosyne-repo-onboarding/docs/grill-record.md
+    relevant_excerpt: "Round 2, finding 2.1.1 — the vocabulary-mapping requirement this story's acceptance criteria enforce directly in the README text itself, not just in this design doc."
+  - path: .pHive/epics/mnemosyne-repo-onboarding/stories/ro-09-full-regression-release.yaml
+    relevant_excerpt: "ro-09's existing final README/install.sh cross-reference pass runs AFTER this story (extended depends_on) and must also confirm agent status's new line, not just README/install.sh."
+
+metric:
+  applies: false
+  justification: "Pure documentation/printed-CLI-output story — no new runtime behavior, no recall/write API surface, correctness is fully verified by the acceptance criteria (real diffs, real script execution output) above, not a trend metric with a baseline/target."
