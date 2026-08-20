@@ -13,13 +13,35 @@
  * updated" mechanism the operator asked for. This module does not
  * reimplement that cascade; it feeds it, one bounded chunk at a time.
  *
- * Bounded, explicit scope for this story's cut (never hand-waved): plain
- * text (`.txt`) and Markdown (`.md`) content only — confirmed via
- * `package.json` that no PDF-parsing dependency exists anywhere in this
- * codebase today; PDF support is an explicit, separate follow-on
- * (`ro-13-pdf-document-ingestion`), never silently promised here. A
- * free-text description or CV/resume supplied as a plain string (no file at
- * all, `filename` omitted) is the trivial subcase of the same path.
+ * Bounded, explicit scope for this story's original cut (never hand-waved):
+ * plain text (`.txt`) and Markdown (`.md`) content only — confirmed via
+ * `package.json` that no PDF-parsing dependency existed anywhere in this
+ * codebase at the time. A free-text description or CV/resume supplied as a
+ * plain string (no file at all, `filename` omitted) is the trivial subcase
+ * of the same path.
+ *
+ * **ro-13-pdf-document-ingestion amendment (design-discussion.md §7.9):**
+ * `.pdf` is now a supported input format, landing as a NEW BRANCH inside
+ * this SAME `ingestDocument()` primitive — never a second ingestion path.
+ * PDF bytes are extracted via `unpdf@^1.8.1` (chosen over `pdf-parse` —
+ * see the story's `design_decisions` — because it vendors Mozilla's own
+ * `pdf.js` directly with zero required dependencies, registry- and
+ * tarball-confirmed no `.node`/`.wasm` binaries, unlike `pdf-parse`'s hard
+ * dependency on the native-binding `@napi-rs/canvas`). A NEW, separate cap
+ * (`MAX_PDF_SOURCE_BYTES`, see below) bounds the raw PDF file's bytes
+ * BEFORE any parsing is attempted; `unpdf`'s `extractText(pdf, {
+ * mergePages: false })` then returns one text string PER PAGE, and each
+ * page is run through this module's SAME existing `chunkContent()`
+ * independently — the resulting `Content.metadata` for every PDF chunk
+ * carries both `page` and a chunk-within-page `chunk_index`, never a single
+ * flattened chunk-N-of-file tag that loses page identity. The
+ * already-extracted text is then subject to this module's SAME,
+ * UNCHANGED `MAX_INGEST_BYTES` check ro-10 already enforces for `.txt`/
+ * `.md` — this story adds zero new, parallel size-enforcement logic for the
+ * post-extraction stage. Corrupt/encrypted PDFs fail loudly: `unpdf`'s
+ * vendored `pdf.js` throws real, named `PasswordException`/
+ * `InvalidPDFException` classes (from `unpdf/pdfjs`), caught by name here
+ * and surfaced as distinguishable errors, never a generic catch-all.
  *
  * Mirrors this codebase's one existing precedent for "read external content
  * safely, without overdoing it" —
@@ -53,6 +75,8 @@
  */
 
 import path from 'node:path';
+import { extractText, getDocumentProxy } from 'unpdf';
+import { InvalidPDFException, PasswordException } from 'unpdf/pdfjs';
 import type { Content, RememberResult, Scope } from '../interfaces.js';
 
 // ---------------------------------------------------------------------------
@@ -88,8 +112,28 @@ export const MAX_INGEST_BYTES = 200_000;
  */
 export const CHUNK_SIZE_BYTES = 4_000;
 
-/** The only file extensions this story's cut accepts (case-insensitive). Bounded, not hand-waved — see module doc comment. */
-export const SUPPORTED_EXTENSIONS: ReadonlySet<string> = new Set(['.txt', '.md']);
+/**
+ * Hard byte ceiling on a `.pdf` file's RAW, COMPRESSED SOURCE bytes,
+ * checked BEFORE `getDocumentProxy()`/`extractText()` is ever called —
+ * never after a partial parse attempt has already started (ro-13 grill
+ * round 3, finding 1).
+ *
+ * Deliberately a SEPARATE constant from `MAX_INGEST_BYTES` above, not the
+ * same literal cap reused: the two bound structurally different things.
+ * `MAX_INGEST_BYTES` bounds already-extracted, plain TEXT bytes.
+ * `MAX_PDF_SOURCE_BYTES` bounds the compressed BINARY PDF file's bytes
+ * before any text has been extracted from it — a PDF's byte size is
+ * dominated by embedded images/fonts and is not a reliable proxy for how
+ * much text it contains, so conflating the two caps would either let a
+ * huge, image-heavy PDF through (if sized for text) or reject a
+ * legitimate, text-heavy, well-compressed multi-page PDF (if sized too
+ * small). A future maintainer should never assume these two constants are
+ * interchangeable.
+ */
+export const MAX_PDF_SOURCE_BYTES = 20_000_000;
+
+/** The file extensions this module accepts (case-insensitive). Bounded, not hand-waved — see module doc comment. `.pdf` routes through a structurally different (bytes-in, extract-then-chunk) path than `.txt`/`.md`'s (text-in, chunk-directly) path — see `MAX_PDF_SOURCE_BYTES` above. */
+export const SUPPORTED_EXTENSIONS: ReadonlySet<string> = new Set(['.txt', '.md', '.pdf']);
 
 // ---------------------------------------------------------------------------
 // Public shapes
@@ -108,14 +152,26 @@ export interface IngestClient {
 }
 
 export interface IngestDocumentOptions {
-  /** The document's full text content (plain text or Markdown). Never binary. */
-  content: string;
+  /**
+   * The document's content. For `.txt`/`.md`/filename-less content, a plain
+   * text string (never binary). For a `.pdf` filename, the raw PDF file's
+   * bytes as a `Buffer` (a `Buffer` from `fs.readFileSync()` satisfies this
+   * directly) — checked against `MAX_PDF_SOURCE_BYTES` before any parsing
+   * is attempted. A `string` supplied alongside a `.pdf` filename is
+   * accepted too (encoded to bytes via UTF-8) purely so a caller can still
+   * exercise the PDF path without a real file handle in hand; it will
+   * virtually always fail extraction (`corrupt_pdf`) unless it is genuinely
+   * valid PDF syntax, which a plain string essentially never is.
+   */
+  content: string | Buffer;
   /**
    * Optional source filename. When present, its extension MUST be in
    * `SUPPORTED_EXTENSIONS` (checked before any remember() call) and it is
    * carried into each chunk's `Content.metadata.filename` for provenance.
    * Omit entirely for a free-text description/CV supplied as a plain string
-   * with no file at all (the trivial subcase of the same path).
+   * with no file at all (the trivial subcase of the same path). A `.pdf`
+   * extension routes `content` through the PDF extraction branch (see
+   * `MAX_PDF_SOURCE_BYTES`) instead of being chunked directly.
    */
   filename?: string;
   /** Optional caller-supplied tag, carried into each chunk's `Content.metadata.tag` alongside filename/chunk index. */
@@ -126,10 +182,17 @@ export interface IngestDocumentOptions {
 
 /** One chunk's outcome: which chunk it was, and its real `RememberResult`. */
 export interface IngestChunkOutcome {
-  /** 0-based chunk index, matching `Content.metadata.chunk_index` on the remember() call this chunk produced. */
+  /**
+   * 0-based chunk index, matching `Content.metadata.chunk_index` on the
+   * remember() call this chunk produced. For a PDF chunk, this is
+   * PAGE-SCOPED (the chunk-within-page index — see `page` below), not a
+   * document-wide index.
+   */
   index: number;
   /** The source filename this chunk was tagged with, or `null` for filename-less content. */
   filename: string | null;
+  /** 1-based source PDF page this chunk was extracted from, or `null` for non-PDF content (ro-13). */
+  page: number | null;
   /** Convenience mirror of `remember.ok`, for filtering without unwrapping the discriminated union. */
   ok: boolean;
   /** The real, unmodified `RememberResult` this chunk's `remember()` call returned. */
@@ -137,7 +200,14 @@ export interface IngestChunkOutcome {
 }
 
 export interface IngestDocumentError {
-  code: 'oversized_content' | 'unsupported_format' | 'partial_ingest_failure';
+  code:
+    | 'oversized_content'
+    | 'unsupported_format'
+    | 'partial_ingest_failure'
+    | 'oversized_pdf_source'
+    | 'encrypted_pdf'
+    | 'corrupt_pdf'
+    | 'pdf_parse_failed';
   message: string;
 }
 
@@ -195,77 +265,92 @@ function chunkContent(content: string, maxBytesPerChunk: number): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// ingestDocument()
+// Shared failure/outcome helpers — reused unchanged by both the plain-text
+// (.txt/.md) path and the PDF path below, so neither path ever grows its
+// own parallel size-enforcement or partial-failure-reporting logic.
 // ---------------------------------------------------------------------------
 
+function unsupportedFormatFailure(ext: string, filename: string): IngestDocumentFailure {
+  return {
+    ok: false,
+    chunks: [],
+    error: {
+      code: 'unsupported_format',
+      message:
+        `Unsupported format '${ext || '(no extension)'}' for '${filename}' — ingestDocument() only accepts ` +
+        `.txt/.md/.pdf content (SUPPORTED_EXTENSIONS). Convert '${filename}' to plain text, Markdown, or PDF ` +
+        `before ingesting; this is never a best-effort attempt to read arbitrary binary content as text.`,
+    },
+  };
+}
+
 /**
- * Chunks bounded input content and calls `client.remember()` once per
- * chunk, sequentially (never parallel — see module doc comment). Each
- * chunk's `Content.metadata` carries the source filename and chunk index,
- * so a later `recall()` hit's provenance traces back to "chunk N of
- * <filename>," never an anonymous blob.
- *
- * Pre-checks (oversized content, unsupported format) run BEFORE any
- * `remember()` call and reject loudly. A mid-sequence chunk failure does
- * NOT stop the remaining chunks — every chunk is attempted, and the result
- * reports exactly which succeeded/failed.
+ * ro-10's existing oversized-content rejection, reused UNCHANGED for both
+ * `.txt`/`.md` content directly and, after extraction, PDF-derived text
+ * (ro-13 AC #5) — this story adds zero new, parallel size-enforcement logic
+ * for the post-extraction stage, only the new pre-parse
+ * `MAX_PDF_SOURCE_BYTES` gate (see `oversizedPdfSourceFailure` below).
  */
-export async function ingestDocument(client: IngestClient, options: IngestDocumentOptions): Promise<IngestDocumentResult> {
-  const { content, tag, scope = 'project' } = options;
-  const filename = options.filename ?? null;
+function oversizedContentFailure(actualBytes: number): IngestDocumentFailure {
+  return {
+    ok: false,
+    chunks: [],
+    error: {
+      code: 'oversized_content',
+      message:
+        `Content is ${actualBytes} bytes, exceeding the ${MAX_INGEST_BYTES}-byte MAX_INGEST_BYTES ceiling — ` +
+        `rejected before any remember() call, never a silent partial ingest of only the first ` +
+        `${MAX_INGEST_BYTES} bytes. Split the document into smaller pieces and ingest each separately.`,
+    },
+  };
+}
 
-  if (filename !== null) {
-    const ext = path.extname(filename).toLowerCase();
-    if (!SUPPORTED_EXTENSIONS.has(ext)) {
-      return {
-        ok: false,
-        chunks: [],
-        error: {
-          code: 'unsupported_format',
-          message:
-            `Unsupported format '${ext || '(no extension)'}' for '${filename}' — ingestDocument() only accepts ` +
-            `.txt/.md content (SUPPORTED_EXTENSIONS). Convert '${filename}' to plain text or Markdown before ` +
-            `ingesting; PDF/binary support is an explicit, separate follow-on (ro-13), never a best-effort ` +
-            `attempt to read binary content as text.`,
-        },
-      };
-    }
+function oversizedPdfSourceFailure(actualBytes: number, filename: string): IngestDocumentFailure {
+  return {
+    ok: false,
+    chunks: [],
+    error: {
+      code: 'oversized_pdf_source',
+      message:
+        `'${filename}' is ${actualBytes} raw bytes, exceeding the ${MAX_PDF_SOURCE_BYTES}-byte ` +
+        `MAX_PDF_SOURCE_BYTES ceiling — rejected before getDocumentProxy()/extractText() is ever invoked, never ` +
+        `a silent truncate-then-parse. This bounds the PDF's compressed SOURCE bytes, distinct from ` +
+        `MAX_INGEST_BYTES (which bounds already-extracted text).`,
+    },
+  };
+}
+
+/** One chunk of a document, ready to be handed to `client.remember()`. */
+interface ChunkSpec {
+  text: string;
+  metadata: Record<string, unknown>;
+  index: number;
+  filename: string | null;
+  page: number | null;
+}
+
+/**
+ * Calls `client.remember()` once per `ChunkSpec`, sequentially — NEVER
+ * parallel/`Promise.all` (see module doc comment: no precedent for
+ * concurrent `remember()` calls exists anywhere in this codebase). A
+ * mid-sequence chunk failure does not stop the remaining chunks.
+ */
+async function rememberSequentially(client: IngestClient, scope: Scope, specs: ChunkSpec[]): Promise<IngestChunkOutcome[]> {
+  const outcomes: IngestChunkOutcome[] = [];
+  for (const spec of specs) {
+    const rememberResult = await client.remember({ text: spec.text, metadata: spec.metadata }, scope);
+    outcomes.push({ index: spec.index, filename: spec.filename, page: spec.page, ok: rememberResult.ok, remember: rememberResult });
   }
+  return outcomes;
+}
 
-  const actualBytes = Buffer.byteLength(content, 'utf8');
-  if (actualBytes > MAX_INGEST_BYTES) {
-    return {
-      ok: false,
-      chunks: [],
-      error: {
-        code: 'oversized_content',
-        message:
-          `Content is ${actualBytes} bytes, exceeding the ${MAX_INGEST_BYTES}-byte MAX_INGEST_BYTES ceiling — ` +
-          `rejected before any remember() call, never a silent partial ingest of only the first ` +
-          `${MAX_INGEST_BYTES} bytes. Split the document into smaller pieces and ingest each separately.`,
-      },
-    };
-  }
-
-  const chunkTexts = chunkContent(content, CHUNK_SIZE_BYTES);
-  const chunkOutcomes: IngestChunkOutcome[] = [];
-
-  // Sequential, never parallel/Promise.all — see module doc comment.
-  for (let index = 0; index < chunkTexts.length; index++) {
-    const chunkText = chunkTexts[index]!;
-    const metadata: Record<string, unknown> = {
-      filename,
-      chunk_index: index,
-      chunk_count: chunkTexts.length,
-    };
-    if (tag !== undefined) {
-      metadata.tag = tag;
-    }
-
-    const rememberResult = await client.remember({ text: chunkText, metadata }, scope);
-    chunkOutcomes.push({ index, filename, ok: rememberResult.ok, remember: rememberResult });
-  }
-
+/**
+ * Turns a completed sequence of chunk outcomes into the final result —
+ * reports exactly which chunks succeeded/failed (mirrors `ro-06`'s own
+ * partial-state loud-failure convention), never a generic all-or-nothing
+ * error. Shared by both the plain-text and PDF paths.
+ */
+function finalizeChunkOutcomes(chunkOutcomes: IngestChunkOutcome[]): IngestDocumentResult {
   const failedCount = chunkOutcomes.filter((outcome) => !outcome.ok).length;
   if (failedCount > 0) {
     return {
@@ -279,6 +364,183 @@ export async function ingestDocument(client: IngestClient, options: IngestDocume
       },
     };
   }
-
   return { ok: true, chunks: chunkOutcomes };
+}
+
+function buildTextChunkSpecs(content: string, filename: string | null, tag: string | undefined): ChunkSpec[] {
+  const chunkTexts = chunkContent(content, CHUNK_SIZE_BYTES);
+  return chunkTexts.map((text, index) => {
+    const metadata: Record<string, unknown> = { filename, chunk_index: index, chunk_count: chunkTexts.length };
+    if (tag !== undefined) {
+      metadata.tag = tag;
+    }
+    return { text, metadata, index, filename, page: null };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// PDF input path (ro-13-pdf-document-ingestion)
+// ---------------------------------------------------------------------------
+
+/**
+ * Extracts text from `pdfBytes` (already confirmed <= `MAX_PDF_SOURCE_BYTES`
+ * by the caller) via `unpdf`, enforces `MAX_INGEST_BYTES` on the resulting
+ * extracted text (ro-10's SAME, UNCHANGED check), and produces one
+ * `ChunkSpec` per page-chunk — each carrying BOTH the 1-based page number
+ * and the chunk-within-page index, per ro-13 AC #1.
+ *
+ * Real, distinguishable failures: `PasswordException` (encrypted PDF) and
+ * `InvalidPDFException` (corrupt/malformed PDF) are caught BY NAME —
+ * confirmed directly from `unpdf`'s vendored `pdf.js` (`unpdf/pdfjs`), never
+ * a generic catch-all. Any other unexpected parse error still fails loudly
+ * and distinguishably (`pdf_parse_failed`), naming the underlying error.
+ */
+async function extractPdfChunkSpecs(
+  pdfBytes: Buffer,
+  filename: string,
+  tag: string | undefined,
+): Promise<{ specs: ChunkSpec[] } | { failure: IngestDocumentFailure }> {
+  let totalPages: number;
+  let pageTexts: string[];
+  try {
+    const pdf = await getDocumentProxy(new Uint8Array(pdfBytes));
+    const extracted = await extractText(pdf, { mergePages: false });
+    totalPages = extracted.totalPages;
+    pageTexts = extracted.text;
+  } catch (err) {
+    if (err instanceof PasswordException) {
+      return {
+        failure: {
+          ok: false,
+          chunks: [],
+          error: {
+            code: 'encrypted_pdf',
+            message:
+              `'${filename}' is encrypted/password-protected (unpdf/pdf.js's PasswordException) — ingestDocument() ` +
+              `does not accept a password; decrypt the PDF before ingesting. This is never a silent empty-content ` +
+              `ingest, and distinguishable from a corrupt-PDF failure.`,
+          },
+        },
+      };
+    }
+    if (err instanceof InvalidPDFException) {
+      return {
+        failure: {
+          ok: false,
+          chunks: [],
+          error: {
+            code: 'corrupt_pdf',
+            message:
+              `'${filename}' is corrupt/unparseable (unpdf/pdf.js's InvalidPDFException: ${err.message}) — its PDF ` +
+              `structure could not be parsed. This is never a silent empty-content ingest, and distinguishable ` +
+              `from an encrypted-PDF failure.`,
+          },
+        },
+      };
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      failure: {
+        ok: false,
+        chunks: [],
+        error: {
+          code: 'pdf_parse_failed',
+          message: `'${filename}' failed to parse via unpdf for an unrecognized reason: ${message}`,
+        },
+      },
+    };
+  }
+
+  // ro-10's SAME, UNCHANGED MAX_INGEST_BYTES check, applied to the
+  // post-extraction text — ro-13 AC #5: zero new, parallel
+  // size-enforcement logic for this stage.
+  const fullExtractedText = pageTexts.join('\n\n');
+  const extractedBytes = Buffer.byteLength(fullExtractedText, 'utf8');
+  if (extractedBytes > MAX_INGEST_BYTES) {
+    return { failure: oversizedContentFailure(extractedBytes) };
+  }
+
+  const specs: ChunkSpec[] = [];
+  for (let pageIndex = 0; pageIndex < pageTexts.length; pageIndex++) {
+    const pageNumber = pageIndex + 1;
+    const pageText = pageTexts[pageIndex]!;
+    // Each PAGE's text is chunked independently via the SAME chunkContent()
+    // used for .txt/.md — a page whose text exceeds one chunk's bound still
+    // splits into multiple chunks, exactly like ro-10's own multi-chunk
+    // behavior for a long .txt/.md file.
+    const pageChunkTexts = chunkContent(pageText, CHUNK_SIZE_BYTES);
+    for (let chunkIndex = 0; chunkIndex < pageChunkTexts.length; chunkIndex++) {
+      const metadata: Record<string, unknown> = {
+        filename,
+        page: pageNumber,
+        page_count: totalPages,
+        chunk_index: chunkIndex,
+        chunk_count: pageChunkTexts.length,
+      };
+      if (tag !== undefined) {
+        metadata.tag = tag;
+      }
+      specs.push({ text: pageChunkTexts[chunkIndex]!, metadata, index: chunkIndex, filename, page: pageNumber });
+    }
+  }
+
+  return { specs };
+}
+
+// ---------------------------------------------------------------------------
+// ingestDocument()
+// ---------------------------------------------------------------------------
+
+/**
+ * Chunks bounded input content and calls `client.remember()` once per
+ * chunk, sequentially (never parallel — see module doc comment). Each
+ * chunk's `Content.metadata` carries the source filename and chunk index
+ * (plus, for PDF input, the source page number — see the module doc
+ * comment's ro-13 section), so a later `recall()` hit's provenance traces
+ * back to a real position in the source document, never an anonymous blob.
+ *
+ * Pre-checks (oversized content/PDF source, unsupported format) run BEFORE
+ * any `remember()` call and reject loudly. A mid-sequence chunk failure does
+ * NOT stop the remaining chunks — every chunk is attempted, and the result
+ * reports exactly which succeeded/failed.
+ */
+export async function ingestDocument(client: IngestClient, options: IngestDocumentOptions): Promise<IngestDocumentResult> {
+  const { content, tag, scope = 'project' } = options;
+  const filename = options.filename ?? null;
+  const ext = filename !== null ? path.extname(filename).toLowerCase() : null;
+
+  if (filename !== null && !SUPPORTED_EXTENSIONS.has(ext!)) {
+    return unsupportedFormatFailure(ext!, filename);
+  }
+
+  if (ext === '.pdf') {
+    // filename is non-null whenever ext is non-null (see above).
+    const pdfBytes = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8');
+
+    // MAX_PDF_SOURCE_BYTES checked BEFORE getDocumentProxy()/extractText()
+    // is ever called (ro-13 AC #2) — never after a partial parse attempt.
+    const actualPdfBytes = pdfBytes.byteLength;
+    if (actualPdfBytes > MAX_PDF_SOURCE_BYTES) {
+      return oversizedPdfSourceFailure(actualPdfBytes, filename!);
+    }
+
+    const extraction = await extractPdfChunkSpecs(pdfBytes, filename!, tag);
+    if ('failure' in extraction) {
+      return extraction.failure;
+    }
+
+    const chunkOutcomes = await rememberSequentially(client, scope, extraction.specs);
+    return finalizeChunkOutcomes(chunkOutcomes);
+  }
+
+  // Plain-text (.txt/.md) or filename-less free-text path (ro-10, unchanged).
+  const textContent = typeof content === 'string' ? content : content.toString('utf8');
+  const actualBytes = Buffer.byteLength(textContent, 'utf8');
+  if (actualBytes > MAX_INGEST_BYTES) {
+    return oversizedContentFailure(actualBytes);
+  }
+
+  const specs = buildTextChunkSpecs(textContent, filename, tag);
+  const chunkOutcomes = await rememberSequentially(client, scope, specs);
+  return finalizeChunkOutcomes(chunkOutcomes);
 }

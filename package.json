@@ -5,7 +5,7 @@
   "description": "Pantheon's Memory god — thin HTTP service wrapping the swarm-memory engine over the Qdrant SSOT (recall / remember / scopes / health).",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "bin": {
     "mnemosyne": "bin/mnemosyne",
@@ -77,6 +77,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "better-sqlite3": "^13.0.3",
     "tsx": "^4.23.11",
+    "unpdf": "^1.8.1",
     "yaml": "^2.9.0",
     "zod": "^3.25.76"
   }
