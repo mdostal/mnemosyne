@@ -154,7 +154,7 @@ failure.
 
 See `npm run` in `package.json` for the service entrypoint, and [`hooks/README.md`](./hooks/README.md) to wire the pre-recall/post-remember hooks into an agent runner.
 
-To **ingest a document into memory** — plain text/Markdown/PDF, or a free-text description/CV pasted with no file at all — bounded, chunked, and fed through the same `remember()` cascade above: `bin/mnemosyne ingest --file <path.txt|.md>` (or `--text "..."`) from the CLI, the `ingest_document` MCP tool, or `POST /ingest` against the MnemosyneClient HTTP API (`bin/mnemosyne-client-api`, default port 3141). `.pdf` content (`ro-13`) is extracted page-by-page via `unpdf`, with each chunk's provenance carrying both the source page and its chunk-within-page index — see `ingestDocument()`'s own doc comment for the full contract, including its separate `MAX_PDF_SOURCE_BYTES` pre-parse cap. Oversized content or an unsupported format (anything outside `.txt`/`.md`/`.pdf`) is rejected loudly before any write.
+To **ingest a document into memory** — plain text/Markdown, or a free-text description/CV pasted with no file at all — bounded, chunked, and fed through the same `remember()` cascade above: `bin/mnemosyne ingest --file <path.txt|.md>` (or `--text "..."`) from the CLI, the `ingest_document` MCP tool, or `POST /ingest` against the MnemosyneClient HTTP API (`bin/mnemosyne-client-api`, default port 3141). The underlying `ingestDocument()` primitive (`lib/mnemosyne/ingest/ingestDocument.ts`) also accepts `.pdf` — extracted page-by-page via `unpdf`, with each chunk's provenance carrying both the source page and its chunk-within-page index, bounded by a separate `MAX_PDF_SOURCE_BYTES` pre-parse cap on the raw file's bytes — but **that PDF support is not yet reachable through any of the three external surfaces above** (`ro-13`, explicitly out of scope for that story's own `files_to_modify`): `bin/mnemosyne-ingest.mjs`'s `--file` reads its target as UTF-8 text, and `POST /ingest` (and therefore the `ingest_document` MCP tool, a thin wrapper over that same route) accepts only a JSON string `content` field — neither can carry a PDF's raw binary bytes end to end today. Wiring binary PDF upload through the CLI and HTTP route is real, disclosed follow-on work, not a silently-dropped feature. Oversized content or an unsupported format (anything outside `.txt`/`.md`/`.pdf` at the `ingestDocument()` level) is rejected loudly before any write.
 
 To **crawl a website into memory**: `bin/mnemosyne crawl <url>` from the CLI, the `crawl_website` MCP tool, or `POST /crawl` against the same MnemosyneClient HTTP API — fetches EXACTLY the one given URL by default (never following any link; same-domain multi-page crawling is a separate, explicit `--max-pages`/`maxPages` opt-in, hard-capped regardless of what's requested), extracts best-effort text (naive tag-stripping, not a readability-grade engine — a known, named limitation), and feeds it through the same `ingestDocument()` primitive above — never a second storage path. `robots.txt` is always checked before any fetch; a disallowed path is never fetched. Not a general-purpose scraper and not a scheduled/background crawler — one bounded, on-demand call, plain unauthenticated GET only (401/403 fails loudly, never retried or worked around). A firm, default-on SSRF guard resolves the target hostname and rejects loopback/private-network/link-local/cloud-metadata addresses (including the `169.254.169.254` cloud-metadata address) before every individual fetch — there is no flag, option, or environment variable anywhere in `lib/mnemosyne/ingest/crawlAndIngest.ts` to bypass it.
 
@@ -203,6 +203,21 @@ project scope, verifies vector provenance, forces vector degradation to confirm
 file-layer fallback, starts the client HTTP API, and checks that `POST /recall`
 matches the library result. It uses a temporary fake `swarm-memory` executable,
 so it does not require live Qdrant access.
+
+Two more end-to-end smoke tests cover the onboarding paths above against a
+real, throwaway temp repo (never this checkout's own working tree):
+
+```bash
+npm run test:onboard-smoke-mode-b   # real `agent init --build` — no external infra required
+npm run test:onboard-smoke-mode-a   # real `mnemosyne onboard --create` — see below
+```
+
+Mode A's smoke test needs a real, disposable/test-scoped Qdrant collection
+to create against — set `MNEMOSYNE_SMOKE_MODE_A_COLLECTION=<name>` to run
+it for real; absent that env var it prints a visible `SKIPPED` line and
+exits 0 rather than running `--create` against whatever Qdrant cluster
+happens to be configured on the machine (which, for most operators, is
+real production infra with no delete path — never a safe default target).
 
 ## Read next
 
