@@ -22,6 +22,8 @@
  */
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -99,6 +101,59 @@ afterEach(async () => {
   vi.resetModules();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
+
+// ---------------------------------------------------------------------------
+// ro-07-onboard-new-collection-full-mode-a: a real, local, throwaway HTTP
+// server speaking POST /reindex's own `202 {status:'started', scope,
+// directory}` response shape (src/server.mjs, SERVICE.md's "Two reindex
+// paths") -- the real vector-index sub-step's own target, mocked here so
+// this suite never makes a live Qdrant/Mnemosyne-service call (mirrors
+// mnemosyne/tests/test_onboarding.py's own mockable-client convention on
+// the Python side, and lib/mnemosyne/ingest/crawlAndIngest.test.ts's own
+// startTestServer pattern on this TS side).
+// ---------------------------------------------------------------------------
+
+interface FakeReindexRequest {
+  method: string;
+  url: string;
+  body: unknown;
+}
+
+interface FakeMnemosyneServer {
+  url: string;
+  requests: FakeReindexRequest[];
+  close(): Promise<void>;
+}
+
+function startFakeMnemosyneServer(status = 202): Promise<FakeMnemosyneServer> {
+  return new Promise((resolve) => {
+    const requests: FakeReindexRequest[] = [];
+    const server = createServer((req, res) => {
+      let raw = '';
+      req.on('data', (chunk) => (raw += chunk));
+      req.on('end', () => {
+        const body = raw ? JSON.parse(raw) : null;
+        requests.push({ method: req.method ?? 'GET', url: req.url ?? '/', body });
+        res.writeHead(status, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            status: 'started',
+            scope: (body as { scope?: string } | null)?.scope,
+            directory: (body as { directory?: string } | null)?.directory,
+          }),
+        );
+      });
+    });
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address() as AddressInfo;
+      resolve({
+        url: `http://127.0.0.1:${port}`,
+        requests,
+        close: () => new Promise<void>((res2) => server.close(() => res2())),
+      });
+    });
+  });
+}
 
 describe('lib/mnemosyne/onboarding/onboardRepo.ts', () => {
   it('module file exists', () => {
@@ -217,14 +272,90 @@ describe('lib/mnemosyne/onboarding/onboardRepo.ts', () => {
     expect(result.graphIndex.ran).toBe(false);
   });
 
-  it("mode 'tree': vectorIndex is the stubbed { ran: false, reason: 'not yet implemented' } (real wiring lands in ro-07)", async () => {
+  it("mode 'tree': vectorIndex calls the real POST /reindex contract ({scope: scopeId, directory: repoRoot}) and records { ran: true } once accepted (ro-07)", async () => {
     const home = await makeFakeHome(true);
     const { onboardRepo } = await loadFreshModules(home);
     const repoRoot = await makeTempRepo();
+    const fakeServer = await startFakeMnemosyneServer(202);
+    vi.stubEnv('MNEMOSYNE_URL', fakeServer.url);
 
-    const result = await onboardRepo({ mode: 'tree', repoRoot, scopeId: 'test-scope', collection: 'some-collection', skipGraph: true });
+    try {
+      const result = await onboardRepo({
+        mode: 'tree',
+        repoRoot,
+        scopeId: 'test-scope',
+        collection: 'some-collection',
+        skipGraph: true,
+      });
 
-    expect(result.vectorIndex).toEqual({ ran: false, reason: 'not yet implemented' });
+      expect(result.vectorIndex).toEqual({ ran: true });
+      expect(fakeServer.requests).toHaveLength(1);
+      expect(fakeServer.requests[0]?.method).toBe('POST');
+      expect(fakeServer.requests[0]?.url).toBe('/reindex');
+      expect(fakeServer.requests[0]?.body).toEqual({ scope: 'test-scope', directory: repoRoot });
+    } finally {
+      await fakeServer.close();
+    }
+  });
+
+  it("mode 'tree': a non-202 POST /reindex response records a soft failure ({ ran: false, reason }), never throws (ro-07)", async () => {
+    const home = await makeFakeHome(true);
+    const { onboardRepo } = await loadFreshModules(home);
+    const repoRoot = await makeTempRepo();
+    const fakeServer = await startFakeMnemosyneServer(400);
+    vi.stubEnv('MNEMOSYNE_URL', fakeServer.url);
+
+    try {
+      const result = await onboardRepo({
+        mode: 'tree',
+        repoRoot,
+        scopeId: 'test-scope',
+        collection: 'some-collection',
+        skipGraph: true,
+      });
+
+      expect(result.vectorIndex.ran).toBe(false);
+      expect(result.vectorIndex.reason).toMatch(/POST \/reindex failed: 400/);
+    } finally {
+      await fakeServer.close();
+    }
+  });
+
+  it("mode 'tree': an unreachable Mnemosyne service records a soft failure ({ ran: false, reason }), never throws (ro-07)", async () => {
+    const home = await makeFakeHome(true);
+    const { onboardRepo } = await loadFreshModules(home);
+    const repoRoot = await makeTempRepo();
+    // Deliberately unroutable (TEST-NET-1, RFC 5737) -- mirrors
+    // test/layer1-mandate-hook.mjs's own UNREACHABLE_URL convention.
+    vi.stubEnv('MNEMOSYNE_URL', 'http://192.0.2.1:1');
+
+    const result = await onboardRepo({
+      mode: 'tree',
+      repoRoot,
+      scopeId: 'test-scope',
+      collection: 'some-collection',
+      skipGraph: true,
+    });
+
+    expect(result.vectorIndex.ran).toBe(false);
+    expect(result.vectorIndex.reason).toMatch(/could not reach/i);
+  });
+
+  it("mode 'tree', no collection given: vectorIndex records a soft failure without attempting any HTTP call (ro-07)", async () => {
+    const home = await makeFakeHome(true);
+    const { onboardRepo } = await loadFreshModules(home);
+    const repoRoot = await makeTempRepo();
+    const fakeServer = await startFakeMnemosyneServer(202);
+    vi.stubEnv('MNEMOSYNE_URL', fakeServer.url);
+
+    try {
+      const result = await onboardRepo({ mode: 'tree', repoRoot, scopeId: 'test-scope', skipGraph: true });
+
+      expect(result.vectorIndex.ran).toBe(false);
+      expect(fakeServer.requests).toHaveLength(0);
+    } finally {
+      await fakeServer.close();
+    }
   });
 
   it("mode 'standalone': vectorIndex sub-step is never attempted", async () => {
