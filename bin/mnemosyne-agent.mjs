@@ -434,6 +434,16 @@ function harnessesToRun(requested) {
 const BUILD_NEXT_STEP_LINE = "next step (not run automatically): mnemosyne agent init --build";
 const INSTALL_HOOKS_NEXT_STEP_LINE = "next step (not run automatically): bin/mnemosyne-install-hooks";
 
+// ro-12-two-explicit-install-paths: one discoverability line, always printed
+// by `agent status` (a read-only call — this never runs either command),
+// naming BOTH already-shipped install paths together so a reader who only
+// ever runs `agent status` still finds both choices — mirrors
+// docs/install.sh's step-4 print block and README.md's Quickstart fork,
+// which use this exact same sidecar/full-system <-> Mode B/Mode A vocabulary
+// mapping (design-discussion.md §7.5).
+const INSTALL_PATHS_LINE =
+  "install paths: sidecar (Mode B) = agent init --build | full/system (Mode A) = mnemosyne onboard <path> --collection <name>";
+
 /** Printed when `--build` is absent -- never runs onboardRepo(), only names it as the next, explicit, operator-confirmed step. */
 function printBuildGuidance(log) {
   log("");
@@ -536,6 +546,8 @@ export async function runStatus(argv, { log = console.log, warn = console.error 
       printCodexStatus(report, log);
     }
   }
+  log("");
+  log(INSTALL_PATHS_LINE);
   return true;
 }
 
