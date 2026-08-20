@@ -114,9 +114,52 @@
 //                        still exit 0, completing without either harness,
 //                        never hard-failing just because both are missing.
 //
+// ro-03-agent-init-build-flag (epic: mnemosyne-repo-onboarding) additions
+// below cover the new, opt-in `--build` flag that wires onboardRepo({ mode:
+// 'standalone', ... }) (ro-02) into `agent init`:
+//   AC-build-off          `agent init` with no `--build` never calls
+//                         onboardRepo() -- verified on real disk (no
+//                         .mnemosyne/, no CLAUDE.md/AGENTS.md/GEMINI.md
+//                         under the target repo) -- and prints the literal
+//                         "next step (not run automatically): mnemosyne
+//                         agent init --build" guidance line, mirroring
+//                         docs/install.sh's own established "print, never
+//                         run" convention for `agent init` itself.
+//   AC-build-on           `agent init --build` in a fresh repo with no
+//                         prior Mnemosyne state runs the REAL onboardRepo()
+//                         -- verified independently on disk (CLAUDE.md/
+//                         AGENTS.md/GEMINI.md, repo-local persona,
+//                         file-index.json all real, not mocked) -- and its
+//                         printed output includes a base-level report (all
+//                         5 canonical levels) plus the literal "next step
+//                         (not run automatically): bin/mnemosyne-install-
+//                         hooks" line (design-discussion.md §7.4).
+//   AC-build-idempotent   a second `agent init --build` run against the
+//                         same target makes zero redundant writes beyond
+//                         what onboardRepo() itself already guarantees
+//                         idempotent -- the repo-local persona file's
+//                         content AND mtime are unchanged, and every synced
+//                         harness file's content is byte-for-byte
+//                         unchanged.
+//   AC-storage-dir         `--storage-dir <dir>` (an amendment, design-
+//                         discussion.md §7.1) redirects onboardRepo()'s
+//                         repoRoot to <dir> (mkdir -p'd first) instead of
+//                         process.cwd() -- every onboarded artifact lands
+//                         under <dir>, none under process.cwd(). Omitted:
+//                         repoRoot resolves to process.cwd(), byte-
+//                         identical to this story's pre-amendment design.
+//
+// Since `--build` wires in onboardRepo() (lib/mnemosyne/onboarding/
+// onboardRepo.ts), bin/mnemosyne-agent.mjs now imports a .ts module
+// directly for the first time -- this file's own runCli() therefore
+// launches the CLI via `node_modules/.bin/tsx`, exactly like
+// test/persona-cli.mjs's own runCli() does for bin/mnemosyne-persona.mjs
+// (see that file's identical-shape helper), not plain `node` anymore.
+//
 // Usage: node test/agent-cli.mjs
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -128,6 +171,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const CLI = path.join(ROOT, "bin", "mnemosyne-agent.mjs");
 const DISPATCHER = path.join(ROOT, "bin", "mnemosyne");
+// ro-03: bin/mnemosyne-agent.mjs now imports lib/mnemosyne/onboarding/onboardRepo.ts directly
+// (a .ts module) -- launched via tsx, not plain node, matching test/persona-cli.mjs's own
+// TSX_BIN convention for the same reason (see this file's header comment).
+const TSX_BIN = path.join(ROOT, "node_modules", ".bin", "tsx");
 const MCP_SERVER_PATH = path.join(ROOT, "bin", "mnemosyne-mcp.mjs");
 const SKILLS_SRC_DIR = path.join(ROOT, "skills");
 const SKILL_NAMES = ["mnemosyne-standalone", "mnemosyne-persona-interview"];
@@ -164,10 +211,31 @@ async function makeFakeCodexHome() {
   return makeTempDir("mnemosyne-agent-cli-codexhome-");
 }
 
+/** ro-03: a fresh, throwaway target repo for `--build` tests -- never this repo's own working
+ * tree (onboardRepo() would otherwise write real CLAUDE.md/.mnemosyne/ state into this checkout). */
+async function makeTempRepo() {
+  return makeTempDir("mnemosyne-agent-cli-build-repo-");
+}
+
+/** ro-03: a fresh, throwaway $HOME pre-seeded with a Level 0 rules fixture
+ * (~/.mnemosyne/level0-rules.md) -- required before onboardRepo()'s Layer-1-sync sub-step will
+ * succeed (readLevel0Content hard-fails when it's missing, by design -- lib/mnemosyne/layer1/
+ * level0.ts). Mirrors onboardRepo.test.ts's own makeFakeHome(withLevel0=true) fixture. */
+async function makeFakeHomeWithLevel0() {
+  const home = await makeFakeHome();
+  await mkdir(path.join(home, ".mnemosyne"), { recursive: true });
+  await writeFile(
+    path.join(home, ".mnemosyne", "level0-rules.md"),
+    "# Level 0 operator rules (test fixture)\n\nAlways be kind.\n",
+    "utf8",
+  );
+  return home;
+}
+
 /** Runs the agent CLI as a real subprocess (directly, or through the bin/mnemosyne dispatcher), with $HOME pinned to `home` and $CODEX_HOME pinned to `codexHome`. `cwd` defaults to ROOT (this repo) -- the realistic, adversarial case documented in this file's own header comment, since this repo ships its own project-scoped .mcp.json. $CODEX_HOME is ALWAYS set (falling back to a fresh throwaway mkdtemp() if a caller doesn't pass one) -- structurally never inherited from this operator's real environment, since aha-02 made Codex a real harness the default no-`--harness` sweep genuinely invokes. `pathOverride`, when given, replaces PATH entirely (used to simulate "neither harness binary is on PATH" for real, per aha-02's AC-codex-absent-ok). */
 async function runCli(args, { home, codexHome, viaDispatcher = false, cwd = ROOT, pathOverride } = {}) {
   const cmd = viaDispatcher ? DISPATCHER : process.execPath;
-  const cmdArgs = viaDispatcher ? ["agent", ...args] : [CLI, ...args];
+  const cmdArgs = viaDispatcher ? ["agent", ...args] : [TSX_BIN, CLI, ...args];
   const env = { ...process.env };
   if (home) env.HOME = home;
   env.CODEX_HOME = codexHome || (await makeFakeCodexHome());
@@ -589,6 +657,160 @@ async function main() {
 
     await rm(home, { recursive: true, force: true });
     await rm(codexHome, { recursive: true, force: true });
+  }
+
+  // === ro-03-agent-init-build-flag: `--build` flag =========================
+
+  // --- AC-build-off: `agent init` (no --build) never calls onboardRepo(), prints the not-run-automatically guidance line ---
+  {
+    const home = await makeFakeHome();
+    const repo = await makeTempRepo();
+
+    const result = await runCli(["init"], { home, cwd: repo });
+    ok(result.code === 0, `agent init (no --build) -> exit 0 (got ${result.code}, stderr=${short(result.stderr)})`);
+    ok(
+      result.stdout.includes("next step (not run automatically): mnemosyne agent init --build"),
+      `agent init (no --build) prints the "next step (not run automatically): mnemosyne agent init --build" guidance line, mirroring install.sh's own "prints, never runs" convention -> ${short(result.stdout)}`,
+    );
+    ok(!/^base-level report:/m.test(result.stdout), `agent init (no --build) never prints the base-level report block (onboardRepo() never ran) -> ${short(result.stdout)}`);
+    ok(!existsSync(path.join(repo, ".mnemosyne")), `agent init (no --build) creates no .mnemosyne/ under the target repo -- onboardRepo() genuinely never ran`);
+    for (const fileName of ["CLAUDE.md", "AGENTS.md", "GEMINI.md"]) {
+      ok(!existsSync(path.join(repo, fileName)), `agent init (no --build) never creates ${fileName} under the target repo`);
+    }
+
+    await rm(home, { recursive: true, force: true });
+    await rm(repo, { recursive: true, force: true });
+  }
+
+  // --- AC-build-on: `agent init --build` runs the real onboardRepo(), verified on disk + base-level report + install-hooks guidance ---
+  {
+    const home = await makeFakeHomeWithLevel0();
+    const repo = await makeTempRepo();
+
+    const result = await runCli(["init", "--build", "--scope-id", "ro03-test-scope"], { home, cwd: repo });
+    ok(result.code === 0, `agent init --build -> exit 0 (got ${result.code}, stderr=${short(result.stderr)})`);
+
+    // Real, on-disk proof onboardRepo() actually ran against `repo` -- not mocked, not just stdout text.
+    for (const fileName of ["CLAUDE.md", "AGENTS.md", "GEMINI.md"]) {
+      ok(existsSync(path.join(repo, fileName)), `agent init --build creates ${fileName} under the target repo (Layer 1 sync)`);
+    }
+    const personaPath = path.join(repo, ".mnemosyne", "personas", "ro03-test-scope.yaml");
+    ok(existsSync(personaPath), `agent init --build seeds a repo-local persona at ${personaPath}`);
+    const fileIndexPath = path.join(repo, ".mnemosyne", "file-index.json");
+    ok(existsSync(fileIndexPath), `agent init --build writes the Level 4 file-store index at ${fileIndexPath}`);
+
+    // Printed base-level report -- names all 5 canonical levels.
+    ok(/^base-level report:/m.test(result.stdout), `agent init --build's output includes a base-level report -> ${short(result.stdout)}`);
+    for (const id of [0, 1, 2, 3, 4]) {
+      ok(new RegExp(`\\[${id}\\]`).test(result.stdout), `agent init --build's base-level report names level ${id} -> ${short(result.stdout)}`);
+    }
+
+    // Printed install-hooks discoverability line (design-discussion.md §7.4) -- names the SAME
+    // already-shipped bin/mnemosyne-install-hooks mechanism hooks/README.md documents, never a
+    // second, differently-named mechanism.
+    ok(
+      result.stdout.includes("next step (not run automatically): bin/mnemosyne-install-hooks"),
+      `agent init --build's output includes "next step (not run automatically): bin/mnemosyne-install-hooks" -> ${short(result.stdout)}`,
+    );
+
+    await rm(home, { recursive: true, force: true });
+    await rm(repo, { recursive: true, force: true });
+  }
+
+  // --- AC-build-idempotent: a second `agent init --build` run makes zero redundant writes beyond onboardRepo()'s own idempotency ---
+  {
+    const home = await makeFakeHomeWithLevel0();
+    const repo = await makeTempRepo();
+
+    const first = await runCli(["init", "--build", "--scope-id", "ro03-idempotent"], { home, cwd: repo });
+    ok(first.code === 0, `agent init --build (first run, idempotency setup) -> exit 0 (got ${first.code}, stderr=${short(first.stderr)})`);
+
+    const personaPath = path.join(repo, ".mnemosyne", "personas", "ro03-idempotent.yaml");
+    const beforePersona = await readFile(personaPath, "utf8");
+    const beforePersonaMtime = (await stat(personaPath)).mtimeMs;
+    const beforeHarnessFiles = {};
+    for (const fileName of ["CLAUDE.md", "AGENTS.md", "GEMINI.md"]) {
+      beforeHarnessFiles[fileName] = await readFile(path.join(repo, fileName), "utf8");
+    }
+
+    const second = await runCli(["init", "--build", "--scope-id", "ro03-idempotent"], { home, cwd: repo });
+    ok(second.code === 0, `agent init --build (second run) -> exit 0 (got ${second.code}, stderr=${short(second.stderr)})`);
+
+    const afterPersona = await readFile(personaPath, "utf8");
+    const afterPersonaMtime = (await stat(personaPath)).mtimeMs;
+    ok(afterPersona === beforePersona, "the repo-local persona file's content is byte-for-byte unchanged after a second `agent init --build` run (never overwritten once seeded)");
+    ok(afterPersonaMtime === beforePersonaMtime, "the repo-local persona file's mtime is unchanged after a second `agent init --build` run (zero redundant write)");
+    for (const fileName of ["CLAUDE.md", "AGENTS.md", "GEMINI.md"]) {
+      const afterContent = await readFile(path.join(repo, fileName), "utf8");
+      ok(afterContent === beforeHarnessFiles[fileName], `${fileName}'s content is byte-for-byte unchanged after a second \`agent init --build\` run (idempotent Layer 1 sync)`);
+    }
+
+    await rm(home, { recursive: true, force: true });
+    await rm(repo, { recursive: true, force: true });
+  }
+
+  // --- AC-storage-dir: `--build --storage-dir <dir>` creates <dir> and onboards it, never process.cwd() ---
+  {
+    const home = await makeFakeHomeWithLevel0();
+    const repo = await makeTempRepo(); // cwd -- must receive ZERO onboarding artifacts
+    const parentDir = await makeTempDir("mnemosyne-agent-cli-storage-parent-");
+    const storageDir = path.join(parentDir, "nested", "storage");
+    ok(!existsSync(storageDir), `sanity: ${storageDir} does not exist yet before the run`);
+
+    const result = await runCli(["init", "--build", "--storage-dir", storageDir, "--scope-id", "ro03-storage-dir"], { home, cwd: repo });
+    ok(result.code === 0, `agent init --build --storage-dir <dir> -> exit 0 (got ${result.code}, stderr=${short(result.stderr)})`);
+
+    ok(existsSync(storageDir), `--storage-dir ${storageDir} was created (mkdir -p)`);
+    for (const fileName of ["CLAUDE.md", "AGENTS.md", "GEMINI.md"]) {
+      ok(existsSync(path.join(storageDir, fileName)), `${fileName} lands under --storage-dir, not process.cwd()`);
+      ok(!existsSync(path.join(repo, fileName)), `${fileName} does NOT land under process.cwd() (${repo}) when --storage-dir is given`);
+    }
+    ok(existsSync(path.join(storageDir, ".mnemosyne", "personas", "ro03-storage-dir.yaml")), "persona lands under --storage-dir");
+    ok(existsSync(path.join(storageDir, ".mnemosyne", "file-index.json")), "file-index.json lands under --storage-dir");
+    ok(!existsSync(path.join(repo, ".mnemosyne")), `no .mnemosyne/ under process.cwd() (${repo}) when --storage-dir is given`);
+
+    await rm(home, { recursive: true, force: true });
+    await rm(repo, { recursive: true, force: true });
+    await rm(parentDir, { recursive: true, force: true });
+  }
+
+  // --- AC-storage-dir (omitted): `--build` WITHOUT --storage-dir -> repoRoot resolves to process.cwd(), byte-identical to pre-amendment behavior ---
+  {
+    const home = await makeFakeHomeWithLevel0();
+    const repo = await makeTempRepo();
+
+    const result = await runCli(["init", "--build"], { home, cwd: repo });
+    ok(result.code === 0, `agent init --build (no --storage-dir) -> exit 0 (got ${result.code}, stderr=${short(result.stderr)})`);
+    for (const fileName of ["CLAUDE.md", "AGENTS.md", "GEMINI.md"]) {
+      ok(existsSync(path.join(repo, fileName)), `${fileName} lands under process.cwd() (${repo}) when --storage-dir is omitted`);
+    }
+
+    await rm(home, { recursive: true, force: true });
+    await rm(repo, { recursive: true, force: true });
+  }
+
+  // --- AC-embedded-layers: docs/embedded-layers.json is a valid mnemosyne.layers.json (isLayerStackConfig shape), graphify + file only, vector omitted ---
+  {
+    const embeddedLayersPath = path.join(ROOT, "docs", "embedded-layers.json");
+    ok(existsSync(embeddedLayersPath), `docs/embedded-layers.json exists`);
+    const raw = await readFile(embeddedLayersPath, "utf8");
+    let parsed = null;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      parsed = null;
+    }
+    ok(parsed !== null, "docs/embedded-layers.json is valid JSON");
+    ok(parsed && Array.isArray(parsed.layers), "docs/embedded-layers.json matches the { layers: [...] } shape (layers/config.ts's isLayerStackConfig)");
+    const entries = parsed?.layers ?? [];
+    ok(
+      entries.every((entry) => typeof entry === "object" && entry !== null && typeof entry.name === "string"),
+      `every entry in docs/embedded-layers.json's layers array has a string 'name' (isLayerStackConfig's own per-entry check) -> ${JSON.stringify(parsed)}`,
+    );
+    const names = entries.map((entry) => entry.name);
+    ok(names.includes("graphify"), `docs/embedded-layers.json includes the 'graphify' layer -> ${JSON.stringify(names)}`);
+    ok(names.includes("file"), `docs/embedded-layers.json includes the 'file' layer -> ${JSON.stringify(names)}`);
+    ok(!names.includes("vector"), `docs/embedded-layers.json omits the 'vector' layer -> ${JSON.stringify(names)}`);
   }
 }
 

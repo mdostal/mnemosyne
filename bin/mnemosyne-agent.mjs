@@ -96,12 +96,50 @@
 //     skill file — it only ever calls the same read-only targeted lookup /
 //     fs.existsSync checks `init` uses to decide whether to act.
 
+// ro-03-agent-init-build-flag (epic: mnemosyne-repo-onboarding): Mode B's
+// real entry point. Adds a new, OPT-IN `--build` flag (default OFF,
+// design-discussion.md section 2.3, grill 3.2) that, once MCP registration
+// + skill copy above complete, wires `onboardRepo({ mode: 'standalone',
+// repoRoot, scopeId })` (ro-02, lib/mnemosyne/onboarding/onboardRepo.ts) --
+// Layer 1 sync, persona seed, first-time file/graph index, and a
+// base-level report of which of the 5 canonical memory levels are now
+// configured. Absent --build, `agent init` behaves byte-identically to
+// before this story (MCP registration + skill copy only, onboardRepo()
+// never called) and instead prints a "next step (not run automatically):
+// mnemosyne agent init --build" line, mirroring docs/install.sh's own
+// established "print, never auto-run a heavy/mutating step" convention one
+// level up the stack (the exact reason install.sh itself prints but never
+// runs `agent init`).
+//
+// `--storage-dir <dir>` (design-discussion.md section 7.1 amendment): when
+// given, onboardRepo()'s repoRoot becomes <dir> (created via `mkdir -p`
+// first if it doesn't exist) instead of process.cwd() -- so a product
+// packaging Mnemosyne as its own sidecar memory agent can pin ALL of its
+// memory state under one directory it controls, from install tooling that
+// isn't coupled to a specific invocation cwd. Omitted: byte-identical to
+// this story's pre-amendment repoRoot: process.cwd() design.
+//
+// --build's completion output also names bin/mnemosyne-install-hooks as a
+// next step (design-discussion.md section 7.4) -- the SAME already-shipped
+// pre-recall/post-remember hook loop (hooks/README.md) syncAllHarnesses()
+// (called inside onboardRepo()) already splices mandate text about into
+// every synced repo's harness files (la-07/tiers.ts) -- never a second,
+// bespoke mechanism, only discoverability at the moment a Mode B operator
+// most needs it. This, like --build itself, is printed, never run.
+//
+// Because --build imports lib/mnemosyne/onboarding/onboardRepo.ts (a .ts
+// module) directly, this file is now launched via tsx, not plain node (see
+// bin/mnemosyne's own updated comment on its `agent` dispatch branch) --
+// noEmit:true means there is no build step to import a .ts module any
+// other way (mirrors bin/mnemosyne-persona.mjs's identical situation).
+
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
+import { onboardRepo } from "../lib/mnemosyne/onboarding/onboardRepo.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -359,9 +397,20 @@ function printCodexStatus(report, log) {
 const KNOWN_HARNESSES = ["claude", "codex"];
 
 export function parseArgs(argv) {
-  const args = { harness: null };
+  const args = { harness: null, build: false, storageDir: null, scopeId: null };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--harness") args.harness = argv[++i];
+    // ro-03: OPT-IN, default false -- see this file's own header comment
+    // for the grill-3.2 rationale (mirrors install.sh's own "heavy/mutating
+    // steps stay separate, explicit, operator-confirmed" convention).
+    else if (argv[i] === "--build") args.build = true;
+    // ro-03 amendment (design-discussion.md §7.1): redirects onboardRepo()'s
+    // repoRoot away from process.cwd(). No effect unless --build is also set.
+    else if (argv[i] === "--storage-dir") args.storageDir = argv[++i];
+    // ro-03: overrides the derived scopeId (target directory's own
+    // basename) onboardRepo() is called with. No effect unless --build is
+    // also set.
+    else if (argv[i] === "--scope-id") args.scopeId = argv[++i];
   }
   return args;
 }
@@ -377,8 +426,74 @@ function harnessesToRun(requested) {
   return KNOWN_HARNESSES;
 }
 
+// --- ro-03: `--build` (Mode B's real entry point) --------------------------
+
+// The exact "not run automatically" guidance line text — the literal
+// contract this story's own acceptance criteria quote verbatim, mirroring
+// docs/install.sh's identical convention for `agent init` itself.
+const BUILD_NEXT_STEP_LINE = "next step (not run automatically): mnemosyne agent init --build";
+const INSTALL_HOOKS_NEXT_STEP_LINE = "next step (not run automatically): bin/mnemosyne-install-hooks";
+
+/** Printed when `--build` is absent -- never runs onboardRepo(), only names it as the next, explicit, operator-confirmed step. */
+function printBuildGuidance(log) {
+  log("");
+  log(BUILD_NEXT_STEP_LINE);
+  log("  runs onboardRepo() (mode: standalone) against this repo -- Layer 1 sync, persona seed,");
+  log("  first-time file/graph index, and a base-level report of which of the 5 memory levels are");
+  log("  configured. Opt-in, off by default (this repo's own convention for heavy/mutating steps).");
+}
+
+/** `<repoRoot>`'s own basename -- the default scopeId when --scope-id isn't given, mirroring layer1/persona-store-repo-local.ts's own scopeId convention (a stable, human-readable identifier for "this repo"), never a random/opaque id. */
+function defaultScopeId(repoRoot) {
+  return path.basename(repoRoot);
+}
+
+/** ml-04/ro-01's canonical 5-level base-level report, printed after a real `--build` run. */
+function printBaseLevelReport(result, log) {
+  log("");
+  log("base-level report:");
+  for (const level of result.baseLevel) {
+    log(`  [${level.id}] ${level.label}: ${level.configured ? "configured" : "NOT configured"}`);
+  }
+}
+
+/** design-discussion.md §7.4 -- names, never runs, the already-shipped hooks/README.md install verb. */
+function printInstallHooksGuidance(log) {
+  log("");
+  log(INSTALL_HOOKS_NEXT_STEP_LINE);
+  log("  installs the already-shipped pre-recall/post-remember hook loop (hooks/README.md) into");
+  log("  your harness's settings.json -- the same mechanism the Layer 1 mandate text this run just");
+  log("  spliced into this repo's CLAUDE.md/AGENTS.md/GEMINI.md already names explicitly.");
+}
+
+/**
+ * `agent init --build`'s own step -- runs the real onboardRepo({ mode:
+ * 'standalone', ... }) (ro-02) against either process.cwd() or
+ * --storage-dir (mkdir -p'd first if it doesn't exist yet), scoped to
+ * --scope-id or, absent that, the target directory's own basename. Called
+ * from runInit() ONLY when --build is set (grill 3.2's opt-in-only design)
+ * -- never a second, inconsistent default.
+ */
+export async function runBuild({ storageDir, scopeId, log = console.log } = {}) {
+  const repoRoot = storageDir ? path.resolve(storageDir) : process.cwd();
+  if (storageDir) {
+    // §7.1 amendment: mkdir -p the target before onboarding it -- a
+    // product's install tooling shouldn't have to pre-create its own
+    // storage directory just to point --storage-dir at it.
+    mkdirSync(repoRoot, { recursive: true });
+  }
+  const resolvedScopeId = scopeId || defaultScopeId(repoRoot);
+
+  log("");
+  log(`agent init --build: onboarding ${repoRoot} (scopeId: ${resolvedScopeId})...`);
+  const result = await onboardRepo({ mode: "standalone", repoRoot, scopeId: resolvedScopeId });
+  printBaseLevelReport(result, log);
+  printInstallHooksGuidance(log);
+  return result;
+}
+
 export async function runInit(argv, { log = console.log, warn = console.error } = {}) {
-  const { harness } = parseArgs(argv);
+  const { harness, build, storageDir, scopeId } = parseArgs(argv);
   const harnesses = harnessesToRun(harness);
   for (const h of harnesses) {
     if (h === "claude") {
@@ -395,6 +510,17 @@ export async function runInit(argv, { log = console.log, warn = console.error } 
       await initCodex({ log, warn });
     }
   }
+
+  // ro-03: MCP registration + skill copy above are byte-identical to
+  // before this story regardless of --build. onboardRepo() is called ONLY
+  // when --build is explicitly passed -- absent it, this branch only ever
+  // prints guidance, never mutates anything.
+  if (build) {
+    await runBuild({ storageDir, scopeId, log });
+  } else {
+    printBuildGuidance(log);
+  }
+
   return true;
 }
 

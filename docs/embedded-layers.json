@@ -1,0 +1,7 @@
+{
+  "_comment": "docs/embedded-layers.json -- ro-03-agent-init-build-flag (epic: mnemosyne-repo-onboarding). A recommended mnemosyne.layers.json for a bare embedded install (Mode B, `mnemosyne agent init --build`) with no swarm-memory / Qdrant credential configured. Deliberately omits `vector` rather than relying on the existing, still-correct, silent-degrade-past-a-failing-layer behavior (layers/config.ts's own resolveLayerStackConfig cascade) -- an explicit, documented choice for an operator deciding how to configure a fresh embedded install, so a vector layer with no credential doesn't silently attempt and fail on every recall()/remember() call. Copy this file to your repo root as `mnemosyne.layers.json` to use it (or point MNEMOSYNE_LAYERS at its contents). Add a `vector` entry back yourself once you have a swarm-memory credential -- this file only chooses a safe, quiet default, never removes the option. Shape: layers/config.ts's isLayerStackConfig -- { layers: [{ name: string, options?: object }, ...] }.",
+  "layers": [
+    { "name": "graphify" },
+    { "name": "file" }
+  ]
+}

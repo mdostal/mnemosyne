@@ -126,6 +126,15 @@ npm install
 npm test
 ```
 
+Embedding Mnemosyne as a product's own memory agent (not a Mnemosyne
+developer's own harness)? `mnemosyne agent init --build` runs a first-time
+index of your codebase (Layer 1 sync, persona seed, file/graph index) as
+part of the same step — opt-in, off by default, like `agent init` itself;
+add `--storage-dir <dir>` to pin all of its memory state under a directory
+your own install tooling controls. See `docs/embedded-layers.json` for a
+recommended `mnemosyne.layers.json` for a bare embedded install with no
+`swarm-memory` credential configured.
+
 Optional but recommended: `uv tool install graphifyy` — installs the
 `graphify` CLI that backs the graph layer by default (see "The layer stack"
 above). Not required: without it, the service and library both fall back to
