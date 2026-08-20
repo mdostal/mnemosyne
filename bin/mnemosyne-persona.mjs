@@ -127,35 +127,46 @@
 //                     scopeId})'s own `{scope, tag}` result as JSON, no
 //                     filesystem access, no persona-store read/write.
 //
-//   show TIER SCOPE_ID   pf-13-cli-persona-show: the on-demand fetch surface
-//                     an agent uses after following pf-12's rendered
-//                     "Parent context (query up)" pointer -- prints that
-//                     persona's real, current content. A THIN, READ-ONLY
-//                     wrapper over pf-06's persona-store-global.ts
-//                     `readGlobalPersona` -- no new store-access logic here,
-//                     no fallback-to-TIER_CONTENT (that's `sync`'s/
-//                     `getPersonaContent`'s behavior, not this verb's: `show`
-//                     either returns the real persona or errors, it never
-//                     silently substitutes hardcoded content). Positional
-//                     args (TIER then SCOPE_ID), not flags -- matches this
-//                     subcommand's acceptance criteria
+//   show TIER SCOPE_ID [--repo PATH]   pf-13-cli-persona-show: the on-demand
+//                     fetch surface an agent uses after following pf-12's
+//                     rendered "Parent context (query up)" pointer -- prints
+//                     that persona's real, current content. A THIN,
+//                     READ-ONLY wrapper -- no fallback-to-TIER_CONTENT
+//                     (that's `sync`'s/`getPersonaContent`'s behavior, not
+//                     this verb's: `show` either returns the real persona or
+//                     errors, it never silently substitutes hardcoded
+//                     content). Positional args (TIER then SCOPE_ID), not
+//                     flags -- matches this subcommand's acceptance criteria
 //                     (`mnemosyne persona show project-orchestrator default`).
-//                     Only valid for the 3 GLOBAL tiers (top-orchestrator/
-//                     company-director/project-orchestrator) --
-//                     PERSONA_STORE_BY_TIER is the single source of truth for
-//                     that split (persona.ts); a code-architect scopeId is
-//                     rejected with a clear error before any disk access,
-//                     since that tier's content lives in the repo-local store
-//                     (persona-store-repo-local.ts), which this verb does not
-//                     read. Genuinely read-only: the only fs call reachable
-//                     from `readGlobalPersona` is `readFileSync`
-//                     (persona-store-global.ts) -- no `writeFileSync`,
-//                     no `mkdirSync`, no `withLock` (locking guards
+//                     For the 3 GLOBAL tiers (top-orchestrator/
+//                     company-director/project-orchestrator) -- the original
+//                     pf-13 scope -- this is a thin wrapper over pf-06's
+//                     persona-store-global.ts `readGlobalPersona`, and --repo
+//                     is unused (a global tier's content is never repo-scoped
+//                     -- see `sync`'s own USAGE_SYNC note on this).
+//                     ro-08-role-metadata-reachability-verification extends
+//                     this verb: for the ONE repo-local tier (code-architect),
+//                     `show` still refuses without `--repo <path>` (pf-13's
+//                     own original behavior, preserved byte-for-byte -- see
+//                     the "not a global tier" error below, still asserted by
+//                     test/persona-cli.mjs's pf-13 regression coverage), but
+//                     WITH `--repo` it dispatches to
+//                     persona-store-repo-local.ts's `readRepoLocalPersona`
+//                     instead of erroring -- this is the real, independent
+//                     read path that proves a repo-local (code-architect)
+//                     persona `onboardRepo()` seeds (lib/mnemosyne/
+//                     onboarding/onboardRepo.ts) is genuinely reachable
+//                     through this CLI's OWN read path, not merely a
+//                     plausible-looking shape nobody ever actually read back.
+//                     Genuinely read-only either way: the only fs call
+//                     reachable from `readGlobalPersona`/`readRepoLocalPersona`
+//                     is `readFileSync` -- no `writeFileSync`, no
+//                     `mkdirSync`, no `withLock` (locking guards
 //                     read-splice-WRITE sequences, lock.ts; a bare read never
 //                     takes one) anywhere in this code path. Also a LIVE read
-//                     every time -- persona-store-global.ts reads fresh off
-//                     disk on every call, no module-level caching -- so an
-//                     edit made to a persona file between two `show` runs is
+//                     every time -- both store backends read fresh off disk
+//                     on every call, no module-level caching -- so an edit
+//                     made to a persona file between two `show` runs is
 //                     reflected on the very next run, no repo-local re-sync
 //                     required.
 //
@@ -179,7 +190,7 @@ import { DEFAULT_LEVEL0_PATH, readLevel0Content } from "../lib/mnemosyne/layer1/
 import { TIERS } from "../lib/mnemosyne/layer1/tiers.ts";
 import { PERSONA_STORE_BY_TIER, resolveRememberScope } from "../lib/mnemosyne/layer1/persona.ts";
 import { readGlobalPersona, writeGlobalPersona } from "../lib/mnemosyne/layer1/persona-store-global.ts";
-import { writeRepoLocalPersona } from "../lib/mnemosyne/layer1/persona-store-repo-local.ts";
+import { readRepoLocalPersona, writeRepoLocalPersona } from "../lib/mnemosyne/layer1/persona-store-repo-local.ts";
 import {
   disposeDraftPersona,
   readDraftPersona,
@@ -221,13 +232,17 @@ const USAGE_SEED = [
 ].join("\n");
 
 const USAGE_SHOW = [
-  "usage: mnemosyne persona show <tier> <scope-id>",
+  "usage: mnemosyne persona show <tier> <scope-id> [--repo <path>]",
   "  Prints that persona's real, current content -- a read-only, live read straight off the",
-  "  global persona store (~/.mnemosyne/personas). No harness file is touched or written, no",
-  "  lock is taken, and nothing is cached: an edit to the persona file is reflected on the very",
-  "  next `show` run, no repo-local sync required.",
-  "  Only valid for the 3 global tiers (top-orchestrator, company-director, project-orchestrator)",
-  "  -- code-architect personas live in the repo-local store, which this verb does not read.",
+  "  relevant persona store. No harness file is touched or written, no lock is taken, and",
+  "  nothing is cached: an edit to the persona file is reflected on the very next `show` run,",
+  "  no repo-local sync required.",
+  "  For the 3 global tiers (top-orchestrator, company-director, project-orchestrator), reads",
+  "  from the global persona store (~/.mnemosyne/personas); --repo is unused for these.",
+  "  For code-architect (the one repo-local tier), --repo <path> is REQUIRED -- it reads from",
+  "  that repo's own repo-local persona store (<repo>/.mnemosyne/personas). Omitting --repo for",
+  "  code-architect is refused with a clear error, since this verb has no global-store fallback",
+  "  to read a repo-local tier from.",
 ].join("\n");
 
 const USAGE_CREATE = [
@@ -874,18 +889,36 @@ async function runDraft(argv, { log, warn }) {
 }
 
 /**
- * `persona show <tier> <scope-id>` -- pf-13. Positional args, not flags (see
- * USAGE_SHOW). Read-only by construction: the only fs call reachable from
- * here is `readGlobalPersona`'s own `readFileSync`
- * (persona-store-global.ts) -- no write function, no `withLock`, is called
- * anywhere in this function or anything it calls. Also a live read every
- * time: `readGlobalPersona` reads fresh off disk on every call (no
- * module-level caching anywhere in persona-store-global.ts), so an edit made
- * to the persona file between two `show` invocations is reflected on the
- * very next one.
+ * `persona show <tier> <scope-id> [--repo <path>]` -- pf-13, extended by
+ * ro-08-role-metadata-reachability-verification. Positional TIER/SCOPE_ID,
+ * not flags (see USAGE_SHOW); `--repo` is extracted the same way `draft`'s
+ * subcommands already do (`parseDraftRepoArg`, reused unchanged rather than
+ * a second flag-extraction copy).
+ *
+ * Dispatch: a global tier (`PERSONA_STORE_BY_TIER[tier] === "global"`) is
+ * pf-13's original, untouched behavior -- `--repo` is simply unused for it.
+ * The one repo-local tier (code-architect) is refused with pf-13's own
+ * original "not a global tier" error UNLESS `--repo` is given -- that
+ * refusal wording is preserved byte-for-byte (still matched by
+ * test/persona-cli.mjs's pf-13 regression coverage, which never passes
+ * `--repo`) specifically so this extension is additive, never a reopening of
+ * pf-13's own already-integrated acceptance criteria. WITH `--repo`, a
+ * code-architect scopeId dispatches to persona-store-repo-local.ts's
+ * `readRepoLocalPersona` instead -- the real, independent read path
+ * ro-08 uses to prove a repo-local persona `onboardRepo()` seeds is
+ * genuinely reachable through this CLI's own read path, not merely a
+ * plausible-looking shape nobody ever actually read back.
+ *
+ * Read-only by construction either way: the only fs call reachable from
+ * `readGlobalPersona`/`readRepoLocalPersona` is `readFileSync` -- no write
+ * function, no `withLock`, anywhere in this function or anything it calls.
+ * Also a live read every time: both store backends read fresh off disk on
+ * every call (no module-level caching), so an edit made to a persona file
+ * between two `show` invocations is reflected on the very next one.
  */
 function runShow(argv, { log, warn }) {
-  const [tier, scopeId] = argv;
+  const { repo, positional } = parseDraftRepoArg(argv);
+  const [tier, scopeId] = positional;
   if (!tier || !scopeId) {
     warn("mnemosyne persona show: <tier> and <scope-id> are both required");
     warn(USAGE_SHOW);
@@ -895,13 +928,28 @@ function runShow(argv, { log, warn }) {
     warn(`mnemosyne persona show: invalid tier '${tier}'. Valid tiers: ${TIERS.join(", ")}.`);
     return { ok: false };
   }
+
   if (PERSONA_STORE_BY_TIER[tier] !== "global") {
-    warn(
-      `mnemosyne persona show: tier '${tier}' is not a global tier -- 'show' only reads from the ` +
-        "global persona store (~/.mnemosyne/personas). code-architect personas live in the repo-local " +
-        "store (persona-store-repo-local.ts), which this verb does not read.",
-    );
-    return { ok: false };
+    if (!repo) {
+      warn(
+        `mnemosyne persona show: tier '${tier}' is not a global tier -- 'show' only reads from the ` +
+          "global persona store (~/.mnemosyne/personas) by default. code-architect personas live in the " +
+          "repo-local store (persona-store-repo-local.ts) -- pass --repo <path> to read from there.",
+      );
+      return { ok: false };
+    }
+
+    const repoRoot = path.resolve(repo);
+    let persona;
+    try {
+      persona = readRepoLocalPersona(repoRoot, scopeId);
+    } catch (e) {
+      warn(`mnemosyne persona show: ${e.message}`);
+      return { ok: false };
+    }
+
+    log(formatPersonaShow(persona));
+    return { ok: true, persona };
   }
 
   let persona;
