@@ -1,0 +1,82 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [4 0 R 5 0 R 6 0 R] /Count 3 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 3 0 R >> >> /MediaBox [0 0 612 792] /Contents 7 0 R >>
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 3 0 R >> >> /MediaBox [0 0 612 792] /Contents 8 0 R >>
+endobj
+6 0 obj
+<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 3 0 R >> >> /MediaBox [0 0 612 792] /Contents 9 0 R >>
+endobj
+7 0 obj
+<< /Length 224 >>
+stream
+BT
+/F1 12 Tf
+72 720 Td
+14 TL
+(This is page one of the resume PDF fixture used by) Tj
+T*
+(ro-13's ingestDocument tests. It contains a distinctive) Tj
+T*
+(marker string PAGE-ONE-MARKER for provenance) Tj
+T*
+(assertions.) Tj
+ET
+endstream
+endobj
+8 0 obj
+<< /Length 222 >>
+stream
+BT
+/F1 12 Tf
+72 720 Td
+14 TL
+(This is page two of the resume PDF fixture. It contains) Tj
+T*
+(a distinctive marker string PAGE-TWO-MARKER so recall\(\)) Tj
+T*
+(provenance tests can trace a hit back to its real page.) Tj
+ET
+endstream
+endobj
+9 0 obj
+<< /Length 133 >>
+stream
+BT
+/F1 12 Tf
+72 720 Td
+14 TL
+(This is page three, a short closing page with marker) Tj
+T*
+(PAGE-THREE-MARKER for completeness.) Tj
+ET
+endstream
+endobj
+xref
+0 10
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000133 00000 n 
+0000000203 00000 n 
+0000000329 00000 n 
+0000000455 00000 n 
+0000000581 00000 n 
+0000000856 00000 n 
+0000001129 00000 n 
+trailer
+<< /Size 10 /Root 1 0 R >>
+startxref
+1313
+%%EOF
