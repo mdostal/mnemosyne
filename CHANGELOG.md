@@ -2,6 +2,167 @@
 
 All notable changes to Mnemosyne are documented here.
 
+## [0.15.0] — 2026-08-19
+
+`mnemosyne-repo-onboarding` epic (`ro-01`..`ro-13`) — Mnemosyne can now
+onboard a repo into memory two real ways: **Mode A** (tree-integrated —
+joins the operator's shared org tree against a real Qdrant collection) and
+**Mode B** (standalone/embedded — a product ships its own self-contained
+memory agent). Both compose the same shared orchestrator and the same
+five-level base-level report; document/website ingestion and PDF support
+round out what a freshly onboarded repo (or an already-running install) can
+feed into memory.
+
+### Added — Mode A (tree-integrated onboarding)
+
+- **`GET /memory-levels`'s base-level computation, extracted and
+  repo-scoped** (`lib/mnemosyne/memory-levels/`, `ro-01`) — the same
+  canonical 5-level (0 operator rules / 1 repo overlay / 2 graph / 3 vector
+  / 4 file) computation `ml-04` already shipped is now a standalone,
+  reusable function, called by both `mnemosyne onboard` and `agent init
+  --build` for their own base-level reports instead of being duplicated.
+- **`~/.mnemosyne/org-tree.yaml` operator-global registry**
+  (`lib/mnemosyne/onboarding/orgTree.ts`, `ro-04`) — `appendOrgTreeEntry()`
+  (dedupes on `repo_path`, last-write-wins on re-onboard) and
+  `listOrgTreeEntries()`, lock-safe against concurrent writes (reuses
+  `layer1/lock.ts`'s `withLock`), read fresh off disk on every call.
+- **`mnemosyne onboard <path> --collection <name> [--scope-id <id>]
+  [--override project|enterprise]`** (`bin/mnemosyne-onboard.mjs`, `ro-05`)
+  — onboards a repo against an **already-existing** Qdrant collection: a
+  real read-only inventory check confirms the collection exists,
+  `mnemosyne.placement_engine.classify_collection` classifies it project-
+  vs. enterprise-scoped (or records `needs_override: true` for an ambiguous
+  name, unless `--override` is given), the shared `onboardRepo()` pipeline
+  runs against `<path>`, and the result is recorded in the org-tree
+  registry.
+- **`mnemosyne.onboarding.create_collection_and_scope()`**
+  (`mnemosyne/onboarding.py`, `ro-06`) — additive-only Qdrant collection
+  creation plus `scope -> collection` mapping written into
+  `swarm-memory`'s own `config.toml` `[scopes]` table; no delete/drop path
+  exists anywhere upstream of it.
+- **`mnemosyne onboard --create`** (`ro-07`) — wires `ro-06`'s creation
+  primitive ahead of the same Mode A sequence for a genuinely new
+  collection: fails loudly (never a silent no-op) if the name already
+  exists, and once created, `onboardRepo()`'s real vector-index sub-step
+  runs a real `POST /reindex` against it, landing level 3 (vector) as
+  `configured: true` in the base-level report.
+
+### Added — Mode B (standalone/embedded onboarding)
+
+- **`mnemosyne agent init --build [--storage-dir <dir>] [--scope-id
+  <id>]`** (`bin/mnemosyne-agent.mjs`, `ro-03`) — opt-in (off by default,
+  like `agent init` itself) first-time build of a repo's own memory: Layer
+  1 sync (`CLAUDE.md`/`AGENTS.md`/`GEMINI.md`), a repo-local persona seed,
+  the Level 4 file-store index, and a printed base-level report. Idempotent
+  on re-run. `--storage-dir <dir>` (`mkdir -p`'d first) redirects the whole
+  build under an install-tooling-controlled directory instead of
+  `process.cwd()`; `docs/embedded-layers.json` ships a recommended
+  `mnemosyne.layers.json` (`graphify` + `file`, no `vector`) for a bare
+  embedded install with no `swarm-memory` credential configured.
+
+### Added — shared orchestrator
+
+- **`onboardRepo({ mode: 'tree' | 'standalone', repoRoot, scopeId,
+  collection? })`** (`lib/mnemosyne/onboarding/onboardRepo.ts`, `ro-02`) —
+  the one real sequence both modes run: Layer 1 sync, persona seed, Level 4
+  (and, for Mode A, Level 3 vector) indexing, and the shared base-level
+  report. Composes five already-shipped mechanisms rather than
+  reimplementing any of them.
+
+### Added — shared ingestion primitives
+
+- **`ingestDocument()`** (`lib/mnemosyne/ingest/ingestDocument.ts`,
+  `ro-10`) — bounded, chunked ingestion of plain text/Markdown content (or
+  a free-text description/CV with no file at all) through the same
+  `remember()` cascade the rest of Mnemosyne uses. Exposed via `bin/mnemosyne
+  ingest --file <path>|--text "..."`, the `ingest_document` MCP tool, and
+  `POST /ingest` on the MnemosyneClient HTTP API (`:3141`).
+- **Bounded website crawl** (`lib/mnemosyne/ingest/crawlAndIngest.ts`,
+  `ro-11`) — `bin/mnemosyne crawl <url>`, the `crawl_website` MCP tool, and
+  `POST /crawl`, feeding the same `ingestDocument()` primitive. Fetches
+  exactly the one given URL by default; same-domain multi-page crawling is
+  a separate, hard-capped `--max-pages`/`maxPages` opt-in. `robots.txt` is
+  always checked before every fetch, plain unauthenticated GET only. A
+  **firm, default-on SSRF guard** resolves the target hostname and rejects
+  loopback/private-network/link-local/cloud-metadata addresses (including
+  `169.254.169.254`) before every individual fetch — no flag, option, or
+  environment variable anywhere in the module can bypass it.
+- **`.pdf` support in `ingestDocument()`** (`ro-13`) — PDF text is
+  extracted page-by-page via the new `unpdf@^1.8.1` dependency (chosen over
+  `pdf-parse` for its dependency-free, no-native-binary footprint), with
+  each chunk's provenance carrying its source page and chunk-within-page
+  index; a separate `MAX_PDF_SOURCE_BYTES` cap bounds the raw PDF's
+  compressed byte size before any parsing is attempted, and
+  corrupt/encrypted PDFs fail loudly rather than silently. **Package-wide
+  effect:** `engines.node` is raised from `>=20` to `>=22`, driven by
+  `unpdf`'s own floor — this affects every consumer of this package, not
+  just the PDF path.
+  - **Known limitation, explicitly out of scope for `ro-13`:**
+    `ingestDocument()` itself supports `.pdf`, but neither of the two
+    external surfaces that would let an operator actually POST a real PDF
+    file has been wired for binary content yet — `bin/mnemosyne-ingest.mjs`'s
+    `--file` reads its target as UTF-8 text, and `POST /ingest` (and
+    therefore the `ingest_document` MCP tool, a thin wrapper over that same
+    route) accepts only a JSON string `content` field. Neither can carry a
+    PDF's raw binary bytes end to end today. This is real, disclosed
+    follow-on work, not a silent gap — `ro-13`'s own `files_to_modify` never
+    touched either surface.
+
+### Added — verification + discoverability
+
+- **Role/metadata reachability verification** (`test/onboard-reachability.mjs`,
+  `ro-08`) — confirms, for a repo `onboardRepo()` has run against (either
+  mode), that the seeded persona is independently readable via
+  `bin/mnemosyne-persona.mjs show`, the synced `CLAUDE.md`/`AGENTS.md`/
+  `GEMINI.md` managed block genuinely contains both the tier content and
+  the Layer-1 memory-lifecycle mandate section, and (Mode A) the org-tree
+  entry is listable with a correctly-computed `org_tree_path` — each check
+  fails with a distinguishable message when onboarding hasn't run, rather
+  than a generic error.
+- **Two explicit install paths, documented end to end** (`ro-12`) —
+  README.md's Quickstart, `docs/install.sh`'s printed guidance, and
+  `mnemosyne agent status`'s own output all now name both paths together,
+  using the same Mode A/Mode B <-> full-system/sidecar vocabulary:
+  **sidecar/embedded (Mode B)** = `mnemosyne agent init --build`,
+  **full/system (Mode A)** = `mnemosyne agent init` (no `--build`) +
+  `mnemosyne onboard <path> --collection <name> [--create]`.
+
+### Fixed
+
+- README's document-ingestion paragraph previously read as though `.pdf`
+  were already usable through every ingestion surface; it now names the
+  `.pdf`-binary limitation above explicitly instead of implying full
+  end-to-end PDF upload support (`ro-09`).
+
+### Verification
+
+Full regression pass at epic close: `npx tsc --noEmit` clean; `npm test` —
+59/59 `.mjs`/`.ts` test files (including `vitest`'s own 804/804 tests)
+passing, zero failures; `python3 -m pytest mnemosyne/tests/` — 37 passed (3
+subtests), zero failures. Confirmed against a pre-epic-regression baseline
+run on a freshly-`npm install`ed worktree — the same fully-green state, no
+new failures anywhere. Two end-to-end smoke tests added
+(`test/onboard-smoke-mode-a.mjs`, `test/onboard-smoke-mode-b.mjs`,
+mirroring `test/agent-cli.mjs`'s isolated-temp-directory convention):
+Mode B's smoke test runs a real `agent init --build` against a disposable
+temp repo and confirms levels 0/4 report `configured: true` (no external
+infra required for either), level 1 correctly reports `false` (a fresh
+repo has no separately-authored `mnemosyne.md`), and level 3 (vector)
+reports `true` regardless of real Qdrant credentials (the default layer
+stack includes `vector` structurally) — level 2 conditionally, depending
+on `graphify` availability in the running environment; Mode A's smoke test
+requires a disposable/test-scoped Qdrant
+target, which this environment does not provide (only the operator's real
+production `swarm-memory` Qdrant Cloud cluster is configured here) — it
+exits with a clear, visible `SKIPPED` reason rather than running
+destructively against production infra or failing silently.
+
+### Versioning
+
+`engines.node` raised `>=20` -> `>=22` (see `ro-13` above) — additive-only
+CLI verbs/flags and one dependency-floor bump, no breaking change to any
+existing contract, per this epic's own `version_bump: minor`.
+
 ## [0.14.0] — 2026-08-19
 
 Backlog cleanup pass: closes all 4 flagged design-fidelity gaps from pu-14's
