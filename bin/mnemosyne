@@ -9,6 +9,7 @@
 #        bin/mnemosyne persona show <tier> <scope-id>
 #        bin/mnemosyne agent init   [--harness claude|codex]
 #        bin/mnemosyne agent status [--harness claude|codex]
+#        bin/mnemosyne onboard <path> --collection <name> [--scope-id <id>] [--override project|enterprise]
 set -euo pipefail
 export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"
 
@@ -63,6 +64,16 @@ if [ "${1:-}" = "agent" ]; then
   # a .ts module any other way. (Previously plain node: agent.mjs imported no
   # lib/mnemosyne/*.ts modules, only node:child_process/fs/os.)
   exec node "$HERE/node_modules/.bin/tsx" "$HERE/bin/mnemosyne-agent.mjs" "$@"
+fi
+
+if [ "${1:-}" = "onboard" ]; then
+  shift
+  # ro-05-onboard-cli-verb-existing-collection (epic: mnemosyne-repo-onboarding):
+  # onboard.mjs imports lib/mnemosyne/onboarding/onboardRepo.ts + orgTree.ts +
+  # classify.ts directly, so this is tsx-launched like persona.mjs/agent.mjs
+  # -- noEmit:true means there is no build step to import a .ts module any
+  # other way.
+  exec node "$HERE/node_modules/.bin/tsx" "$HERE/bin/mnemosyne-onboard.mjs" "$@"
 fi
 
 # --version/--help must be handled BEFORE the catch-all server exec below --
