@@ -46,9 +46,13 @@ fi
 
 if [ "${1:-}" = "agent" ]; then
   shift
-  # Plain node, like reindex.mjs (not tsx like persona.mjs) -- agent.mjs
-  # imports no lib/mnemosyne/*.ts modules, only node:child_process/fs/os.
-  exec node "$HERE/bin/mnemosyne-agent.mjs" "$@"
+  # ro-03-agent-init-build-flag (epic: mnemosyne-repo-onboarding): agent.mjs's
+  # new `--build` flag imports lib/mnemosyne/onboarding/onboardRepo.ts
+  # directly, so this is now tsx-launched like persona.mjs (not plain node
+  # like reindex.mjs) -- noEmit:true means there is no build step to import
+  # a .ts module any other way. (Previously plain node: agent.mjs imported no
+  # lib/mnemosyne/*.ts modules, only node:child_process/fs/os.)
+  exec node "$HERE/node_modules/.bin/tsx" "$HERE/bin/mnemosyne-agent.mjs" "$@"
 fi
 
 # --version/--help must be handled BEFORE the catch-all server exec below --
