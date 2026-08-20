@@ -3,6 +3,7 @@
 # Usage: bin/mnemosyne                         # start service (foreground)
 #        PORT=8477 bin/mnemosyne
 #        bin/mnemosyne reindex <scope> [--dir <path>] [--url <base-url>]
+#        bin/mnemosyne ingest --file <path> [--scope <scope>] [--tag <tag>] [--url <base-url>]
 #        bin/mnemosyne persona sync --repo <path> --tier <tier> --scope-id <id> [--dry-run]
 #        bin/mnemosyne persona seed [--root <path>] [--scope-id <id>]
 #        bin/mnemosyne persona show <tier> <scope-id>
@@ -33,6 +34,15 @@ HERE="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
 if [ "${1:-}" = "reindex" ]; then
   shift
   exec node "$HERE/bin/mnemosyne-reindex.mjs" "$@"
+fi
+
+if [ "${1:-}" = "ingest" ]; then
+  shift
+  # Plain node, like reindex.mjs (not tsx like persona.mjs) -- ingest.mjs is
+  # a thin HTTP client (POST /ingest against lib/mnemosyne/server.ts's
+  # MnemosyneClient HTTP API, default :3141), never importing lib/mnemosyne/
+  # ingest/ingestDocument.ts directly.
+  exec node "$HERE/bin/mnemosyne-ingest.mjs" "$@"
 fi
 
 if [ "${1:-}" = "persona" ]; then

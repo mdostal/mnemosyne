@@ -3,10 +3,10 @@
 //
 // Third thin transport wrapper over Mnemosyne's actions, alongside
 // src/server.mjs's HTTP API and bin/mnemosyne-skill-helper.mjs's CLI
-// pass-throughs. Exposes recall/remember/grep/reindex/graph-*/persona-* as
-// MCP tools over stdio (the transport Claude Desktop / Claude Code MCP
-// configs expect for a locally-launched server: one process, stdio, no port
-// to manage).
+// pass-throughs. Exposes recall/remember/ingest_document/grep/reindex/
+// graph-*/persona-* as MCP tools over stdio (the transport Claude Desktop /
+// Claude Code MCP configs expect for a locally-launched server: one
+// process, stdio, no port to manage).
 //
 // This file contains NO business logic of its own — every tool handler
 // below is a direct call into bin/mnemosyne-skill-helper.mjs's existing,
@@ -16,7 +16,8 @@
 // thing: ensure the underlying Mnemosyne HTTP service is running (starting
 // it if needed) and fetch() against it. Duplicating that logic here would
 // reopen every guardrail already closed in engine.mjs (loud failure, full
-// provenance, no collection wipe) — see SERVICE.md.
+// provenance, no collection wipe) — see SERVICE.md. ONE exception:
+// ingest_document, see its own comment above ingestAction below.
 //
 // ONE deliberate, documented exception (la-02-graphify-adapter, extended by
 // cr-01-graphify-default-layer): the four graph_* tools below are wired
@@ -73,6 +74,38 @@ import {
   graphifyImpactAction,
   graphifyDepsAction,
 } from "./graphify-bridge.mjs";
+
+// ro-10-document-ingestion-primitive: the ONE deliberate, documented
+// exception to this file's "no business logic, every handler pass-throughs
+// to skill-helper.mjs" rule above (mirrors the graph_* tools' own documented
+// exception for graphify-bridge.mjs) -- ingest_document's real backing route
+// (POST /ingest) lives on lib/mnemosyne/server.ts's MnemosyneClient HTTP API
+// (default :3141, started by bin/mnemosyne-client-api), a DIFFERENT service
+// than every other tool above (which all target src/server.mjs, :8477, via
+// skill-helper.mjs's apiFetch). ingestDocument() itself
+// (lib/mnemosyne/ingest/ingestDocument.ts) is built on MnemosyneClient, not
+// the swarm-memory engine, so it has no home in skill-helper.mjs -- adding a
+// 3141-targeting action there would violate that file's own documented
+// scope ("THIN wrappers over ... src/server.mjs"). ingestAction below is
+// the same thin-fetch shape skill-helper.mjs's apiFetch already uses, just
+// pointed at the other service.
+const CLIENT_API_PORT = Number(process.env.MNEMOSYNE_CLIENT_API_PORT || 3141);
+
+async function ingestAction(port, { content, filename, tag, scope } = {}) {
+  const res = await fetch(`http://127.0.0.1:${port}/ingest`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ content, filename, tag, scope }),
+  });
+  const data = await res.json();
+  if (res.status >= 400) {
+    const err = new Error((data && data.error && data.error.message) || `POST /ingest -> ${res.status}`);
+    err.status = res.status;
+    err.body = data;
+    throw err;
+  }
+  return data;
+}
 
 function textResult(data) {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
@@ -133,6 +166,22 @@ export function createServer({ port = DEFAULT_PORT } = {}) {
       },
     },
     wrapAction(port, rememberAction),
+  );
+
+  server.registerTool(
+    "ingest_document",
+    {
+      title: "Ingest document",
+      description:
+        "Bounded document ingestion (plain text/.md content, or a free-text description/CV with no file at all) into memory via the existing remember() cascade -- chunks bounded input and writes each chunk sequentially, reporting exactly which chunks succeeded/failed. Rejects oversized content or an unsupported format (anything outside .txt/.md) loudly, before any write.",
+      inputSchema: {
+        content: z.string().describe("The document's full text content (plain text or Markdown), or a free-text description/CV"),
+        filename: z.string().optional().describe("Optional source filename; its extension must be .txt or .md"),
+        tag: z.string().optional().describe("Optional tag carried into each chunk's metadata"),
+        scope: z.string().optional().describe("Scope to write into (defaults to 'project')"),
+      },
+    },
+    wrapAction(CLIENT_API_PORT, ingestAction),
   );
 
   server.registerTool(

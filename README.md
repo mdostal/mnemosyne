@@ -143,6 +143,8 @@ failure.
 
 See `npm run` in `package.json` for the service entrypoint, and [`hooks/README.md`](./hooks/README.md) to wire the pre-recall/post-remember hooks into an agent runner.
 
+To **ingest a document into memory** — plain text/Markdown, or a free-text description/CV pasted with no file at all — bounded, chunked, and fed through the same `remember()` cascade above: `bin/mnemosyne ingest --file <path.txt|.md>` (or `--text "..."`) from the CLI, the `ingest_document` MCP tool, or `POST /ingest` against the MnemosyneClient HTTP API (`bin/mnemosyne-client-api`, default port 3141). Oversized content or an unsupported format (anything outside `.txt`/`.md`) is rejected loudly before any write.
+
 The underlying vector memory Mnemosyne wraps is **already live** — it runs today through `swarm-memory` against remote Qdrant Cloud (credential at `~/.config/swarm-memory/qdrant.key`; **do not wipe** existing collections or the Obsidian vault — Mnemosyne is additive).
 
 ## Status

@@ -91,6 +91,20 @@
  *                               delete
  *   POST /recall  {query, scope, intent?}            -> RecallResult
  *   POST /remember {content: {text, metadata?}, scope, layer?} -> RememberResult
+ *   POST /ingest  {content, filename?, tag?, scope?} -> IngestDocumentResult
+ *                               (ro-10-document-ingestion-primitive, epic
+ *                               mnemosyne-repo-onboarding): chunks bounded
+ *                               `content` (.txt/.md, or a free-text
+ *                               description/CV with no `filename` at all)
+ *                               and calls this same `client`'s remember()
+ *                               once per chunk, sequentially -- a thin
+ *                               transport wrap of
+ *                               `ingest/ingestDocument.ts`'s `ingestDocument()`,
+ *                               no ingestion logic of its own. Always 200,
+ *                               same convention as POST /recall and POST
+ *                               /remember above (the response body's own
+ *                               `ok`/`error` discriminates a rejected/
+ *                               partially-failed ingest from a real success).
  *
  * No authentication — localhost-only for this slice; auth is future work.
  *
@@ -109,6 +123,7 @@ import http from 'node:http';
 import { stat } from 'node:fs/promises';
 import { MnemosyneClient } from './client.js';
 import type { Layer, Scope } from './interfaces.js';
+import { ingestDocument } from './ingest/ingestDocument.js';
 import { PERSONA_STORE_BY_TIER, resolveRememberScope } from './layer1/persona.js';
 import {
   disposeDraftPersona,
@@ -902,6 +917,44 @@ const server = http.createServer(async (req, res) => {
         body.scope as Scope,
         body.layer as Layer | undefined,
       );
+      return sendJson(res, 200, result);
+    }
+
+    if (route === 'POST /ingest') {
+      // ro-10-document-ingestion-primitive: a thin transport wrap of
+      // ingestDocument() -- no chunking/bounding/format logic of its own,
+      // see that module's doc comment for the real contract. `filename`/
+      // `tag`/`scope` are genuinely optional (a free-text description/CV
+      // with no file at all is the trivial subcase), so each is only
+      // forwarded when the caller actually sent it -- never an explicit
+      // `undefined` passed through (exactOptionalPropertyTypes).
+      let body: Record<string, unknown>;
+      try {
+        body = await readJsonBody(req);
+      } catch (error) {
+        const e = error as HttpError;
+        return badRequest(res, e.code ?? 'invalid_body', e.message);
+      }
+
+      if (typeof body.content !== 'string') {
+        return badRequest(res, 'missing_content', '"content" is required and must be a string');
+      }
+      if (body.scope !== undefined && (typeof body.scope !== 'string' || !SCOPES.has(body.scope as Scope))) {
+        return badRequest(res, 'invalid_scope', `"scope" must be one of: ${[...SCOPES].join(', ')}`);
+      }
+      if (body.filename !== undefined && typeof body.filename !== 'string') {
+        return badRequest(res, 'invalid_filename', '"filename" must be a string when provided');
+      }
+      if (body.tag !== undefined && typeof body.tag !== 'string') {
+        return badRequest(res, 'invalid_tag', '"tag" must be a string when provided');
+      }
+
+      const result = await ingestDocument(client, {
+        content: body.content,
+        ...(typeof body.filename === 'string' ? { filename: body.filename } : {}),
+        ...(typeof body.tag === 'string' ? { tag: body.tag } : {}),
+        ...(typeof body.scope === 'string' ? { scope: body.scope as Scope } : {}),
+      });
       return sendJson(res, 200, result);
     }
 
