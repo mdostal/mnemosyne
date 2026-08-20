@@ -105,6 +105,26 @@
  *                               /remember above (the response body's own
  *                               `ok`/`error` discriminates a rejected/
  *                               partially-failed ingest from a real success).
+ *   POST /crawl  {url, scope?, tag?, multiPage?: {maxPages}, timeoutMs?} -> CrawlAndIngestResult
+ *                               (ro-11-bounded-website-crawl, epic
+ *                               mnemosyne-repo-onboarding): a thin transport
+ *                               wrap of `ingest/crawlAndIngest.ts`'s
+ *                               `crawlAndIngest()` -- default scope is
+ *                               EXACTLY one page (the given `url`), never
+ *                               following any link; same-domain multi-page
+ *                               crawling is opt-in via `multiPage`, hard-
+ *                               capped regardless of what's requested. The
+ *                               firm, default-on SSRF guard (rejects
+ *                               loopback/private-network/link-local/cloud-
+ *                               metadata resolved targets, re-checked before
+ *                               EVERY individual fetch) has no bypass
+ *                               anywhere in this route or the module it
+ *                               wraps. Extracted text is fed through this
+ *                               same `client`'s `remember()` cascade via
+ *                               `ro-10`'s unmodified `ingestDocument()` --
+ *                               never a second, parallel storage path. Always
+ *                               200, same convention as POST /recall, POST
+ *                               /remember, and POST /ingest above.
  *
  * No authentication — localhost-only for this slice; auth is future work.
  *
@@ -124,6 +144,7 @@ import { stat } from 'node:fs/promises';
 import { MnemosyneClient } from './client.js';
 import type { Layer, Scope } from './interfaces.js';
 import { ingestDocument } from './ingest/ingestDocument.js';
+import { crawlAndIngest, type CrawlAndIngestOptions } from './ingest/crawlAndIngest.js';
 import { PERSONA_STORE_BY_TIER, resolveRememberScope } from './layer1/persona.js';
 import {
   disposeDraftPersona,
@@ -955,6 +976,51 @@ const server = http.createServer(async (req, res) => {
         ...(typeof body.tag === 'string' ? { tag: body.tag } : {}),
         ...(typeof body.scope === 'string' ? { scope: body.scope as Scope } : {}),
       });
+      return sendJson(res, 200, result);
+    }
+
+    if (route === 'POST /crawl') {
+      // ro-11-bounded-website-crawl: a thin transport wrap of
+      // crawlAndIngest() -- no fetch/SSRF-guard/robots.txt/extraction logic
+      // of its own, see that module's own doc comment for the real
+      // contract. `scope`/`tag`/`multiPage`/`timeoutMs` are genuinely
+      // optional and only forwarded when the caller actually sent them --
+      // never an explicit `undefined` passed through (exactOptionalPropertyTypes).
+      let body: Record<string, unknown>;
+      try {
+        body = await readJsonBody(req);
+      } catch (error) {
+        const e = error as HttpError;
+        return badRequest(res, e.code ?? 'invalid_body', e.message);
+      }
+
+      if (typeof body.url !== 'string') {
+        return badRequest(res, 'missing_url', '"url" is required and must be a string');
+      }
+      if (body.scope !== undefined && (typeof body.scope !== 'string' || !SCOPES.has(body.scope as Scope))) {
+        return badRequest(res, 'invalid_scope', `"scope" must be one of: ${[...SCOPES].join(', ')}`);
+      }
+      if (body.tag !== undefined && typeof body.tag !== 'string') {
+        return badRequest(res, 'invalid_tag', '"tag" must be a string when provided');
+      }
+      if (body.timeoutMs !== undefined && typeof body.timeoutMs !== 'number') {
+        return badRequest(res, 'invalid_timeout_ms', '"timeoutMs" must be a number when provided');
+      }
+      let multiPage: { maxPages: number } | undefined;
+      if (body.multiPage !== undefined) {
+        const mp = body.multiPage as { maxPages?: unknown } | null;
+        if (!mp || typeof mp.maxPages !== 'number') {
+          return badRequest(res, 'invalid_multi_page', '"multiPage" must be an object with a numeric "maxPages" when provided');
+        }
+        multiPage = { maxPages: mp.maxPages };
+      }
+
+      const result = await crawlAndIngest(client, body.url, {
+        ...(typeof body.scope === 'string' ? { scope: body.scope as Scope } : {}),
+        ...(typeof body.tag === 'string' ? { tag: body.tag } : {}),
+        ...(multiPage !== undefined ? { multiPage } : {}),
+        ...(typeof body.timeoutMs === 'number' ? { timeoutMs: body.timeoutMs } : {}),
+      } satisfies CrawlAndIngestOptions);
       return sendJson(res, 200, result);
     }
 

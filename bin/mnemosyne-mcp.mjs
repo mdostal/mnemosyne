@@ -3,7 +3,7 @@
 //
 // Third thin transport wrapper over Mnemosyne's actions, alongside
 // src/server.mjs's HTTP API and bin/mnemosyne-skill-helper.mjs's CLI
-// pass-throughs. Exposes recall/remember/ingest_document/grep/reindex/
+// pass-throughs. Exposes recall/remember/ingest_document/crawl_website/grep/reindex/
 // graph-*/persona-* as MCP tools over stdio (the transport Claude Desktop /
 // Claude Code MCP configs expect for a locally-launched server: one
 // process, stdio, no port to manage).
@@ -16,8 +16,9 @@
 // thing: ensure the underlying Mnemosyne HTTP service is running (starting
 // it if needed) and fetch() against it. Duplicating that logic here would
 // reopen every guardrail already closed in engine.mjs (loud failure, full
-// provenance, no collection wipe) — see SERVICE.md. ONE exception:
-// ingest_document, see its own comment above ingestAction below.
+// provenance, no collection wipe) — see SERVICE.md. TWO exceptions:
+// ingest_document and crawl_website, see their own comments above
+// ingestAction/crawlAction below.
 //
 // ONE deliberate, documented exception (la-02-graphify-adapter, extended by
 // cr-01-graphify-default-layer): the four graph_* tools below are wired
@@ -107,6 +108,29 @@ async function ingestAction(port, { content, filename, tag, scope } = {}) {
   return data;
 }
 
+// ro-11-bounded-website-crawl: crawl_website's real backing route (POST
+// /crawl) lives on the SAME MnemosyneClient HTTP API (:3141) as POST /ingest
+// above, for the same reason (crawlAndIngest() is built on MnemosyneClient's
+// remember() cascade via ro-10's ingestDocument(), not the swarm-memory
+// engine) -- same thin-fetch shape, same documented exception to this file's
+// "no business logic, every handler pass-throughs to skill-helper.mjs" rule.
+async function crawlAction(port, { url, scope, tag, maxPages, timeoutMs } = {}) {
+  const multiPage = maxPages !== undefined ? { maxPages } : undefined;
+  const res = await fetch(`http://127.0.0.1:${port}/crawl`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ url, scope, tag, multiPage, timeoutMs }),
+  });
+  const data = await res.json();
+  if (res.status >= 400) {
+    const err = new Error((data && data.error && data.error.message) || `POST /crawl -> ${res.status}`);
+    err.status = res.status;
+    err.body = data;
+    throw err;
+  }
+  return data;
+}
+
 function textResult(data) {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
@@ -182,6 +206,23 @@ export function createServer({ port = DEFAULT_PORT } = {}) {
       },
     },
     wrapAction(CLIENT_API_PORT, ingestAction),
+  );
+
+  server.registerTool(
+    "crawl_website",
+    {
+      title: "Crawl website",
+      description:
+        "Bounded, polite website crawl into memory. Default: fetches EXACTLY the one given URL (never follows any link), extracts best-effort text (naive tag-stripping, not readability-grade), and feeds it through the same ingestDocument()/remember() cascade as ingest_document -- never a second storage path. robots.txt is always checked before any fetch; a disallowed path fails loudly and is never fetched. A firm, default-on SSRF guard rejects loopback/private-network/link-local/cloud-metadata targets before every individual fetch -- there is no flag anywhere to bypass it. Same-domain multi-page crawling is an explicit opt-in (maxPages), hard-capped regardless of what's requested, with a real rate-limit delay between requests. Not a general-purpose scraper, not a scheduled crawler, and never authenticates/injects credentials -- 401/403 fails loudly.",
+      inputSchema: {
+        url: z.string().describe("The URL to crawl (http/https only)"),
+        scope: z.string().optional().describe("Scope to write into (defaults to 'project')"),
+        tag: z.string().optional().describe("Optional tag carried into each chunk's metadata"),
+        maxPages: z.number().optional().describe("Opts into same-domain multi-page crawling (omit for the single-page default); hard-capped regardless of the value given"),
+        timeoutMs: z.number().optional().describe("Per-request timeout override"),
+      },
+    },
+    wrapAction(CLIENT_API_PORT, crawlAction),
   );
 
   server.registerTool(
