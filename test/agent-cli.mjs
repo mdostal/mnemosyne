@@ -489,6 +489,25 @@ async function main() {
     await rm(home, { recursive: true, force: true });
   }
 
+  // --- AC-install-paths (ro-12-two-explicit-install-paths): `agent status`, run in a repo where
+  // onboarding has not yet run, prints one line naming BOTH the sidecar path (`agent init --build`)
+  // and the full/system path (`mnemosyne onboard <path> --collection <name>`) as discoverable next
+  // steps -- pure discoverability text, no new CLI verb, no state mutation. ------------------------
+  {
+    const home = await makeFakeHome();
+    const status = await runCli(["status"], { home });
+    ok(status.code === 0, `agent status (install-paths line check) -> exit 0 (got ${status.code}, stderr=${short(status.stderr)})`);
+    ok(
+      /agent init --build/.test(status.stdout),
+      `agent status names the sidecar path ("agent init --build") -> ${short(status.stdout)}`,
+    );
+    ok(
+      /mnemosyne onboard <path> --collection <name>/.test(status.stdout),
+      `agent status names the full/system path ("mnemosyne onboard <path> --collection <name>") -> ${short(status.stdout)}`,
+    );
+    await rm(home, { recursive: true, force: true });
+  }
+
   // --- AC-harness-flag: `--harness claude` genuinely narrows scope (no Codex mention at all) -------
   {
     const home = await makeFakeHome();

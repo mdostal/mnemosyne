@@ -189,6 +189,20 @@ async function main() {
     `agent status confirms the install script never ran \`agent init\` (still NOT registered) -> ${short(status1.stdout, 200)}`
   );
 
+  // --- AC-install-paths (ro-12-two-explicit-install-paths): install.sh's step-4
+  // print block additively names BOTH the sidecar (Mode B) and full/system
+  // (Mode A) install paths -- in addition to (not replacing) the existing
+  // `mnemosyne agent init` line already checked above. ------------------------
+  ok(/Mode B/.test(run1.stdout) && /Mode A/.test(run1.stdout), `install script's step-4 output names both Mode B and Mode A -> ${short(run1.stdout, 400)}`);
+  ok(/agent init --build/.test(run1.stdout), `install script's step-4 output names the sidecar path (agent init --build) -> ${short(run1.stdout, 400)}`);
+  ok(
+    /mnemosyne onboard <path> --collection <name>/.test(run1.stdout),
+    `install script's step-4 output names the full/system path (mnemosyne onboard <path> --collection <name>) -> ${short(run1.stdout, 400)}`
+  );
+  // Still prints (never runs) the pre-existing `mnemosyne agent init` line --
+  // this story is additive-only, not a replacement of the original line.
+  ok(/^  mnemosyne agent init$/m.test(run1.stdout), "install script still prints the original standalone `mnemosyne agent init` line, unreplaced");
+
   // --- AC-idempotent: second run, same target ---------------------------------
   const run2 = await runInstallScript(DOCS_INSTALL, { installDir, binDir });
   ok(run2.code === 0, `docs/install.sh second run (same target) -> exit 0 (got ${run2.code}, stderr=${short(run2.stderr)})`);
@@ -238,6 +252,22 @@ async function main() {
   ok(
     /gh repo clone mdostal\/mnemosyne\ncd mnemosyne\nnpm install\nnpm test/.test(quickstartSlice),
     "the existing gh-repo-clone/npm-install/npm-test block is preserved, unmodified, below the curl line"
+  );
+
+  // --- AC-install-paths (ro-12-two-explicit-install-paths): README.md's Quickstart,
+  // read top to bottom after the curl|bash step, names BOTH "sidecar / embedded"
+  // and "full / system" as explicit, labeled paths, each cross-referenced to the
+  // SAME Mode A / Mode B vocabulary design-discussion.md already uses. -----------
+  const afterCurl = readme.slice(curlIdx === -1 ? quickstartIdx : quickstartIdx + curlIdx);
+  ok(/[Ss]idecar/.test(afterCurl) && /Mode B/.test(afterCurl), `README names "sidecar" cross-referenced to Mode B after the curl step -> ${short(afterCurl, 500)}`);
+  ok(
+    /[Ff]ull ?\/ ?[Ss]ystem/.test(afterCurl) && /Mode A/.test(afterCurl),
+    `README names "full/system" cross-referenced to Mode A after the curl step -> ${short(afterCurl, 500)}`
+  );
+  ok(/mnemosyne agent init --build/.test(afterCurl), `README's install-path fork names the real sidecar command (agent init --build) -> ${short(afterCurl, 500)}`);
+  ok(
+    /mnemosyne onboard <path> --collection <name>/.test(afterCurl),
+    `README's install-path fork names the real full/system command (mnemosyne onboard <path> --collection <name>) -> ${short(afterCurl, 500)}`
   );
 }
 

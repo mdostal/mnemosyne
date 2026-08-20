@@ -117,6 +117,17 @@ CLI and installs its usage skills — see `mnemosyne agent status` to preview
 state first. Safe to re-run (updates the existing clone instead of
 re-cloning).
 
+**Choose your install path** — two deliberate, named choices (same
+Mode A/Mode B vocabulary `design-discussion.md` already uses, never a
+third, unmapped term):
+
+- **Sidecar / embedded install (Mode B)** — package Mnemosyne as a
+  product's own memory agent: `mnemosyne agent init --build [--storage-dir <dir>]`.
+- **Full / system install (Mode A)** — register your own harness, then join
+  your Pantheon tree (or your own standalone collection): `mnemosyne agent
+  init` (no `--build`) + `mnemosyne onboard <path> --collection <name>
+  [--create]`.
+
 Manual / dev-clone alternative:
 
 ```bash
