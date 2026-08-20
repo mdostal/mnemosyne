@@ -147,6 +147,22 @@ To **ingest a document into memory** — plain text/Markdown, or a free-text des
 
 The underlying vector memory Mnemosyne wraps is **already live** — it runs today through `swarm-memory` against remote Qdrant Cloud (credential at `~/.config/swarm-memory/qdrant.key`; **do not wipe** existing collections or the Obsidian vault — Mnemosyne is additive).
 
+## Onboard a repo into the tree (Mode A)
+
+`bin/mnemosyne onboard <path> --collection <name> [--scope-id <id>] [--override project|enterprise]`
+brings a repo online against an **already-existing** Qdrant collection and
+places it in the operator-global org tree (`~/.mnemosyne/org-tree.yaml`):
+a real, read-only Qdrant check confirms `<name>` actually exists (fails
+loudly, naming `--create`/ro-07, if it doesn't — collection *creation* isn't
+supported by this verb yet), the collection is classified project- vs.
+enterprise-scoped via `mnemosyne.placement_engine.classify_collection`, and
+the same `onboardRepo()` pipeline `agent init --build` uses (Layer 1 sync,
+persona seed, file/graph index, base-level report) runs against `<path>`.
+An ambiguous/unmarked collection name still completes the run — flagged
+`needs_override: true` in the org-tree entry and printed clearly — pass
+`--override project|enterprise` to set the scope explicitly instead of
+accepting the heuristic's own default.
+
 ## Status
 
 **Phase 1 v1 is implemented.** The service wraps the existing `swarm-memory`
