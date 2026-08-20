@@ -4,6 +4,7 @@
 #        PORT=8477 bin/mnemosyne
 #        bin/mnemosyne reindex <scope> [--dir <path>] [--url <base-url>]
 #        bin/mnemosyne ingest --file <path> [--scope <scope>] [--tag <tag>] [--url <base-url>]
+#        bin/mnemosyne crawl <url> [--scope <scope>] [--tag <tag>] [--max-pages <n>] [--url-api <base-url>]
 #        bin/mnemosyne persona sync --repo <path> --tier <tier> --scope-id <id> [--dry-run]
 #        bin/mnemosyne persona seed [--root <path>] [--scope-id <id>]
 #        bin/mnemosyne persona show <tier> <scope-id>
@@ -44,6 +45,16 @@ if [ "${1:-}" = "ingest" ]; then
   # MnemosyneClient HTTP API, default :3141), never importing lib/mnemosyne/
   # ingest/ingestDocument.ts directly.
   exec node "$HERE/bin/mnemosyne-ingest.mjs" "$@"
+fi
+
+if [ "${1:-}" = "crawl" ]; then
+  shift
+  # ro-11-bounded-website-crawl: same shape as `ingest` above -- plain node,
+  # a thin HTTP client (POST /crawl against the same MnemosyneClient HTTP
+  # API, :3141), never importing lib/mnemosyne/ingest/crawlAndIngest.ts
+  # directly (the SSRF guard/robots.txt/fetch logic lives only in that
+  # module and the server route that wraps it, never duplicated here).
+  exec node "$HERE/bin/mnemosyne-crawl.mjs" "$@"
 fi
 
 if [ "${1:-}" = "persona" ]; then
