@@ -145,9 +145,13 @@ new failures anywhere. Two end-to-end smoke tests added
 (`test/onboard-smoke-mode-a.mjs`, `test/onboard-smoke-mode-b.mjs`,
 mirroring `test/agent-cli.mjs`'s isolated-temp-directory convention):
 Mode B's smoke test runs a real `agent init --build` against a disposable
-temp repo and confirms levels 0/1/4 report `configured: true` (level 2
-conditionally, depending on `graphify` availability in the running
-environment); Mode A's smoke test requires a disposable/test-scoped Qdrant
+temp repo and confirms levels 0/4 report `configured: true` (no external
+infra required for either), level 1 correctly reports `false` (a fresh
+repo has no separately-authored `mnemosyne.md`), and level 3 (vector)
+reports `true` regardless of real Qdrant credentials (the default layer
+stack includes `vector` structurally) — level 2 conditionally, depending
+on `graphify` availability in the running environment; Mode A's smoke test
+requires a disposable/test-scoped Qdrant
 target, which this environment does not provide (only the operator's real
 production `swarm-memory` Qdrant Cloud cluster is configured here) — it
 exits with a clear, visible `SKIPPED` reason rather than running
