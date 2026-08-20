@@ -20,11 +20,25 @@
  *                               repoRoot })` fed to ro-01's extracted
  *                               `computeMemoryLevels(client, repoRoot)`.
  *
- * Mode 'tree' additionally carries a vector-index sub-step, STUBBED until
- * ro-07 wires the real Qdrant collection-creation path
- * (`{ ran: false, reason: 'not yet implemented' }`); mode 'standalone'
- * never attempts it. No other branching exists between the two modes --
- * every other step above is byte-identical for both.
+ * Mode 'tree' additionally carries a vector-index sub-step (ro-07-onboard-
+ * new-collection-full-mode-a): once a collection is confirmed to exist
+ * (either freshly created via `--create`'s `create_collection_and_scope()`,
+ * or pre-existing per `ro-05`'s own existing-collection path -- both
+ * callers guarantee this by construction before ever invoking
+ * `onboardRepo()` with `mode: 'tree'`), this calls the existing, unmodified
+ * `POST /reindex {scope, directory}` contract (`src/server.mjs`,
+ * SERVICE.md's "Two reindex paths") against a running Mnemosyne service,
+ * `scope` set to this call's own `scopeId` -- the SAME per-repo scope key
+ * `create_collection_and_scope()` maps to this repo's own collection
+ * (design-discussion.md's "own scope" isolation: scope->collection mapping
+ * keyed to this repo's own collection). `POST /reindex` itself is
+ * asynchronous (`202 {status:'started',...}` immediately, the real index
+ * continues in the background), so `{ ran: true }` here means the reindex
+ * was successfully KICKED OFF against a real collection, not that indexing
+ * has completed by the time `onboardRepo()` returns -- see
+ * `runVectorIndexStep`'s own doc comment below. Mode 'standalone' never
+ * attempts it. No other branching exists between the two modes -- every
+ * other step above is byte-identical for both.
  *
  * Every sub-step records its own soft failure in its own result field
  * (`{ ran: false, reason }`) rather than throwing -- mirrors
@@ -69,7 +83,7 @@ export interface OnboardRepoOptions {
   mode: 'tree' | 'standalone';
   repoRoot: string;
   scopeId: string;
-  /** Mode 'tree' only -- the swarm-memory collection this repo writes to. Unused until ro-07. */
+  /** Mode 'tree' only -- the swarm-memory collection this repo writes to. Drives the real vector-index sub-step (ro-07). */
   collection?: string;
   /** Skip the L2 graph build even if `graphify` is on PATH (mainly for tests). */
   skipGraph?: boolean;
@@ -80,7 +94,7 @@ export interface OnboardRepoResult {
   personaSeeded: { created: boolean; path: string };
   fileIndex: { files: number; areas: number };
   graphIndex: { ran: boolean; reason?: string };
-  /** mode:'tree' only, real when ro-07 lands -- always `{ ran: false }` (with a reason) in this story. */
+  /** mode:'tree' only -- real once a collection is confirmed to exist (ro-07); mode 'standalone' is always `{ ran: false }`. */
   vectorIndex: { ran: boolean; reason?: string };
   baseLevel: ComputedMemoryLevel[];
 }
@@ -184,10 +198,83 @@ async function runGraphIndexStep(
   }
 }
 
+/** Default Mnemosyne service base URL -- mirrors bin/mnemosyne-reindex.mjs's / hooks/lib/mnemo-client.mjs's own identical `$MNEMOSYNE_URL || http://127.0.0.1:8477` convention (read at CALL time, not module-load time, so tests can `vi.stubEnv` it per-test without a module reset). */
+function mnemosyneServiceUrl(): string {
+  return process.env.MNEMOSYNE_URL || 'http://127.0.0.1:8477';
+}
+
+/**
+ * Real vector-index sub-step (ro-07-onboard-new-collection-full-mode-a):
+ * mode 'tree' only, once a collection is confirmed to exist. Calls the
+ * existing, unmodified `POST /reindex {scope, directory}` contract
+ * (`src/server.mjs`, SERVICE.md's "Two reindex paths" -- the bulk/scope-wide
+ * path, reused not reimplemented, exactly the way `bin/mnemosyne-
+ * reindex.mjs`'s own CLI wrapper already calls it) against a running
+ * Mnemosyne service. `scope` is `scopeId` -- see this module's own doc
+ * comment for why that's the correct per-repo scope key to reuse here.
+ *
+ * `POST /reindex` itself is asynchronous (`202 {status:'started',...}`
+ * immediately; the real index continues in the background and logs its own
+ * outcome -- SERVICE.md) so a `{ ran: true }` result here means the reindex
+ * was successfully KICKED OFF against a real collection, not that indexing
+ * has completed by the time `onboardRepo()` returns. The actual first-time-
+ * index proof (a subsequent `recall()` returning real hits with full
+ * 7-field provenance) is this story's own separate, manual live-Qdrant
+ * verification step -- never part of this synchronous return value.
+ *
+ * Never throws -- mirrors `runGraphIndexStep`'s own soft-failure convention
+ * (`{ ran: false, reason }`), including when no Mnemosyne service is
+ * reachable at all (e.g. this repo's own automated test suite, which never
+ * runs a live server against real Qdrant -- see `onboardRepo.test.ts`'s own
+ * local HTTP-stub convention).
+ */
+async function runVectorIndexStep(
+  repoRoot: string,
+  scopeId: string,
+  collection: string | undefined,
+): Promise<{ ran: boolean; reason?: string }> {
+  if (!collection) {
+    return { ran: false, reason: "mode 'tree' requires a collection to vector-index into" };
+  }
+
+  const baseUrl = mnemosyneServiceUrl();
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl}/reindex`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ scope: scopeId, directory: repoRoot }),
+    });
+  } catch (error) {
+    return {
+      ran: false,
+      reason: `could not reach Mnemosyne service at ${baseUrl} to start the vector index: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+
+  let body: unknown = null;
+  try {
+    body = await res.json();
+  } catch {
+    // Non-JSON body -- fall through to the generic status-based message below.
+  }
+
+  if (!res.ok) {
+    const detail =
+      body && typeof body === 'object' && 'error' in body
+        ? String((body as { error: unknown }).error)
+        : JSON.stringify(body);
+    return { ran: false, reason: `POST /reindex failed: ${res.status} ${detail}` };
+  }
+
+  return { ran: true };
+}
+
 /**
  * Sequences Layer 1 sync + persona seed + first-time index + base-level
- * report (plus mode 'tree''s stubbed vector-index sub-step) for `repoRoot`.
- * See this module's own doc comment for the full step-by-step contract.
+ * report (plus mode 'tree''s real vector-index sub-step, ro-07) for
+ * `repoRoot`. See this module's own doc comment for the full step-by-step
+ * contract.
  */
 export async function onboardRepo(options: OnboardRepoOptions): Promise<OnboardRepoResult> {
   const { mode, repoRoot, scopeId } = options;
@@ -215,12 +302,12 @@ export async function onboardRepo(options: OnboardRepoOptions): Promise<OnboardR
   // 3b. L2 graph build -- soft-gated on graphify's own PATH availability.
   const graphIndex = await runGraphIndexStep(repoRoot, options.skipGraph);
 
-  // Mode 'tree' only: vector-index sub-step, stubbed until ro-07 wires the
-  // real Qdrant collection-creation path. Mode 'standalone' never attempts
-  // it -- this is the ONLY branch point between the two modes.
+  // Mode 'tree' only: real vector-index sub-step (ro-07) once a collection
+  // is confirmed to exist. Mode 'standalone' never attempts it -- this is
+  // the ONLY branch point between the two modes.
   const vectorIndex: { ran: boolean; reason?: string } =
     mode === 'tree'
-      ? { ran: false, reason: 'not yet implemented' }
+      ? await runVectorIndexStep(repoRoot, scopeId, options.collection)
       : { ran: false, reason: "mode 'standalone' never attempts vector indexing" };
 
   // 4. Base-level report -- a scoped client, fed to ro-01's extracted

@@ -251,6 +251,19 @@ async function computeExpectedOrgTreePath(name) {
 async function main() {
   const home = await makeFakeHome();
   process.env.HOME = home;
+  // ro-07-onboard-new-collection-full-mode-a: onboardRepo()'s mode:'tree'
+  // vector-index sub-step now makes a real POST /reindex call against
+  // $MNEMOSYNE_URL (default http://127.0.0.1:8477 -- a real, live service
+  // may well be running there on an operator's own machine). This suite's
+  // AC3 block below calls onboardRepo({ mode: 'tree', ... }) purely to
+  // exercise org-tree reachability, never to test vector indexing -- so
+  // MNEMOSYNE_URL is pinned to a deliberately unroutable address (TEST-NET-1,
+  // RFC 5737, mirrors test/layer1-mandate-hook.mjs's own UNREACHABLE_URL
+  // convention) to keep this run offline and side-effect-free regardless of
+  // what else happens to be listening on the default port. The vector-index
+  // sub-step fails soft ({ ran: false, reason }), never throws, so this has
+  // no effect on any assertion below.
+  process.env.MNEMOSYNE_URL = "http://192.0.2.1:1";
 
   // Dynamic imports, AFTER $HOME is pointed at our fake, throwaway home --
   // onboardRepo.ts's own DEFAULT_LEVEL0_PATH (and any sibling HOME-anchored

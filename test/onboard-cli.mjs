@@ -45,8 +45,27 @@
 //        default).
 //   AC5  a --collection name that does NOT exist in Qdrant (per the real,
 //        read-only inventory pre-check against the fake server) fails
-//        loudly, directing the operator to --create (ro-07) -- and makes
-//        ZERO onboarding writes (no CLAUDE.md, no org-tree entry).
+//        loudly, directing the operator to --create -- and makes ZERO
+//        onboarding writes (no CLAUDE.md, no org-tree entry).
+//
+// Also covers ro-07-onboard-new-collection-full-mode-a's --create scenarios
+// (per ro-07's own acceptance criteria):
+//   ro-07 AC1-3  --create against a genuinely new collection name: ro-06's
+//        create_collection_and_scope() actually runs (a real PUT
+//        /collections/<name> against the fake Qdrant server, a real scope
+//        mapping written into config.toml), onboarding proceeds through the
+//        full sequence, the base-level report shows level 3 (vector) as
+//        configured=true, and onboardRepo()'s real vector-index sub-step
+//        (ro-07) issues a real POST /reindex against a fake local
+//        Mnemosyne-service stub with {scope: <resolved --scope-id>,
+//        directory: <repoRoot>}.
+//   ro-07 AC4  --create against a collection that ALREADY exists fails
+//        loudly, directing the operator to omit --create -- never a silent
+//        no-op, and never issues a PUT /collections/<name>.
+//   ro-07 AC5  --create combined with an ambiguous collection name and no
+//        --override: the same needs_override: true behavior as AC3 above,
+//        unchanged -- --create does not bypass the classification/override
+//        contract.
 //
 // Usage: node test/onboard-cli.mjs (wired into `npm test`).
 import { execFile } from "node:child_process";
@@ -104,12 +123,35 @@ async function makeTempRepo(prefix = "mnemosyne-onboard-cli-repo-") {
  * ...]}}`, per mnemosyne/inventory/qdrant_inventory.py's own
  * HttpQdrantClient.list_collections()) -- the "fake/stubbed inventory
  * check" this story's test-spec step calls for. Never live Qdrant Cloud.
+ *
+ * ro-07-onboard-new-collection-full-mode-a extension: also answers
+ * `PUT /collections/<name>` the exact way `HttpQdrantClient.
+ * create_collection()` (ro-06) calls it, so --create's real Python call
+ * chain (create_collection_and_scope() -> HttpQdrantClient.
+ * create_collection()) can be exercised end-to-end against this fake
+ * server too -- `collections` (mutated in place) and `creates` (every real
+ * PUT request received, in order) are both exposed for assertions.
  */
-async function startFakeQdrantServer(collectionNames) {
+async function startFakeQdrantServer(initialCollectionNames) {
+  const collections = [...initialCollectionNames];
+  const creates = [];
   const server = http.createServer((req, res) => {
     if (req.method === "GET" && req.url === "/collections") {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ result: { collections: collectionNames.map((name) => ({ name })) } }));
+      res.end(JSON.stringify({ result: { collections: collections.map((name) => ({ name })) } }));
+      return;
+    }
+    const putMatch = req.method === "PUT" && /^\/collections\/([^/]+)$/.exec(req.url || "");
+    if (putMatch) {
+      let raw = "";
+      req.on("data", (d) => (raw += d));
+      req.on("end", () => {
+        const name = decodeURIComponent(putMatch[1]);
+        creates.push({ name, body: raw ? JSON.parse(raw) : null });
+        collections.push(name);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ result: true, status: "ok", time: 0 }));
+      });
       return;
     }
     res.writeHead(404, { "content-type": "application/json" });
@@ -117,7 +159,38 @@ async function startFakeQdrantServer(collectionNames) {
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const port = server.address().port;
-  return { server, url: `http://127.0.0.1:${port}`, close: () => new Promise((r) => server.close(r)) };
+  return {
+    server,
+    url: `http://127.0.0.1:${port}`,
+    collections,
+    creates,
+    close: () => new Promise((r) => server.close(r)),
+  };
+}
+
+/**
+ * A real, local, throwaway HTTP server speaking `POST /reindex`'s own real
+ * `202 {status:'started', scope, directory}` response shape (src/server.mjs,
+ * SERVICE.md's "Two reindex paths") -- ro-07's real vector-index sub-step's
+ * own target (onboardRepo.ts), mocked here so this suite never makes a live
+ * call to a real Mnemosyne service / Qdrant. `requests` records every real
+ * POST it receives, in order, for assertions.
+ */
+async function startFakeMnemosyneServer(status = 202) {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    let raw = "";
+    req.on("data", (d) => (raw += d));
+    req.on("end", () => {
+      const body = raw ? JSON.parse(raw) : null;
+      requests.push({ method: req.method, url: req.url, body });
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify({ status: "started", scope: body?.scope, directory: body?.directory }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = server.address().port;
+  return { server, url: `http://127.0.0.1:${port}`, requests, close: () => new Promise((r) => server.close(r)) };
 }
 
 /**
@@ -149,11 +222,19 @@ async function makeFakeHome(qdrantUrl) {
   return home;
 }
 
-/** Runs the REAL `mnemosyne onboard` CLI as a real subprocess, $HOME pinned to `home` (never this operator's real one). `SWARM_MEMORY_QDRANT_URL` is explicitly deleted so an ambient real env var can never shadow the fake server's config.toml URL. */
-async function runCli(args, { home, viaDispatcher = false, cwd = ROOT } = {}) {
+/**
+ * Runs the REAL `mnemosyne onboard` CLI as a real subprocess, $HOME pinned
+ * to `home` (never this operator's real one). `SWARM_MEMORY_QDRANT_URL` is
+ * explicitly deleted so an ambient real env var can never shadow the fake
+ * server's config.toml URL. `env` merges in additional overrides (ro-07:
+ * e.g. a scenario-specific `MNEMOSYNE_URL` pointed at a local fake
+ * POST /reindex stub) on top of the process-wide default set in main()
+ * below.
+ */
+async function runCli(args, { home, viaDispatcher = false, cwd = ROOT, env: envOverride = {} } = {}) {
   const cmd = viaDispatcher ? DISPATCHER : TSX_BIN;
   const cmdArgs = viaDispatcher ? ["onboard", ...args] : [CLI, ...args];
-  const env = { ...process.env, HOME: home };
+  const env = { ...process.env, HOME: home, ...envOverride };
   delete env.SWARM_MEMORY_QDRANT_URL;
   try {
     const { stdout, stderr } = await execFileAsync(cmd, cmdArgs, { cwd, env });
@@ -232,6 +313,21 @@ async function main() {
     "utf8",
   );
   process.env.HOME = referenceHome;
+  // ro-07-onboard-new-collection-full-mode-a: onboardRepo()'s mode:'tree'
+  // vector-index sub-step now makes a real POST /reindex call against
+  // $MNEMOSYNE_URL (default http://127.0.0.1:8477 -- a real, live service
+  // may well be running there on an operator's own machine). Pinned here,
+  // process-wide, to a deliberately unroutable address (TEST-NET-1, RFC
+  // 5737, mirrors test/layer1-mandate-hook.mjs's own UNREACHABLE_URL
+  // convention) so every onboardRepo() call below -- the in-process
+  // "reference" call AND every runCli() subprocess (which inherits
+  // process.env) -- stays offline by default. The vector-index sub-step
+  // fails soft ({ ran: false, reason }), never throws, so this has no
+  // effect on any assertion that doesn't specifically care about it. The
+  // one scenario below that DOES care overrides MNEMOSYNE_URL per-call via
+  // runCli()'s own `env` option, pointed at a local fake POST /reindex stub
+  // instead.
+  process.env.MNEMOSYNE_URL = "http://192.0.2.1:1";
 
   const { onboardRepo } = await import("../lib/mnemosyne/onboarding/onboardRepo.js");
   const { TIER_CONTENT } = await import("../lib/mnemosyne/layer1/tiers.js");
@@ -400,8 +496,8 @@ async function main() {
       `onboard fails with a clear "does not exist in Qdrant" message -> ${short(result.stderr)}`,
     );
     ok(
-      /--create/i.test(result.stderr) && /ro-07/i.test(result.stderr),
-      `onboard's failure message directs the operator to --create (ro-07) instead of silently proceeding -> ${short(result.stderr)}`,
+      /--create/i.test(result.stderr),
+      `onboard's failure message directs the operator to --create instead of silently proceeding -> ${short(result.stderr)}`,
     );
 
     // Zero onboarding writes -- never silently proceeded against a nonexistent collection.
@@ -409,6 +505,178 @@ async function main() {
     ok(!existsSync(path.join(repo, ".mnemosyne")), "onboard against a nonexistent collection writes no .mnemosyne/ under the target repo");
     const entry = await readOrgTreeEntry(home, path.resolve(repo));
     ok(entry === undefined, "onboard against a nonexistent collection writes no org-tree entry");
+
+    await rm(repo, { recursive: true, force: true });
+    await rm(home, { recursive: true, force: true });
+    await qdrant.close();
+  }
+
+  // === ro-07-onboard-new-collection-full-mode-a: --create scenarios =================================
+
+  // --- ro-07 AC1-3: --create against a genuinely NEW collection name -> ro-06's create_collection_and_scope()
+  //     actually runs, full sequence proceeds, level 3 (vector) configured=true, real POST /reindex issued ---
+  {
+    const collection = "project-ro07-newcollection";
+    const scopeId = "ro07-create-scope";
+
+    // The fake Qdrant server does NOT know this collection yet -- genuinely new.
+    const qdrant = await startFakeQdrantServer([]);
+    const home = await makeFakeHome(qdrant.url);
+    const repo = await makeTempRepo();
+    const mnemo = await startFakeMnemosyneServer(202);
+
+    const result = await runCli([repo, "--collection", collection, "--scope-id", scopeId, "--create"], {
+      home,
+      env: { MNEMOSYNE_URL: mnemo.url },
+    });
+    ok(
+      result.code === 0,
+      `onboard --create (genuinely new collection) -> exit 0 (got ${result.code}, stderr=${short(result.stderr)})`,
+    );
+    ok(
+      /creating collection/i.test(result.stdout),
+      `onboard --create prints that it is creating the collection -> ${short(result.stdout)}`,
+    );
+
+    // ro-06's create_collection_and_scope() genuinely ran: a real PUT /collections/<name>.
+    ok(
+      qdrant.creates.length === 1,
+      `--create issues exactly one PUT /collections/<name> -> got ${qdrant.creates.length}`,
+    );
+    ok(
+      qdrant.creates[0]?.name === collection,
+      `--create's PUT targets the exact requested collection name -> got ${short(qdrant.creates[0]?.name)}`,
+    );
+
+    // The real scope->collection mapping landed in config.toml (the same
+    // file/table VectorLayerAdapter.remember() and POST /reindex's own
+    // scope lookup (engine.mjs's scopeMap()) both read).
+    const configText = await readFile(path.join(home, ".config", "swarm-memory", "config.toml"), "utf8");
+    ok(
+      configText.includes(`${scopeId} = "${collection}"`),
+      `--create writes the scope->collection mapping into config.toml -> ${short(configText)}`,
+    );
+
+    // AC1: the full onboarding sequence still ran -- real on-disk artifacts.
+    ok(existsSync(path.join(repo, "CLAUDE.md")), "onboard --create still runs Layer 1 sync (CLAUDE.md present)");
+    ok(
+      existsSync(path.join(repo, ".mnemosyne", "personas", `${scopeId}.yaml`)),
+      "onboard --create still seeds a repo-local persona",
+    );
+    ok(
+      existsSync(path.join(repo, ".mnemosyne", "file-index.json")),
+      "onboard --create still writes the L4 file-store index",
+    );
+
+    // AC2: base-level report shows level 3 (vector) as configured=true --
+    // previously structurally impossible for a genuinely new repo (no
+    // collection existed to even reach onboardRepo() through the CLI).
+    ok(
+      /\[3\][^\n]*: configured/i.test(result.stdout),
+      `onboard --create's base-level report shows level 3 (vector) as configured -> ${short(result.stdout)}`,
+    );
+
+    const entry = await readOrgTreeEntry(home, path.resolve(repo));
+    ok(entry !== undefined, "onboard --create writes a real org-tree entry");
+    ok(entry?.collection === collection, "org-tree entry records the newly-created collection name");
+
+    // The real vector-index sub-step (onboardRepo.ts, ro-07) actually called
+    // POST /reindex against the (fake, stubbed) running Mnemosyne service.
+    ok(
+      mnemo.requests.length === 1,
+      `onboard --create's vector-index sub-step calls POST /reindex exactly once -> got ${mnemo.requests.length}`,
+    );
+    ok(
+      mnemo.requests[0]?.method === "POST" && mnemo.requests[0]?.url === "/reindex",
+      `the real POST /reindex call was made -> got ${short(mnemo.requests[0])}`,
+    );
+    ok(
+      mnemo.requests[0]?.body?.scope === scopeId,
+      `POST /reindex's scope is the resolved --scope-id (own-scope isolation) -> got ${short(mnemo.requests[0]?.body?.scope)}`,
+    );
+    ok(
+      mnemo.requests[0]?.body?.directory === path.resolve(repo),
+      `POST /reindex's directory is the onboarded repoRoot -> got ${short(mnemo.requests[0]?.body?.directory)}`,
+    );
+
+    await rm(repo, { recursive: true, force: true });
+    await rm(home, { recursive: true, force: true });
+    await qdrant.close();
+    await mnemo.close();
+  }
+
+  // --- ro-07 AC4: --create against a collection that ALREADY exists -> loud failure, never a silent no-op ---
+  {
+    const collection = "ro07-already-exists-collection";
+    const scopeId = "ro07-already-exists-scope";
+
+    const qdrant = await startFakeQdrantServer([collection]); // already exists
+    const home = await makeFakeHome(qdrant.url);
+    const repo = await makeTempRepo();
+
+    const result = await runCli([repo, "--collection", collection, "--scope-id", scopeId, "--create"], { home });
+    ok(
+      result.code !== 0,
+      `onboard --create against an already-existing collection -> non-zero exit (got ${result.code})`,
+    );
+    ok(
+      /already exists in Qdrant/i.test(result.stderr),
+      `onboard --create against an existing collection fails with a clear "already exists" message -> ${short(result.stderr)}`,
+    );
+    ok(
+      /omit --create/i.test(result.stderr),
+      `onboard --create's failure message directs the operator to omit --create -> ${short(result.stderr)}`,
+    );
+    ok(
+      qdrant.creates.length === 0,
+      "onboard --create against an existing collection never issues a PUT /collections/<name> (never a silent no-op, never a destructive recreate)",
+    );
+
+    // Zero onboarding writes -- never silently proceeded.
+    ok(
+      !existsSync(path.join(repo, "CLAUDE.md")),
+      "onboard --create against an existing collection writes no CLAUDE.md (onboardRepo() never ran)",
+    );
+    const entry = await readOrgTreeEntry(home, path.resolve(repo));
+    ok(entry === undefined, "onboard --create against an existing collection writes no org-tree entry");
+
+    await rm(repo, { recursive: true, force: true });
+    await rm(home, { recursive: true, force: true });
+    await qdrant.close();
+  }
+
+  // --- ro-07 AC5: --create + ambiguous collection name + no --override -> needs_override:true, unchanged from ro-05 ---
+  {
+    const collection = "ro07-ambiguous-create-collection";
+    const scopeId = "ro07-ambiguous-create-scope";
+
+    const expected = await computeExpectedClassification(collection);
+    ok(expected.needs_override === true, `sanity: '${collection}' has no scope hint, classifies as needs_override: true`);
+
+    const qdrant = await startFakeQdrantServer([]); // does not exist yet
+    const home = await makeFakeHome(qdrant.url);
+    const repo = await makeTempRepo();
+
+    const result = await runCli([repo, "--collection", collection, "--scope-id", scopeId, "--create"], { home });
+    ok(
+      result.code === 0,
+      `onboard --create (ambiguous, no --override) -> exit 0, still COMPLETES (got ${result.code}, stderr=${short(result.stderr)})`,
+    );
+    ok(
+      /needs_override:\s*true/i.test(result.stdout),
+      `onboard --create prints needs_override: true clearly -> ${short(result.stdout)}`,
+    );
+
+    const entry = await readOrgTreeEntry(home, path.resolve(repo));
+    ok(entry !== undefined, "org-tree.yaml gains an entry for the ambiguous --create case too");
+    ok(
+      entry?.needs_override === true,
+      `org-tree entry records needs_override: true -- --create does not bypass the classification/override contract -> got ${short(entry?.needs_override)}`,
+    );
+    ok(
+      entry?.scope === expected.scope,
+      `org-tree entry's scope matches the heuristic's own (unoverridden) default -> got ${short(entry?.scope)}, expected ${short(expected.scope)}`,
+    );
 
     await rm(repo, { recursive: true, force: true });
     await rm(home, { recursive: true, force: true });
