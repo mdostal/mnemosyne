@@ -29,8 +29,38 @@ const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_INDEX_TIMEOUT_MS = 30_000;
 const DEFAULT_COMMAND = process.env.SWARM_MEMORY_BIN || 'swarm-memory';
 
-interface SwarmMemoryConfig {
+/**
+ * Effective `swarm-memory config` JSON shape (secrets redacted by the CLI
+ * itself). Exported so other consumers of the SAME shell-out (e.g.
+ * `cm-06-cross-session-clustering`'s read-only scope-resolution sub-step,
+ * `clusterConversations.ts`) can reuse `readSwarmMemoryConfig()` below
+ * rather than re-implementing a second, independent TOML/JSON parse of
+ * `config.toml` (design-discussion.md §10.2, `[grill 4.1]`'s "one
+ * primitive, reused, never reimplemented" convention).
+ */
+export interface SwarmMemoryConfig {
   scopes?: Record<string, string>;
+  /** The real, live embedder swarm-memory resolves against (confirmed live: `{provider: 'ollama', model: 'nomic-embed-text', url: 'http://localhost:11434', dim: 768}` today) -- surfaced here, unused by this adapter itself (`remember()`/`recall()` never need the raw model/url, only `cfg.scopes`), but real, present CLI output other consumers may read. */
+  embedder?: { provider?: string; model?: string; url?: string; dim?: number };
+}
+
+/**
+ * Shells out to `swarm-memory config` and parses its JSON stdout -- the
+ * SAME real call `remember()` below already performs to resolve
+ * `scope` -> collection. Extracted to its own exported function so a
+ * second consumer (e.g. `clusterConversations.ts`'s read-only
+ * scope-resolution sub-step) can reuse this EXACT shell-out rather than
+ * re-implementing a second, independent config-file read (design-
+ * discussion.md §10.2). Throws on any exec/parse failure -- callers decide
+ * how to classify/handle that, exactly as `remember()` does below via
+ * `classifyExecError()`.
+ */
+export async function readSwarmMemoryConfig(
+  command: string = DEFAULT_COMMAND,
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+): Promise<SwarmMemoryConfig> {
+  const configResult = await execFileAsync(command, ['config'], { timeout: timeoutMs });
+  return JSON.parse(configResult.stdout) as SwarmMemoryConfig;
 }
 
 interface SwarmMemoryProvenance {
@@ -211,23 +241,21 @@ export class VectorLayerAdapter implements LayerAdapter {
     }
 
     let collection: string;
+    let cfg: SwarmMemoryConfig;
     try {
-      const configResult = await execFileAsync(this.command, ['config'], {
-        timeout: this.timeoutMs,
-      });
-      const cfg = JSON.parse(configResult.stdout) as SwarmMemoryConfig;
-      const resolved = cfg.scopes?.[scope];
-      if (!resolved) {
-        return this.rememberFailure(
-          'unknown_scope',
-          `scope '${scope}' is not configured (known: ${Object.keys(cfg.scopes ?? {}).join(', ')})`,
-        );
-      }
-      collection = resolved;
+      cfg = await readSwarmMemoryConfig(this.command, this.timeoutMs);
     } catch (error) {
       const [code, message] = this.classifyExecError(error);
       return this.rememberFailure(code, `config resolution failed: ${message}`);
     }
+    const resolved = cfg.scopes?.[scope];
+    if (!resolved) {
+      return this.rememberFailure(
+        'unknown_scope',
+        `scope '${scope}' is not configured (known: ${Object.keys(cfg.scopes ?? {}).join(', ')})`,
+      );
+    }
+    collection = resolved;
 
     await mkdir(this.notesDirectory, { recursive: true });
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
