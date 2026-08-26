@@ -1,6 +1,6 @@
 id: cm-07-distillation-and-persist
 epic: mnemosyne-conversation-memory
-title: Bounded distillation into memory entries, persisted via the shipped remember() cascade
+title: Bounded distillation into memory entries, persisted UNCONDITIONALLY to a new 'intake' landing scope via the shipped remember() cascade
 status: pending
 complexity: high
 methodology: tdd
@@ -51,72 +51,62 @@ description: |
   "re-checked immediately before every individual fetch, never checked
   once and trusted" discipline exactly.
 
-  Writes with `scope: 'meta'` (docs/design-discussion.md §2.3's first
-  real consumer of `meta` scope) and
-  `metadata.source: 'external_conversation'`,
-  `metadata.chat_source: 'claude-code' | 'chatgpt'`, `metadata.
-  session_id`, `metadata.project_slug`, `metadata.cluster_id` — carrying
-  forward `m-09`'s own good provenance-completeness design decision
-  (`chat_source`/timestamp/participants) while extending it with fields
-  m-09 never anticipated (docs/design-discussion.md §7).
+  **Round-4 revision (2026-08-26, docs/design-discussion.md §11.2) —
+  SIMPLIFIED, single-destination write, superseding round 3's own
+  scope-routing design in this story specifically (moved, not deleted —
+  see below).** Every successful distillation writes with
+  `scope: 'intake'` — a NEW `Scope`-type value (additive to `interfaces.
+  ts`'s `'project'|'enterprise'|'meta'` union, the same additive-widening
+  mechanism §10.2 already used for `'arizona'`), resolved via the
+  IDENTICAL `cfg.scopes?.[scope]` mechanism `'meta'`/`'arizona'` already
+  resolve through (`VectorLayerAdapter.ts:213-226`) — never a parallel
+  write path. This story NEVER writes `scope: 'meta'` directly and NEVER
+  writes a confirmed non-meta scope directly, in any code path — that
+  entire confirmed-vs-unconfirmed scope-selection mechanism (round 3's
+  own design, docs/design-discussion.md §10.2 steps 2-3) has MOVED,
+  verbatim in substance, to the new `cm-13-intake-distribution` story —
+  this story is SIMPLER as a direct, deliberate consequence: one fixed
+  destination, always, no branching on `resolved_scope_candidate`
+  anywhere in this story's own code. Carries `metadata.source:
+  'external_conversation'`, `metadata.chat_source: 'claude-code' |
+  'chatgpt'`, `metadata.session_id`, `metadata.project_slug`,
+  `metadata.cluster_id` — carrying forward `m-09`'s own good
+  provenance-completeness design decision while extending it with fields
+  m-09 never anticipated (docs/design-discussion.md §7) — UNCHANGED by
+  this revision.
 
-  **Round-3 addition (2026-08-25, docs/design-discussion.md §10.2) —
-  scope-routing, gated exclusively on explicit operator confirmation.
-  "Scope" disambiguated once, up front (docs/grill-record.md round 3
-  finding 1): every `scope: 'meta'` reference elsewhere in this story is
-  Mnemosyne's own `Scope` TYPE (`interfaces.ts`); every `resolved_scope_
-  candidate`/"confirmed candidate" reference below is a real key from
-  `swarm-memory`'s own `[scopes]` REGISTRY (`config.toml`) that gets
-  PASSED AS that same TYPE's value once confirmed — one mechanism, two
-  names for its two halves, never two competing concepts. Full detail in
-  §10.2.**
-  `cm-06` now computes a per-cluster, read-only
-  `resolved_scope_candidate` (a real, already-existing `swarm-memory`
-  scope key, e.g. `arizona`, matched against the cluster's unambiguous
-  project-slug facet — §10.2 has the full mechanism). This story is the
-  ONLY place that candidate can ever be ACTED ON: for a given
-  `cluster_id`, `distillAndRemember()` writes with the CONFIRMED real
-  scope value ONLY IF the operator has explicitly confirmed that exact
-  `cluster_id`'s candidate in the same human-review queue `cm-01`/`cm-05`
-  already produce (tagged `review_reason: 'scope_route_candidate'`,
-  `cm-06`'s own addition). **For every other cluster — no candidate, an
-  unconfirmed candidate, or a cluster `cm-06` never proposed one for at
-  all — this story's existing, unchanged behavior applies: `scope:
-  'meta'`, no exceptions, ever.** This is the safe default, not an
-  opt-out — absence of an explicit, on-disk confirmation record is never
-  treated as an implicit yes. Named explicitly as the highest-severity
-  addition to this story's own already-highest-blast-radius risk
-  surface (below) — a wrong-scope route would put the operator's own
-  personal content into a client-facing collection, categorically worse
-  than this epic's existing worst case (personal content landing in the
-  operator's OWN `meta` collection). A real, small, cross-epic
-  coordination point is also named here, not silently assumed
-  frictionless: `remember()`'s own `RememberOptions.scope` is
-  TypeScript-typed as the literal union `'project'|'enterprise'|'meta'`
-  (`interfaces.ts`, owned by the already-shipped `mnemosyne-foundation`
-  epic) — `interfaces.ts`'s own doc comment already anticipates
-  additional scope values ("at minimum... additional scope values may be
-  added by later stories without breaking this contract"), but passing a
-  real registry key like `'arizona'` through it is not yet type-safe
-  without this story's own research step choosing a concrete, safe
-  implementation approach (a local widening mechanism, or a coordinated,
-  additive `interfaces.ts` change) before implementation proceeds.
+  **`resolved_scope_candidate` is still carried, but now strictly
+  PASS-THROUGH, unacted-on by this story itself:** `cm-06` still computes
+  this (real, shipped code, `clusterConversations.ts`) — this story
+  continues to accept it as nullable metadata on every persisted intake
+  entry, but neither reads nor branches on it anywhere in its own logic.
+  It exists on each intake entry purely so `cm-13` (the new story that
+  now owns the confirmed-candidate-consumption logic) has what it needs
+  without re-deriving it from `cm-06`'s output a second time. This
+  story's own round-3 "highest-severity addition to this story's own risk
+  surface" (a wrong-scope route landing personal content in a
+  client-facing collection) NO LONGER APPLIES to this story at all — this
+  story cannot route anywhere but `intake`, structurally, so that failure
+  mode is entirely `cm-13`'s own risk surface now (see `cm-13`'s own
+  YAML).
 
-  **A real sequencing consequence, named explicitly (docs/grill-record.md
-  round 3 finding 3), not left for an implementer to discover by
-  surprise:** `cm-08`'s own pilot runs `cm-02` through `cm-07` end-to-end
-  in ONE synchronous pass (its own YAML, unchanged by this correction).
-  Any `resolved_scope_candidate` `cm-06` computes DURING that same pass
-  cannot possibly already have a pre-existing operator confirmation
-  record — nothing has reviewed it yet. Consequence: every cluster in a
-  `cm-08` pilot run's own real output will, in practice, land in `scope:
-  'meta'` — exactly the existing, safe default — and genuine scope-
-  routing (a confirmed candidate actually changing where an entry lands)
-  can only ever be exercised in a SECOND, later run against a candidate a
-  human reviewed after a FIRST run surfaced it. This is expected,
-  intended behavior given the confirms-before-write discipline above, not
-  a defect — named here so a reader of `cm-08`'s own pilot results never
-  mistakes "every entry landed in meta" for "scope-routing didn't work."
+  **A new, real, stable per-entry identifier:** every persisted intake
+  entry now also carries `metadata.entry_id` (a UUID generated at persist
+  time, distinct from `content_hash`) — a genuinely new requirement,
+  named explicitly (docs/design-discussion.md §11.2): nothing before this
+  round needed to reference a specific intake entry from a LATER,
+  SEPARATE story's own write; `cm-13`'s marking mechanism is the first
+  thing in this epic that does.
+
+  **The `intake` collection-naming decision, real and concrete (docs/
+  design-discussion.md §11.2, §11.1's own live `config.toml` re-read this
+  pass confirms neither `meta` nor `intake` exists as a `[scopes]` key
+  today):** recommend `intake = "conversation_memory_intake"`, following
+  the same `<domain>_<memory-type>` naming convention already real and
+  live in `config.toml` (`clients_arizona_compound_memory`,
+  `personal_memory`). This story's own research step applies this for
+  real at build time — same "recommend now, apply for real at build
+  time" posture §2.3 open question #1 already established for `meta`.
 
 acceptance_criteria:
   - "Given a triaged, clustered session, when distillAndRemember() runs, then it produces a BOUNDED number of memory entries (a named maximum constant, e.g. no more than N decision/fact entries plus exactly 1 summary entry) — never one entry per raw chunk of the original transcript"
@@ -127,39 +117,34 @@ acceptance_criteria:
   - "Given an open-question entry, when persisted, then its metadata/text explicitly marks it as an unresolved/open item (a distinct tag, e.g. metadata.entry_type='open_question') — never indistinguishable from a decision/fact entry at recall() time"
   - "Given a triaged keep/uncertain session, when distillAndRemember() runs, then the decision/fact and open-question entries are produced by exactly ONE bounded call to the shared geminiClient.ts primitive (imported from cm-05, never a reimplemented copy) — verified by confirming the import is the real shared module, and that its input is capped to the same named max character count discipline as cm-05's own call"
   - "Given a trash-verdict session, when distillAndRemember() runs, then it is never invoked at all for that session — this story's own extraction call only ever runs on the strict subset of sessions that reached cm-06's clustering input, verified by a test asserting geminiClient.ts is never called for a trash-verdict fixture"
-  - "Given a cluster with a resolved_scope_candidate that the operator has NOT explicitly confirmed (absent from the review queue's own confirmation record, or present but not yet acted on), when distillAndRemember() runs, then every entry from that cluster is written with scope: 'meta' — the unconfirmed candidate is never used, verified by a test asserting the remember() call's scope argument is exactly 'meta' for this case, never the candidate value"
-  - "Given a cluster whose resolved_scope_candidate the operator HAS explicitly confirmed (a real, on-disk confirmation record keyed to that exact cluster_id, fixture-simulated in the test), when distillAndRemember() runs, then every entry from that cluster is written with the CONFIRMED real scope value instead of 'meta' — full existing provenance-metadata contract (chat_source/session_id/project_slug/cluster_id) otherwise unchanged, verified by inspecting the actual remember() call's arguments"
-  - "Given a confirmation record naming a cluster_id that does NOT match any cluster resolved_scope_candidate this story is actually processing (a stale or mismatched confirmation, fixture-simulated), when distillAndRemember() runs, then it is IGNORED — that cluster's entries fall back to scope: 'meta' — never applied to a different cluster by accident, never causing an error that silently skips the whole run either"
+  - "Given ANY successfully distilled entry (decision/fact/open-question/summary, any cluster, any resolved_scope_candidate value including null), when distillAndRemember() runs, then it is written with scope: 'intake' — verified by a test asserting the remember() call's scope argument is exactly 'intake' for every fixture case, with no code path anywhere in this story capable of producing a different scope value (round 4, docs/design-discussion.md §11.2 — supersedes this story's own round-3 confirmed/unconfirmed-candidate acceptance criteria, which move verbatim to cm-13-intake-distribution)"
+  - "Given a persisted intake entry, when inspected, then it carries metadata.entry_id (a UUID, distinct from content_hash) in addition to the existing chat_source/session_id/project_slug/cluster_id/resolved_scope_candidate fields — verified present on every entry, never omitted, so cm-13 can later reference this exact entry (round 4, §11.2)"
+  - "Given resolved_scope_candidate on a cluster's entries (cm-06's own output, non-null or null), when distillAndRemember() runs, then this story's own code never reads or branches on that field's value anywhere — verified by a test asserting identical remember() call behavior (same scope: 'intake', same metadata shape otherwise) regardless of whether resolved_scope_candidate is null or a real matched key — proving it is genuinely inert pass-through here, not silently still influencing the write (round 4, §11.2)"
 
 steps:
   - id: research
     description: |
-      Confirm meta scope's real, live behavior end-to-end (docs/design-
-      discussion.md §3's named risk: "meta scope is thinly implemented
-      today") — does a remember() call with scope='meta' against the
-      live, configured layer stack actually route to a real collection
-      today, or does it require additional wiring this story must add?
-      Confirm directly against the live code (client.ts, layers/
-      registry.ts), not assumed from the type system alone. Decide the
-      real collection-naming convention for this epic's own meta
-      collection (open question #1, docs/design-discussion.md §5),
-      surfacing the operator's answer as a prerequisite before
-      implementation proceeds. Confirm dostal-shared-gemini's real,
-      current rate limits/model catalog directly against the live API
-      (design-discussion §9.7), same sub-task as cm-05's own research
-      step, independently re-confirmed here rather than assumed carried
-      over unchanged. Confirm the real, concrete shape of the operator's
-      own scope-route confirmation record (where it lives, how a specific
-      cluster_id's confirmation is represented — this story's own
-      implementation step decides the concrete mechanic, mirroring
-      cm-08's own "a CLI confirm step or an edited manifest file"
-      precedent) before implementing the confirmed-candidate consumption
-      logic (design-discussion §10.2). Confirm the real, safe
-      implementation approach for passing a non-'project'|'enterprise'|
-      'meta' scope string through remember()'s own RememberOptions.scope
-      parameter (a local widening mechanism vs. a coordinated, additive
-      interfaces.ts change) — a real, small, cross-epic coordination
-      point named in §10.2, not assumed frictionless.
+      Confirm intake scope's real, live behavior end-to-end (does a
+      remember() call with scope='intake' against the live, configured
+      layer stack actually route to a real collection, or does it
+      require additional wiring this story must add? — confirm directly
+      against the live code, client.ts/layers/registry.ts, not assumed
+      from the type system alone). Decide the real collection-naming
+      convention for this epic's own intake collection (round 4,
+      docs/design-discussion.md §11.2's own recommendation,
+      `intake = "conversation_memory_intake"`, against the live
+      swarm-memory config.toml — confirmed absent as of this planning
+      pass, §11.1), surfacing the operator's answer as a prerequisite
+      before implementation proceeds. Confirm the real, safe
+      implementation approach for adding a new 'intake' literal to
+      remember()'s own RememberOptions.scope/interfaces.ts Scope type (a
+      local widening mechanism vs. a coordinated, additive interfaces.ts
+      change) — the same real, small, cross-epic coordination point named
+      in §10.2 for 'arizona', now also needed for 'intake'. Confirm
+      dostal-shared-gemini's real, current rate limits/model catalog
+      directly against the live API (design-discussion §9.7), same
+      sub-task as cm-05's own research step, independently re-confirmed
+      here rather than assumed carried over unchanged.
     agent: researcher
   - id: test-spec
     description: |
@@ -205,53 +190,53 @@ context:
     - path: lib/mnemosyne/conversation-memory/geminiClient.ts
       purpose: "cm-05's shared Gemini API primitive, imported unchanged here for this story's own, separate bounded call producing decision/fact/open-question entries (docs/design-discussion.md §9.6)."
     - path: lib/mnemosyne/layers/VectorLayerAdapter.ts
-      purpose: "Lines 213-226 — the real cfg.scopes?.[scope] resolution this story's confirmed-candidate scope value must resolve through identically to 'meta' today (round 3, §10.2) — no separate write path, no new resolution mechanism."
+      purpose: "Lines 213-226 — the real cfg.scopes?.[scope] resolution this story's 'intake' scope value must resolve through identically to 'meta'/'arizona' today (round 4, §11.2) — no separate write path, no new resolution mechanism."
 
 files_to_modify:
   - file: lib/mnemosyne/conversation-memory/distillAndRemember.ts
-    change: "New file: bounded distillation (decision/fact/open-question/summary entry production), persist-time cm-01 scan, ingestDocument() calls with full provenance metadata, confirmed-scope-candidate consumption with a meta-scope default for every unconfirmed cluster (round 3, §10.2)."
+    change: "New file: bounded distillation (decision/fact/open-question/summary entry production), persist-time cm-01 scan, ingestDocument() calls with full provenance metadata (including the new metadata.entry_id, round 4 §11.2), UNCONDITIONAL scope: 'intake' write — no scope-branching logic of any kind (round 4, docs/design-discussion.md §11.2; the confirmed/unconfirmed-candidate consumption logic this story previously owned has moved to cm-13-intake-distribution)."
   - file: lib/mnemosyne/conversation-memory/distillAndRemember.test.ts
-    change: "New file: tests against a fake IngestClient, covering bounded-entry-count, scan-order, provenance-metadata, and confirmed/unconfirmed/mismatched scope-candidate acceptance criteria."
+    change: "New file: tests against a fake IngestClient, covering bounded-entry-count, scan-order, provenance-metadata (incl. entry_id), and the unconditional scope: 'intake' acceptance criteria (round 4) — no confirmed/unconfirmed-candidate test cases here anymore, those move to cm-13's own test suite."
 
 design_decisions:
   - decision: "Bounded entry count per session (a named maximum), never one entry per raw 4KB chunk."
     rationale: "ingestDocument()'s own CHUNK_SIZE_BYTES=4000 would produce ~12,500 chunks for a 50MB session if fed raw content — explicitly rejected (design-discussion §2.7); the fix is distillation producing genuinely small, high-signal output, not raising ingestDocument()'s own caps."
   - decision: "Persist-time secret scan runs immediately before EACH remember() call, never once per whole session."
     rationale: "Mirrors crawlAndIngest.ts's own SSRF-guard discipline exactly — re-checked before every individual operation, never cached/trusted from an earlier check."
-  - decision: "scope='meta', metadata.source='external_conversation' — carrying forward, not reinventing, m-09's own chat_source/provenance design."
-    rationale: "docs/design-discussion.md §7's explicit AC-by-AC supersession table for m-09 — its good design decisions are preserved, its unconfirmed assumptions (Gemini/Workbench format) are corrected."
+  - decision: "scope='intake' (round 4, was 'meta' through round 3), metadata.source='external_conversation' — carrying forward, not reinventing, m-09's own chat_source/provenance design."
+    rationale: "docs/design-discussion.md §7's explicit AC-by-AC supersession table for m-09 — its good design decisions are preserved, its unconfirmed assumptions (Gemini/Workbench format) are corrected. Round 4 (§11.2): the operator's own explicit words this pass, 'so meta is separate from intake' — this story is the landing zone only, never the final destination for any entry, so it writes to a physically separate collection, never 'meta' directly."
   - decision: "Decision/fact and open-question entries are produced by ONE bounded call to cm-05's shared geminiClient.ts, kept SEPARATE from cm-05's own triage call rather than merged into it."
     rationale: "docs/design-discussion.md §9.6 — round 1 never named a mechanism for this at all (a real, pre-existing gap this correction resolves, not an implementation-time guess it overrides). Separate calls keep each call's cost scoped to exactly the sessions that need it: cm-05's call runs on every discovered session (including trash-bound ones), this story's call only on the strict subset that already passed triage and clustering — merging them would make every session pay this story's own extraction cost even when immediately discarded."
-  - decision: "A non-meta scope is used ONLY for a cluster with an explicit, on-disk, per-cluster_id operator confirmation record — every other case (no candidate, unconfirmed candidate, mismatched confirmation) defaults to 'meta', unconditionally."
-    rationale: "docs/design-discussion.md §10.2's own named residual risk: a wrong-scope route would put the operator's own personal content into a client-facing collection, the single highest-severity failure mode this design point could introduce. Absence of an explicit confirmation is never treated as an implicit yes — mirrors cm-08's own 'no implicit/default sample selection exists anywhere in this story's code' discipline (`[grill 3.2]`), applied to scope selection instead of pilot-sample selection."
+  - decision: "This story writes to scope: 'intake' UNCONDITIONALLY — no code path anywhere in this story is capable of writing to 'meta' or any confirmed real scope directly, ever. The confirmed-vs-unconfirmed resolved_scope_candidate consumption logic (round 3's own design) has moved in full to cm-13-intake-distribution, not deleted."
+    rationale: "Round 4, docs/design-discussion.md §11.2 — the operator's own explicit framing this pass: 'cm-07 always writes there first; a later distribution step reads intake, resolves the real destination... writes there, then intake shuts down for that entry.' Simplifying this story to a single, fixed destination removes its own highest-severity round-3 risk (a wrong-scope route landing personal content in a client-facing collection) from this story's own surface entirely — that risk now belongs exclusively to cm-13, the only story with a destination-selection responsibility at all."
   - concern: conversation-privacy-safety
     action: "The persist-time checkpoint of the epic's two-checkpoint secret-scan design — this story's single highest-scrutiny cross-cutting requirement, held to ro-06/ro-11's own independent-reviewer-re-verification bar."
   - concern: provenance-completeness
-    action: "Full metadata contract (source/chat_source/session_id/project_slug/cluster_id) on every persisted entry — explicit acceptance criterion, not left to implementation-time judgment."
+    action: "Full metadata contract (source/chat_source/session_id/project_slug/cluster_id/entry_id) on every persisted entry — explicit acceptance criterion, not left to implementation-time judgment."
   - concern: existing-infrastructure
     action: "ingestDocument()/remember() called unchanged — no forked copy, no parallel persistence mechanism."
   - concern: loud-failure
     action: "A persist-time scan match quarantines that specific entry and continues with the rest (partial-failure reporting), never a silent skip and never a full-run abort that hides which entries actually landed. geminiClient.ts's own loud-failure-on-malformed-response/exhausted-retry behavior (cm-05's own acceptance criteria) applies identically here — never a silently-guessed decision/open-question entry."
   - concern: existing-infrastructure
     action: "geminiClient.ts imported unchanged from cm-05 — never a second, independently-implemented Gemini call path (docs/design-discussion.md §9.6)."
-  - concern: conversation-privacy-safety
-    action: "Round 3 (§10.2): the confirmed-scope-candidate consumption path defaults to 'meta' for every cluster except one with an explicit, on-disk, per-cluster_id operator confirmation — verified by an independent reviewer re-reading every code path that could set a non-'meta' scope value, the same highest-scrutiny bar this story's existing persist-time scan checkpoint is already held to."
 
 risks:
   - severity: critical
-    description: "This is the ONLY story in the epic that actually writes real content to a persisted, searchable store — any gap in the persist-time scan checkpoint, or any bounded-entry-count violation letting near-raw content through, has this epic's single highest real blast radius. Round 3 (§10.2) adds a second, distinct way this same 'only story that writes' status could go wrong: a scope-routing defect (an unconfirmed or mismatched candidate somehow used anyway) would put the operator's own personal content into a client-facing collection — categorically worse than any failure mode this story's pre-round-3 design could produce, since 'meta' at least keeps content under the operator's own sole control."
-    mitigation: "Two independent scan checkpoints (parse-time in cm-03/cm-04, persist-time here) rather than relying on either alone; independent reviewer re-verification of call order (not the description); the pilot-before-full-corpus sequencing (cm-08) means this story's real-world exposure is deliberately small and operator-reviewed before any scale-out. Round 3: the scope-routing default (unconditionally 'meta' absent an explicit, on-disk, per-cluster_id confirmation) is itself the mitigation — no code path exists that could set a non-'meta' scope without that confirmation, verified by the same independent-reviewer re-verification bar as the scan checkpoint, not a separate, lesser standard."
+    description: "This is the ONLY story in the epic that actually writes real content to a persisted, searchable store — any gap in the persist-time scan checkpoint, or any bounded-entry-count violation letting near-raw content through, has this epic's single highest real blast radius."
+    mitigation: "Two independent scan checkpoints (parse-time in cm-03/cm-04, persist-time here) rather than relying on either alone; independent reviewer re-verification of call order (not the description); the pilot-before-full-corpus sequencing (cm-08) means this story's real-world exposure is deliberately small and operator-reviewed before any scale-out. Round 4: this story's own scope-routing risk (a wrong-scope write landing personal content in a client-facing collection) has been REMOVED from this story's surface by the intake/distribution split (§11.2) — this story can only ever write to 'intake', structurally; the residual scope-routing risk now belongs entirely to cm-13 (see that story's own risk register)."
   - severity: medium
-    description: "meta scope's thin current implementation (design-discussion §3) could require unplanned wiring work discovered only during this story's own research/implementation steps."
-    mitigation: "Named explicitly as a risk, not assumed solved; the research step's own first task is confirming meta scope's real, live behavior before implementation proceeds, surfacing any gap as an early, visible finding rather than a late implementation surprise."
+    description: "intake scope's brand-new, not-yet-live implementation (no 'intake' key exists in swarm-memory's real [scopes] table as of this planning pass, confirmed §11.1) could require unplanned wiring work discovered only during this story's own research/implementation steps — the same shape of risk 'meta' itself carried through round 1."
+    mitigation: "Named explicitly as a risk, not assumed solved; the research step's own first task is confirming intake scope's real, live behavior and applying the real collection-naming recommendation (§11.2) before implementation proceeds, surfacing any gap as an early, visible finding rather than a late implementation surprise."
 
 references:
   - path: .pHive/epics/mnemosyne-conversation-memory/docs/design-discussion.md
-    relevant_excerpt: "§2.1, §2.7, §2.8 — the full distillation design, the 'why raising the cap is the wrong fix' reasoning, and the two-checkpoint secret-scan discipline this story implements the second half of. §9.6 — the Gemini-call mechanism for decision/fact/open-question extraction (round 1's own unspecified gap), and why it's a separate call from cm-05's, not merged. §10.2 (round 3) — the scope-routing design, the swarm-memory [scopes]/arizona finding, the confirms-before-write discipline this story implements the write half of, and the interfaces.ts Scope-type coordination point."
+    relevant_excerpt: "§2.1, §2.7, §2.8 — the full distillation design, the 'why raising the cap is the wrong fix' reasoning, and the two-checkpoint secret-scan discipline this story implements the second half of. §9.6 — the Gemini-call mechanism for decision/fact/open-question extraction (round 1's own unspecified gap), and why it's a separate call from cm-05's, not merged. §11.2 (round 4) — the simplified, unconditional 'intake' write design, the real intake collection-naming recommendation, and why the confirmed-candidate consumption logic moved to cm-13."
   - path: .pHive/epics/mnemosyne-conversation-memory/stories/cm-05-usefulness-trash-triage.yaml
     relevant_excerpt: "geminiClient.ts's own origin story — the shared Gemini primitive this story imports unchanged rather than reimplementing."
   - path: .pHive/epics/mnemosyne-conversation-memory/stories/cm-06-cross-session-clustering.yaml
-    relevant_excerpt: "The read-only resolved_scope_candidate computation this story consumes (round 3, §10.2) — cm-06 proposes, this story is the only one that ever acts on a confirmed candidate."
+    relevant_excerpt: "The read-only resolved_scope_candidate computation this story carries forward as inert pass-through metadata (round 4, §11.2) — cm-06 proposes, cm-13 (not this story anymore) is the only one that ever acts on a confirmed candidate."
+  - path: .pHive/epics/mnemosyne-conversation-memory/stories/cm-13-intake-distribution.yaml
+    relevant_excerpt: "The story this one's own confirmed-vs-unconfirmed scope-selection logic moved to, verbatim in substance, round 4 (§11.2/§11.3)."
   - path: .pHive/epics/mnemosyne-repo-onboarding/stories/ro-06-collection-creation-and-scope-mapping.yaml
     relevant_excerpt: "The rigor bar (research-gated, independent-reviewer-re-verification, explicit no-bypass-anywhere posture) this story — the epic's own single highest-blast-radius story — is held to."
 

@@ -416,3 +416,207 @@ and `cm-08` (finding 3.3), one `depends_on` graph fix mirrored in
 own `parallel_rationale` (finding 3.5). No findings carried forward
 unresolved — `unresolved_count: 0`. Rounds 1-2's own 10 findings are
 untouched and remain resolved.
+
+---
+
+# Round 4 — Amendment (2026-08-26) — intake/distribution/decommission split
+
+round_number: 4
+unresolved_count: 0
+
+Adversarial pass against `design-discussion.md`'s new §11 (the operator's
+own "intake is separate from meta" framing, split into three real pieces:
+`cm-07` revised to write unconditionally to a new `intake` collection;
+new `cm-13` reading intake and distributing to the real destination; new
+`cm-14`, the epic's first delete-capable operation, decommissioning
+already-distributed intake copies) — grounded in this round's own real
+re-reads of `client.ts`/`VectorLayerAdapter.ts` (no update-by-id
+primitive exists), `qdrant_inventory.py` (no delete method exists
+anywhere, by design), `swarm-memory --help` (no delete verb in the real
+CLI), and `~/.config/swarm-memory/config.toml`'s live `[scopes]` table
+(no `meta` or `intake` key yet). Same five categories, same
+descriptive-finding-plus-question discipline as rounds 1-3, plus a
+dedicated leak/safety section per this round's own explicit brief. Rounds
+1-3's own 15 findings are untouched and remain resolved.
+
+## 1. Vocabulary mismatches
+
+**Finding 4.1 — "marking as distributed" reads, on a first pass, like an
+in-place field UPDATE ("mark X as Y"), but the real mechanism §11.3
+designs is an ADDITIVE new entry (a `distribution_marker`) — the two are
+easy to conflate, and the original draft used the word "marks" without
+ever stating which one it meant at the point a reader would first
+encounter it.** Does "the original intake entry is marked distributed"
+mean its own existing point is mutated, or that a second, separate point
+is added alongside it? A reader who assumes the former (the more natural
+reading of the English word "mark") would misunderstand `cm-14`'s own
+precondition check (§11.4(b)) — it doesn't look for a mutated flag on the
+original entry, it looks for a SEPARATE marker entry referencing it.
+
+*Resolution:* §11.3's own marking paragraph now states explicitly, at the
+point the mechanism is introduced (not just implied by the later
+mechanism description), "this is deliberately ADDITIVE, not a mutation —
+the original intake entry's own point is never touched, only a new,
+linked marker point is written alongside it" — and grounds WHY that's
+also the only mechanism that exists (§11.1's own remember()/
+VectorLayerAdapter re-read: no update-by-id primitive is exposed
+anywhere), so a reader never wonders if an update-in-place path was
+available and simply not used.
+
+## 2. Hidden assumptions
+
+**Finding 4.2 — the original draft of `cm-13`'s "reads intake entries"
+step assumed an enumeration primitive without checking whether one
+actually exists anywhere in this epic's real dependency surface.**
+`recall()` is semantic/top-K, `swarm-memory grep` is keyword-scroll but
+still query-shaped (confirmed via `--help` this pass) — neither is a
+"give me every point in this collection" primitive. Left unstated, an
+implementer could reach for `recall()` with an empty/wildcard query and
+silently miss entries that don't semantically match whatever placeholder
+query was chosen — a real, silent data-loss risk in the distribution step
+itself.
+
+*Resolution:* §11.3 now names the real, concrete mechanism explicitly: a
+new, read-only `scroll_points()` extension of `HttpQdrantClient`, wrapping
+Qdrant's own native scroll endpoint — explicitly NOT built by reaching for
+`recall()`/`grep` with a placeholder query, and explicitly categorized
+(§11.3) as the same LOW-risk category as that class's own existing
+`list_collections()`/`collection_info()` read methods, not the same
+category as `create_collection()`'s one deliberate write exception —
+named so a future reviewer doesn't conflate "this class now has a second
+non-trivial method" with "this class's own additive-only contract is
+weakening."
+
+## 3. Unresolved tensions
+
+**Finding 4.3 — `cm-13`'s own distribution logic depends on a
+pre-existing operator confirmation record for `resolved_scope_candidate`,
+the EXACT same sequencing shape `[grill 3.3]` (round 3) already found for
+`cm-07`/`cm-08` — but the original draft of §11.3 didn't cross-reference
+that finding, risking the same "operator reads results, wonders why
+nothing routed" confusion round 3 already fixed once for a different
+story pairing.** Does moving the confirmed-candidate logic from `cm-07`
+to `cm-13` silently reintroduce a gap `[grill 3.3]` already closed, just
+one story over?
+
+*Resolution:* §11.3's own "real sequencing note" paragraph now states
+this explicitly, named as mirroring `[grill 3.3]`/§10.4's own precedent
+directly — `cm-13` runs as its own later pass, structurally enforced by
+`depends_on: [cm-07]` rather than being composed inline, and genuine
+scope-routing only happens in a `cm-13` run that occurs AFTER a human has
+confirmed a candidate an earlier pass surfaced. The finding is carried
+forward to its new home, not silently dropped when the logic moved.
+
+## 4. Convention violations
+
+**Finding 4.4 — the original draft of `cm-14`'s design named
+`HttpQdrantClient` as unmodified but did not, at first, explicitly reuse
+`cm-13`'s new `scroll_points()` read primitive for its own precondition
+re-check — risking a second, independently-implemented read path for
+"does a distribution_marker exist for this entry_id," the exact shape of
+gap `[grill 4.1]` (round 1) and `[grill 2.4.1]` (round 2) already
+established this epic's own convention against (one shared primitive,
+reused, never reimplemented, enforced by `depends_on`, not merely
+documented).** Does `cm-14` risk a second, parallel intake-reading
+mechanism instead of reusing `cm-13`'s?
+
+*Resolution:* §11.4(b) now states explicitly that `cm-14`'s live
+precondition re-check reuses `cm-13`'s own `scroll_points()` primitive —
+"reused, not reimplemented" — and `cm-14`'s own `depends_on:
+[cm-13-intake-distribution]` enforces this by the dependency graph, the
+same structural enforcement this epic has now used four times (`cm-01`
+consumers, `cm-05`'s `geminiClient.ts` consumers, `cm-11`'s composed
+modules, and now `cm-14`'s reuse of `cm-13`'s read primitive).
+
+## 5. Posture mismatches
+
+**Finding 4.5 — an earlier framing of §11.4 risked reading as "delete is
+now safe because five guarantees are named," when the real posture this
+epic has consistently held (`[grill 5.1]`, `[grill 2.5.1]`) is "name what
+isn't fully solved, not claim full closure."** Two real, unresolved
+things `cm-14`'s own design should not overclaim as settled: the exact
+Qdrant delete-request shape is named as a mechanism CLASS, not pinned to
+a confirmed request body (deferred to `cm-14`'s own research step); and
+whether `swarm-memory index`'s own internals already perform some kind of
+hash-based dedup underneath the TS layer's "always a new file" behavior
+is genuinely unconfirmed by this pass (reading the installed Python
+package's own internals was out of scope). Does §11 read as "decommission
+is a solved, safe design" rather than "a carefully-bounded design with
+two named, real gaps still deferred to build time"?
+
+*Resolution:* §11.5 ("Residual, honestly-named open items") states both
+gaps explicitly and directly, in the same dedicated-section shape rounds
+1-3 already established for this posture discipline — naming that the
+additive-marker design (§11.3) is independently correct on
+`ways_of_working.md`'s own "additive/upsert only" grounds regardless of
+how the `swarm-memory index` internals question resolves, so the open
+question doesn't retroactively undermine the marking mechanism's own
+correctness, only its completeness of understanding.
+
+## Real leak/safety check (task's own explicit ask this round, verified directly, not merely asserted)
+
+- **Does `cm-14`'s design have any path, however indirect, that could
+  ever delete something other than an already-distributed intake copy?**
+  No. Checked directly against §11.4's own five named structural
+  guarantees: (1) a freestanding module no other story's code calls into
+  — nothing routes INTO this capability except an explicit, separate,
+  operator-invoked entry point; (2) hardcoded to the `intake` collection's
+  own resolved name, never accepting a caller-supplied collection/scope
+  parameter — cannot be redirected against `meta` or a confirmed scope's
+  own collection even if invoked incorrectly; (3) `HttpQdrantClient`
+  itself is never modified — no delete method is ever added to the shared
+  class every other story's code can reach, so no OTHER caller gains
+  delete capability as a side effect of this story existing; (4)
+  single-`entry_id`-only, no batch/wildcard capability anywhere in the
+  design, structurally, not merely as an unenforced convention; (5) never
+  composed by `cm-11`/`cm-12`'s own generalized-pipeline/CLI-verb default
+  flow — a future operator running `mnemosyne harvest` never triggers a
+  delete as a side effect of the generalized pipeline running. Layered on
+  top of all five: `cm-14` re-verifies the distributed flag AND the
+  destination copy's real existence itself, live, immediately before any
+  delete call (§11.4(b)) — even a caller that somehow reached this
+  primitive with a wrong `entry_id` would be refused unless that exact
+  entry independently re-checks out as both marked AND confirmed present
+  at its real destination.
+- **Does `cm-13`'s distribution logic have any path that could write to a
+  non-meta scope without the SAME exact confirmed-candidate discipline
+  `cm-07` originally had?** No — verified by direct comparison: §11.3's
+  own "resolves the real destination" paragraph is stated as the
+  confirmed-candidate logic MOVED VERBATIM from `cm-07`'s original design
+  (§10.2 steps 2-3), not reimplemented from scratch — the same three
+  cases (no candidate / unconfirmed candidate / mismatched confirmation)
+  all still default to `scope: 'meta'` unconditionally, and a non-meta
+  write still requires a real, on-disk, per-`cluster_id` operator
+  confirmation record, identical to the original design's own safe
+  default. No new code path was introduced by relocating this logic that
+  didn't already exist in `cm-07`'s round-3 design.
+- **Is the audit trail genuinely preserved (never silently lost) between
+  distribution and any future decommission?** Yes, checked directly: the
+  original intake entry is never mutated or deleted by `cm-13` (§11.3's
+  own explicit "deliberately ADDITIVE, not a mutation" statement) — only
+  a new marker entry is added. `cm-14` (§11.4) removes ONLY entries
+  already confirmed marked AND confirmed present at their real
+  destination, and only from the redundant `intake` copy — the
+  destination write `cm-13` made is permanent and structurally untouched
+  by anything `cm-14` does (`cm-14`'s own hardcoded-to-`intake`-only
+  guarantee, above). Between a `cm-13` distribution and any future
+  `cm-14` decommission, the audit trail (the marker entry plus the
+  destination copy) is never the thing being removed — only the
+  now-redundant `intake` copy is, and only after that audit trail is
+  independently re-confirmed to exist.
+
+## Summary (round 4)
+
+5 findings, 5 resolved — one clarifying addition to §11.3's own marking
+paragraph naming it additive-not-mutating up front (finding 4.1), one
+concrete mechanism naming for `cm-13`'s intake-read step replacing an
+assumed-but-unverified enumeration primitive (finding 4.2), one
+cross-reference to `[grill 3.3]`'s own sequencing finding carried to its
+new home in `cm-13` (finding 4.3), one `depends_on`-enforced reuse of
+`cm-13`'s read primitive by `cm-14` instead of a second implementation
+(finding 4.4), and one posture-hedging addition to §11.5 naming two real,
+deferred gaps explicitly (finding 4.5) — plus a dedicated three-part
+leak/safety check (delete-path reachability, scope-routing discipline
+parity, audit-trail preservation), all three verified with no path found.
+No findings carried forward unresolved — `unresolved_count: 0`. Rounds
+1-3's own 15 findings are untouched and remain resolved.

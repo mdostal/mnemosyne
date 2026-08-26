@@ -1,0 +1,276 @@
+id: cm-14-intake-decommission
+epic: mnemosyne-conversation-memory
+title: Intake decommission — the epic's ONE deliberate, narrowly-scoped exception to "no delete path exists," removing an already-distributed intake entry only
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [cm-13-intake-distribution]
+parallel_allowed: false
+parallel_rationale: "NEVER auto-started alongside other work, by design (docs/design-discussion.md §11.4) — this story does NOT get built or run as part of this planning pass, cm-08's pilot, or any wave this epic's own /execute run would otherwise schedule automatically. It stays gated behind its own future, separate, explicit operator go-ahead, mirroring §2.8's own 'no full-234-session-corpus story exists by design' precedent applied to decommissioning scale/timing instead of ingestion scale. A future implementer picking up this repo should treat its presence in this story list as a real, planned, reviewable design — not an invitation to build it in the same pass as cm-13."
+
+description: |
+  New story (round 4, 2026-08-26, docs/design-discussion.md §11.4), the
+  third of three real pieces the operator's own framing this pass split
+  out — "allow for a way to decommission it and optionally back it up or
+  just full wipe." This is the epic's FIRST, and by design its ONLY,
+  delete-capable operation — held to the highest safety bar of anything
+  built in this epic or this session, the deliberate, careful EXCEPTION
+  to `ways_of_working.md`'s hard "never wipe Qdrant collections...
+  additive/upsert only, everywhere, no exceptions" rule and to
+  `mnemosyne/onboarding.py`'s/`ro-06`'s own "no delete/drop code path
+  exists anywhere in this module" discipline — not a casual extension of
+  either.
+
+  **Scope, stated precisely first, so nothing below is read as broader
+  than it is:** removes an intake entry that has ALREADY been
+  successfully marked distributed (a real `distribution_marker` entry
+  exists, `cm-13`'s own mechanism, docs/design-discussion.md §11.3), from
+  the `intake` collection ONLY. Never touches the real destination copy
+  (`meta` or a confirmed scope's own collection — `cm-13`'s write there
+  is permanent and structurally unaffected by anything this story does).
+  Never touches a source transcript (`~/.claude/projects/*.jsonl`, the
+  ChatGPT/Gemini export files — read-only input, unchanged, per §2.6's
+  own structural guarantee, untouched by this round). Never touches any
+  entry that is not marked distributed.
+
+  **Real code re-verification this pass, grounding why this is genuinely
+  the epic's first delete-capable operation, not merely nominally so
+  (docs/design-discussion.md §11.1):** `remember()`/`VectorLayerAdapter.
+  remember()` expose no delete capability at all. `mnemosyne/inventory/
+  qdrant_inventory.py`'s `HttpQdrantClient` states in its own module
+  docstring, confirmed by a full read of every method this pass, that "no
+  delete/drop method exists anywhere in this module" — its own
+  `create_collection()` (ro-06's one deliberate additive exception) is
+  the only non-read method it has. `swarm-memory --help`, run directly
+  this pass, confirms the real installed CLI's own verb surface
+  (`recall|search|grep|check|scopes|index|graph|config|install-hermes`)
+  has no delete verb either. There is genuinely no existing delete-capable
+  primitive anywhere in this epic's real dependency surface, at any
+  layer, for this story to reuse.
+
+  **(a) NEVER automatic — explicit, individually-confirmed operator
+  action only, no batch-wipe-by-default anywhere:** this story's own
+  callable surface accepts exactly ONE `entry_id` per invocation — no
+  `--all`, no wildcard/pattern match, no "delete every distributed entry"
+  mode exists anywhere in this story's own design, at all. Every
+  invocation names the specific entry being removed; the operator is the
+  one naming it.
+
+  **(b) This story verifies the distributed state ITSELF — never trusts a
+  stale/wrong flag, re-checked live, immediately before deleting,
+  mirroring `crawlAndIngest.ts`'s/`cm-01`'s own "re-checked before every
+  operation, never checked once and trusted" discipline exactly, applied
+  here to a delete-time guard instead of a fetch-time or persist-time
+  one:** immediately before issuing any delete call, this story (1)
+  re-reads the `intake` collection LIVE, via `cm-13`'s own `scroll_
+  points()` primitive (reused, not reimplemented — `[grill 4.1]`'s
+  "one primitive, reused" convention applied a fourth time this epic), to
+  confirm a `distribution_marker` entry naming this exact `entry_id`
+  genuinely exists right now, not from a cached report or an earlier
+  `cm-13` run's own self-report; (2) independently confirms the real
+  destination actually holds the corresponding content — a real read
+  against the marker's own `distributed_to_scope`, matching by
+  `entry_id`/`content_hash` in metadata (via `recall()`/`grep` against
+  that scope). Either check failing — no marker found, or the destination
+  copy can't be independently confirmed — refuses to delete and reports
+  the precondition as unmet, loudly, exactly like `cm-01`'s own "match
+  found, refuse to persist" posture.
+
+  **(c) Optional real backup step before removal — the operator's own
+  words, "optionally back it up or just full wipe," a real, concrete
+  mechanism (docs/design-discussion.md §11.4(c)):** mirrors this
+  session's own established Qdrant-backup precedent
+  (`~/Documents/work/personal/qdrant-backup-2026-08-15/` — NDJSON export
+  per collection plus docs/config.json, point-counts independently
+  verified to match live before being trusted as a real backup) — scaled
+  down to the single entry (or small, explicit set) named in this
+  invocation. Writes a timestamped NDJSON file (the entry's full `text` +
+  `metadata`, byte-for-byte what's about to be removed) to
+  `~/.mnemosyne/intake-decommission-backups/<timestamp>-<entry_id>.ndjson`
+  — the same already-established local config-directory family
+  `~/.mnemosyne/org-tree.yaml`/`~/.mnemosyne/level0-rules.md` already
+  live in (docs/design-discussion.md §10.2), before the delete call, not
+  after. **Default is backup-ON — an explicit opt-out flag is required to
+  skip it, never the reverse:** mirrors this epic's own consistent "safe
+  default, not an opt-out" posture (§10.2's confirms-before-write default,
+  `[grill 3.2]`'s no-implicit-selection default). "Full wipe" (the
+  operator's own second option) is real and offered, but only ever
+  reachable via an explicit, named flag.
+
+  **(d) The delete primitive itself — a new, freestanding, narrowly-scoped
+  module, deliberately NEVER added to `HttpQdrantClient`:** talks directly
+  to Qdrant's own native `POST /collections/{name}/points/delete` REST
+  endpoint (exact request shape confirmed by this story's own research
+  step against the live API, never assumed from this planning pass
+  alone), resolving the Qdrant URL/API key the identical way
+  `swarm-memory`'s own config already does. Deliberately kept OUT of
+  `mnemosyne/inventory/qdrant_inventory.py`'s `HttpQdrantClient` class —
+  that class's own "no delete/drop method exists anywhere in this module"
+  contract stays true for every OTHER caller, forever, specifically
+  because this story never touches it.
+
+  **Named explicitly, in its own dedicated risk section below, as the
+  epic's ONE deliberate exception to "no delete path exists" — why this
+  case is categorically different, and what specifically prevents the
+  exception from ever being reachable for anything else:** see the
+  `risks:` block's own dedicated critical-severity entry, which states
+  the reasoning and all five structural guarantees directly — not
+  duplicated here.
+
+  **This ticket does NOT get built or run as part of this planning pass,
+  or as part of `cm-08`'s pilot** — gated behind its own future, separate
+  operator go-ahead, mirroring §2.8's own "no full-234-session-corpus
+  story exists by design" precedent, applied here to decommissioning
+  scale/timing instead of ingestion scale.
+
+acceptance_criteria:
+  - "Given an intake entry with NO matching distribution_marker entry found by a LIVE re-read of the intake collection (via scroll_points(), never a cached/stale report from an earlier cm-13 run), when decommissionIntakeEntry(entry_id) is invoked, then it REFUSES — no delete call is made, a 'precondition not met: entry not marked distributed' finding is reported loudly, and the function returns without touching Qdrant at all"
+  - "Given an intake entry WITH a matching distribution_marker, when decommissionIntakeEntry(entry_id) is invoked, then it independently re-verifies the real destination (marker's own distributed_to_scope) actually contains the corresponding entry (matched by entry_id/content_hash) BEFORE proceeding — if this destination check fails or is inconclusive, it REFUSES and reports the precondition as unmet, never deletes on the strength of the marker alone"
+  - "Given both live checks pass (marker exists AND destination copy independently confirmed present) and the operator has supplied an explicit, individually-named entry_id for THIS invocation, when decommissionIntakeEntry(entry_id) runs, then it proceeds to the backup/delete sequence for that ONE entry only — verified no code path in this story's own module accepts more than one entry_id per invocation, and no --all/wildcard/pattern-match flag exists anywhere in this story's own callable surface"
+  - "Given the backup option is not explicitly disabled (the default), when decommissionIntakeEntry(entry_id) runs after both live checks pass, then it writes a real, local, timestamped NDJSON file (the entry's full text+metadata) to ~/.mnemosyne/intake-decommission-backups/ BEFORE issuing the delete call — verified by a test asserting the backup file write happens, and is confirmed written, prior to the delete HTTP call being made"
+  - "Given the backup option IS explicitly disabled via a named flag (the operator's own 'or just full wipe' option), when decommissionIntakeEntry(entry_id) runs, then it proceeds directly to the delete call without writing a backup file — verified this behavior is reachable ONLY via that explicit flag, never the default invocation shape"
+  - "Given a successful delete, when decommissionIntakeEntry(entry_id) runs, then ONLY the intake-collection point(s) belonging to that entry_id (its original entry AND its own distribution_marker entry, both now redundant) are removed — verified the delete call's own target collection argument is hardcoded/pinned to the intake collection's own resolved name, never a caller-supplied value, and the real destination copy (meta or the confirmed scope) is never referenced by any call this story makes"
+  - "Given this story's own delete primitive module, when reviewed, then it is a NEW, freestanding file never imported by cm-01 through cm-13's own code, and never imported by cm-11's orchestrator or cm-12's CLI verb's default/automatic flow — verified by a repo-wide search confirming zero import sites outside this story's own module and its own explicit, separate CLI/operator entry point"
+  - "Given mnemosyne/inventory/qdrant_inventory.py's HttpQdrantClient, when reviewed after this story is implemented, then it is COMPLETELY UNMODIFIED by this story — no delete method is ever added to it, verified by a diff showing zero changes to that file, preserving ro-06's own 'no delete/drop method exists anywhere in this module' contract for every other caller"
+  - "Given this story's own delete call, when reviewed, then it targets Qdrant's native points/delete endpoint directly (never swarm-memory's own index/CLI surface, which has no delete verb at all, confirmed via swarm-memory --help) — verified the implementation does not attempt to shell out to a non-existent swarm-memory delete command"
+
+steps:
+  - id: research
+    description: |
+      FIRST task, before anything else: re-confirm, at build time, that
+      this story's own gating precondition — an explicit, separate
+      operator go-ahead to build/run THIS story specifically — has
+      actually been given (mirrors cm-10's own 'first task is
+      re-confirming the precondition, never assumed still true'
+      discipline). Confirm the real, current Qdrant points/delete REST
+      request shape directly against the live cluster (filter-by-id vs.
+      filter-by-payload, exact response shape) before implementation —
+      never assumed from general Qdrant documentation alone. Confirm the
+      real, current shape of cm-13's own scroll_points() and the marker
+      metadata contract it produces (distributed_to_scope/marks_entry_id/
+      distributed_at) so this story's own live precondition re-check
+      reads the real, current fields, not an assumed shape. Decide the
+      real, concrete CLI/operator-invocation surface for this story (a
+      new `mnemosyne harvest --decommission-intake <entry_id>` flag, a
+      fully separate verb, or an interactive confirm prompt) — named as
+      an open implementation choice in docs/design-discussion.md §11.5,
+      this story's own research step makes the concrete decision.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests against a fake IngestClient / stubbed
+      scroll_points() / stubbed Qdrant delete-endpoint client (never live
+      Qdrant, never a real delete against any real collection in the
+      automated suite) covering every acceptance criterion — including
+      the refuse-on-missing-marker case, the refuse-on-unconfirmed-
+      destination case, the single-entry-only constraint, and the
+      backup-default-on/explicit-opt-out-only-for-skip behavior.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      Implement lib/mnemosyne/conversation-memory/decommissionIntakeEntry.ts
+      as a NEW, freestanding module: live marker re-check (reusing cm-13's
+      scroll_points()), live destination re-check, single-entry-only
+      invocation surface, default-on NDJSON backup write, and the delete
+      call against Qdrant's native points/delete endpoint, hardcoded to
+      the intake collection's own resolved name. Deliberately does NOT
+      modify mnemosyne/inventory/qdrant_inventory.py's HttpQdrantClient in
+      any way.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: |
+      Independently re-verify, at the highest scrutiny bar in this epic
+      (exceeding cm-07's/cm-13's own persist-time bar, per this story's
+      own "epic's one deliberate delete exception" status): both live
+      precondition checks genuinely run and genuinely block the delete
+      path on failure (read the diff, not the description); the backup
+      write genuinely precedes the delete call in the real code path, not
+      merely in comments; the delete call's target collection is
+      genuinely hardcoded, never derived from caller input; HttpQdrantClient
+      is genuinely byte-for-byte unmodified (diff the file directly);
+      zero import sites exist anywhere in cm-01 through cm-13's own code
+      or in cm-11/cm-12's own orchestrator/CLI-verb code that could reach
+      this story's delete primitive.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: |
+      Commit and push to feat/mnemosyne-conversation-memory. Does NOT run
+      against any real intake entry as part of this integration step —
+      this story's own real-world first use remains gated behind a
+      separate, future, explicit operator go-ahead (docs/design-
+      discussion.md §11.4), unchanged by this story being implemented and
+      merged.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: mnemosyne/inventory/qdrant_inventory.py
+      purpose: "HttpQdrantClient — this story's own delete primitive is DELIBERATELY NOT added here. Its own module docstring's 'no delete/drop method exists anywhere in this module' contract, and ro-06's own risk mitigation citing it, must remain true after this story ships — verified by a diff showing this file is untouched."
+    - path: lib/mnemosyne/conversation-memory/distributeIntakeEntries.ts
+      purpose: "cm-13's own module — this story reuses its scroll_points()-based read primitive for the live marker re-check (§11.4(b)), never reimplementing a second intake-read mechanism."
+    - path: lib/mnemosyne/client.ts
+      purpose: "recall()/remember() — this story's own live destination re-check (§11.4(b)) uses recall()/grep against the real destination scope; this story never calls remember() itself for anything other than reading (it has no write responsibility of its own beyond the optional local NDJSON backup file, which is not a remember() call)."
+    - path: docs/qdrant-hybrid-retrieval-experiment.md
+      purpose: "Referenced precedent only (not modified) — the real Qdrant-backup discipline (~/Documents/work/personal/qdrant-backup-2026-08-15/, NDJSON + docs + config.json per collection, point-counts verified) this story's own optional backup step mirrors, scaled to a single entry."
+
+files_to_modify:
+  - file: lib/mnemosyne/conversation-memory/decommissionIntakeEntry.ts
+    change: "New file: live marker re-check (reusing cm-13's scroll_points()), live destination re-check (recall()/grep against the marked destination scope), single-entry-only invocation surface, default-on NDJSON backup write to ~/.mnemosyne/intake-decommission-backups/, and the delete call against Qdrant's native points/delete REST endpoint, hardcoded to the intake collection's own resolved name only. Never imports or modifies HttpQdrantClient."
+  - file: lib/mnemosyne/conversation-memory/decommissionIntakeEntry.test.ts
+    change: "New file: tests against fakes/stubs only (no live Qdrant, no real delete in the automated suite) covering every acceptance criterion, including both refuse-and-report precondition-failure cases."
+
+design_decisions:
+  - decision: "This story's own delete primitive is a NEW, freestanding module — deliberately never added to HttpQdrantClient."
+    rationale: "docs/design-discussion.md §11.4(d)/§11.1 — HttpQdrantClient's own 'no delete/drop method exists anywhere in this module' contract (its own docstring, and ro-06's own risk mitigation citing it) is real, load-bearing precedent OTHER stories/callers rely on; adding a delete method there would weaken that guarantee for every other caller of that shared class, not just enable this story. A separate, freestanding module preserves that guarantee for everyone else while still providing this story's own real, needed capability."
+  - decision: "Single-entry-only invocation, structurally — no batch/wildcard capability anywhere in this story's own design."
+    rationale: "docs/design-discussion.md §11.4(a) — the operator's own explicit 'never automatic' requirement; a batch-capable delete primitive, however well-gated by confirmation prompts, is a categorically larger blast-radius risk than a single-entry-only one, and this epic's own privacy-safety posture (§2.8) consistently prefers the narrower, safer shape."
+  - decision: "Both the marker's existence AND the destination copy's real presence are independently re-verified LIVE, immediately before every delete call — never trusted from an earlier report."
+    rationale: "docs/design-discussion.md §11.4(b), mirroring cm-01's/crawlAndIngest.ts's own 're-checked before every operation, never checked once and trusted' discipline. A stale or wrong distribution_marker (e.g. from a partial-write failure mode named in cm-13's own risk register) must never be sufficient on its own to justify a delete — independently confirming the destination copy's real presence is what actually makes 'the content still exists elsewhere' a verified fact rather than an assumed one."
+  - decision: "Backup defaults ON; skipping it ('full wipe') requires an explicit, named opt-out flag."
+    rationale: "docs/design-discussion.md §11.4(c) — mirrors this epic's own consistent 'safe default, not an opt-out' posture (§10.2, [grill 3.2]). The operator's own words name both options as real and available, but the safer of the two is the one a bare invocation produces."
+  - concern: conversation-privacy-safety
+    action: "This story's own dedicated, highest-scrutiny risk entry (below) names precisely why it is safe to hold a delete capability at all, and the five structural guarantees that keep it narrowly scoped — held to a higher bar than any other cross-cutting concern entry in this epic, per the task's own explicit instruction for this story."
+  - concern: loud-failure
+    action: "Both live precondition checks (marker existence, destination presence) fail LOUD and REFUSE — never a silent skip, never a silent proceed-anyway. A backup-write failure (e.g. disk full, permissions) must also fail loud and abort BEFORE the delete call, never silently proceed to delete without the backup that was supposed to precede it."
+  - concern: existing-infrastructure
+    action: "Reuses cm-13's own scroll_points() read primitive for the live marker re-check rather than a second, independently-implemented intake-read mechanism — the fourth application of this epic's own 'one primitive, reused, never reimplemented' convention ([grill 4.1])."
+
+risks:
+  - severity: critical
+    description: "DEDICATED risk entry, per the task's own explicit instruction — this is the epic's ONE deliberate exception to 'no delete path exists,' named here precisely, not casually. `ways_of_working.md`'s hard rule ('never wipe Qdrant collections... additive/upsert only, everywhere, no exceptions') and ro-06's own 'no delete/drop code path exists anywhere in this module' discipline both hold as structural guarantees elsewhere in this codebase — this story deliberately breaks that pattern once, on purpose, here. WHY this case is safe, stated precisely rather than asserted: removing the epic's OWN already-redundant intake copy, after this story has ITSELF independently re-verified (not merely trusted) that the same content is confirmed to exist at its real, permanent destination, is categorically different from deleting a source transcript (irreplaceable, the operator's own only copy of raw history) or deleting an only-copy of persisted memory (the exact failure mode the 'never wipe Qdrant' rule exists to prevent). `intake` is, by this round's own design, never the durable home of any entry — it is explicitly a 'separate, temporary landing collection' (the operator's own words) whose entries are meant to eventually not need to exist there once distributed. Removing a temporary, already-superseded, independently-re-confirmed copy is a different KIND of operation from removing the only copy of something, not a looser reading of the same rule."
+    mitigation: "Five concrete, structural guarantees prevent this exception from ever being reachable for anything else: (1) a new, freestanding module never imported by cm-01 through cm-13's own code — no code path FROM the rest of this epic INTO this capability exists at all, only an explicit, separate, operator-invoked entry point; (2) hardcoded/pinned to the intake collection's own resolved name only — never accepts a caller-supplied arbitrary collection or scope parameter, so it cannot be redirected against meta or any confirmed real scope's own collection, structurally, not merely by convention; (3) never merged into HttpQdrantClient — that class's own 'no delete/drop method exists anywhere in this module' contract remains true for every OTHER caller, forever, verified by a diff showing that file completely unmodified; (4) single-entry-only, no batch capability, ever — structural, not a default some future caller could override with a flag; (5) never wired into cm-11's orchestrator or cm-12's CLI verb's default/automatic flow — a future operator running `mnemosyne harvest` never triggers a delete as a side effect of the generalized pipeline running. Layered on top of all five: this story re-verifies the distributed flag AND the destination copy's real existence itself, live, immediately before any delete call — even a caller that somehow reached this primitive with a wrong entry_id would be refused unless that exact entry independently re-checks out as both marked AND confirmed present at its real destination."
+  - severity: high
+    description: "The live destination-presence check (§11.4(b)/AC #2) is itself a real-world query (recall()/grep against the destination scope) that could, in principle, produce a false negative (content genuinely present but not found by the check's own matching logic) — refusing a legitimate decommission is a safe failure mode, but a false POSITIVE (reporting content present when it genuinely is not) would be the dangerous direction."
+    mitigation: "The check is designed to fail closed — any inconclusive or ambiguous result refuses the delete rather than proceeding (AC #2's own explicit wording: 'if this destination check fails or is inconclusive, it REFUSES'). The matching key (entry_id/content_hash in metadata, cm-13's own provenance contract) is exact-match, never fuzzy/semantic, minimizing the false-positive surface a similarity-based check could introduce."
+  - severity: medium
+    description: "This story's own gating gap — it must never be built/run automatically as part of this epic's own execution flow, relying on human process (a separate operator go-ahead) rather than a purely structural/code-level gate for WHEN it gets built and first used."
+    mitigation: "Named explicitly, not assumed enforced by code alone — `parallel_allowed: false` and this story's own explicit `parallel_rationale` state the human-process gate directly; `cm-11`/`cm-12`'s own `depends_on` lists (unchanged by this round) never include this story, so no automated orchestration path reaches it even after it is eventually built."
+
+references:
+  - path: .pHive/epics/mnemosyne-conversation-memory/docs/design-discussion.md
+    relevant_excerpt: "§11.4 — the full decommission design: scope stated precisely, the (a)-(d) safety requirements, and the dedicated risk-section reasoning (why this exception is safe, and the five guarantees preventing it from reaching anything else) this story's own acceptance criteria and risk register implement directly. §11.1 — the real code re-verification (no delete primitive exists anywhere in this epic's dependency surface today) grounding why this is genuinely the first such operation."
+  - path: .pHive/epics/mnemosyne-conversation-memory/stories/cm-13-intake-distribution.yaml
+    relevant_excerpt: "The distribution_marker mechanism and scroll_points() primitive this story's own live precondition re-check depends on and reuses, never reimplements."
+  - path: .pHive/epics/mnemosyne-repo-onboarding/stories/ro-06-collection-creation-and-scope-mapping.yaml
+    relevant_excerpt: "'Additive-only, by design: no delete/drop code path exists anywhere in this module' — the precedent this story is the epic's own deliberate, narrowly-scoped, carefully-reasoned EXCEPTION to, not a casual extension of."
+  - path: /Users/mdostal/.claude/projects/-Users-mdostal-Documents-work-pantheon-mnemosyne/memory/project_state.md
+    relevant_excerpt: "'Qdrant backed up 2026-08-15 (~/Documents/work/personal/qdrant-backup-2026-08-15/, outside this repo): all 16 live collections exported (NDJSON + docs + config.json per collection), point-counts verified to match live' — the real, established backup precedent this story's own optional per-entry backup step mirrors, scaled down from a whole-collection export to a single named entry."
+
+metric:
+  applies: true
+  name: conversation_memory.intake_entries_decommissioned
+  direction: up
+  unit: count
+  baseline: 0
+  target: 0
+  window: "not measured by this planning pass — this story is not built or run in this pass, and has no real-world usage event yet to measure against"
+  source:
+    kind: manual
+    ref: "Deliberately NOT scored against a real-usage target by this planning pass, mirroring cm-10's own honest 'not this story's own build-success metric' posture for its own still-gated half — this story's real first use is gated behind a separate, future, explicit operator go-ahead (§11.4), so there is no real event to measure yet. Once that go-ahead is given and this story is actually run, the real, falsifiable proof is: every decommissioned entry_id had a live-reconfirmed marker AND a live-reconfirmed destination copy at the moment of deletion, zero entries decommissioned without both, and zero collections other than intake ever touched by a delete call — verifiable directly from this story's own logged precondition-check results, not merely asserted after the fact."
+  verify_at: "first real, operator-authorized run of this story, once separately approved"
+  owner: researcher

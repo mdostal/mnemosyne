@@ -1231,3 +1231,396 @@ provider — named explicitly so a future reader never assumes
 
 Grilled at the same rigor as rounds 1-2 — see `docs/grill-record.md`
 round 3.
+
+## 11. Amendment (2026-08-26) — round 4: intake/distribution/decommission split
+
+Real design change, driven by the operator's own explicit framing this
+pass, planning-only (no application code touched — `.pHive/epics/
+mnemosyne-conversation-memory/**` only), additive to §§1-10 exactly as
+rounds 2 and 3 were: nothing above is rewritten or deleted.
+
+**Operator's own words, verbatim:** "it should have an intake and then a
+way to get into the others as we distribute... we then shutdown the
+intake as it distributes across, so meta is separate from intake." And,
+confirming the exact shape when asked directly: "intake is a separate,
+temporary landing collection distinct from meta. cm-07 always writes
+there first; a later distribution step reads intake, resolves the real
+destination (meta for general cross-project content, or a confirmed
+specific scope like arizona), writes there, then intake shuts down for
+that entry." And, on what "shuts down" means concretely: "mark and
+distribute -- keep an audit trail, then allow for a way to decommission
+it and optionally back it up or just full wipe."
+
+This is THREE real, distinct pieces — a landing zone (`cm-07`, revised),
+a distribution step (`cm-13`, new), and a decommission step (`cm-14`,
+new) — not one story doing all three. §11.1 grounds the design in this
+pass's own real code re-verification; §11.2-§11.4 cover each piece;
+§11.5 names what's still genuinely open.
+
+### 11.1 Real code re-verification this pass (grounding, mirrors §10's own discipline — nothing below assumed from memory alone)
+
+- **`MnemosyneClient.remember()` (`client.ts:447`) and `VectorLayerAdapter.
+  remember()` (`VectorLayerAdapter.ts:205`), read directly this pass:**
+  every call writes a BRAND-NEW timestamped note file
+  (`${stamp}-${tag}.md`) and shells out to `swarm-memory index <collection>
+  --no-prune <file>`, which reports an "upserted N chunks" count. There is
+  no exposed "update an existing point by id" capability anywhere in this
+  path — a second `remember()` call with different metadata for
+  "the same" logical entry produces a NEW file and a NEW indexed point,
+  never an in-place mutation of the first. This is the real, concrete
+  reason the "marking" mechanism below (§11.3) is an ADDITIVE marker
+  entry, not an in-place field update — no in-place update primitive
+  exists to name, and inventing one now would be exactly the kind of
+  "bespoke new write path" the task's own instruction warns against.
+- **`mnemosyne/inventory/qdrant_inventory.py`'s `HttpQdrantClient`, read
+  directly this pass:** its own module docstring states plainly — "no
+  delete/drop method exists anywhere in this module" — and a full read of
+  every method (`list_collections`, `collection_info`, `create_collection`)
+  confirms this: `create_collection()` (ro-06's own one deliberate,
+  narrow, additive exception) is the only non-read method, and its own
+  docstring names the absence of any delete/drop method as the concrete
+  implementation of `ways_of_working.md`'s hard "never wipe Qdrant" rule.
+  This is real, load-bearing precedent other stories' own risk mitigations
+  already cite (ro-06's own risk register: "Additive-only module (no
+  delete path exists)") — §11.4 below treats it as a contract to PRESERVE,
+  never to extend.
+- **`swarm-memory --help`, run directly this pass:** the real CLI surface
+  is `recall|search|grep|check|scopes|index|graph|config|install-hermes`
+  — no delete/remove/decommission verb exists anywhere in the real,
+  installed CLI either. Confirms the same finding from the TS/Python
+  layers above holds at the swarm-memory-binary layer too — there is
+  genuinely no existing delete-capable primitive anywhere in this epic's
+  own dependency surface, at any layer. `cm-14` is therefore correctly
+  named as the epic's first, not merely nominally, delete-capable
+  operation.
+- **`~/.config/swarm-memory/config.toml`'s real `[scopes]` table, read
+  directly this pass (same file §10.2 already read):**
+  `top|clients|ffe|knowledge|claude|ffe-knowledge|learnings|personal|att|
+  cadex|cadexlegacy|arizona|social-engine|monitoring` — confirmed: no
+  `meta` key exists yet (consistent with §2.3's own original "naming
+  convention TBD" posture, still genuinely open) and no `intake` key
+  exists either. §11.2 below makes a real, concrete naming recommendation
+  for `intake` — not yet applied to the live config, exactly the same
+  "recommendation now, real application at build time" posture §2.3 #1
+  already established for `meta`.
+
+### 11.2 Piece 1 — `cm-07` revised: unconditional, single-destination write to `intake`
+
+**What changes:** `cm-07` no longer contains ANY confirmed-vs-unconfirmed
+scope-selection logic — that entire mechanism (§10.2's steps 2-3) moves,
+verbatim in substance, to `cm-13` (§11.3). `cm-07` becomes strictly
+simpler: every successful distillation writes with
+`scope: 'intake'` (a NEW `Scope`-type value, additive to the existing
+`'project'|'enterprise'|'meta'` union exactly as `interfaces.ts`'s own
+doc comment already anticipates — the same additive-widening
+coordination point §10.2 already named for `'arizona'`, now shared by
+two new values, `'meta'` and `'intake'`, both real, both TBD-named at the
+type level until `cm-07`'s own research step resolves the concrete
+mechanism). `cm-07` NEVER writes `scope: 'meta'` directly and NEVER
+writes a confirmed non-meta scope directly, in any code path, for any
+entry — no exceptions.
+
+**What carries forward unchanged, verbatim, from §2.1/§2.7/§2.8/§9.6:**
+the persist-time `cm-01` secret-scan checkpoint (immediately before every
+`remember()` call, no bypass); the bounded-distillation design (decision/
+fact/open-question/summary entries, never a raw re-chunk); the shared
+`geminiClient.ts` primitive (`cm-05`'s module, imported unchanged) for
+the decision/fact/open-question extraction call; `ingestDocument()`/
+`remember()` called unchanged, the one and only persist path. None of
+this required any change — the operator's own framing this pass changes
+WHERE the write lands, not HOW distillation or the scan checkpoint work.
+
+**The `intake` collection-naming/scope-mechanism decision — real,
+concrete, not left abstract (mirrors the rigor §10.2 already gave the
+`arizona` finding):** recommend a new `swarm-memory` `[scopes]` entry,
+`intake = "conversation_memory_intake"` — following the exact same
+`<domain>_<memory-type>` naming convention already real and live in the
+same table (`clients_arizona_compound_memory`, `personal_memory`,
+`work_root_memory`, `ffe_social_engine_memory`), resolved through the
+IDENTICAL `cfg.scopes?.[scope]` mechanism (`VectorLayerAdapter.ts:213-226`)
+`'meta'` and `'arizona'` already resolve through — no new resolution
+mechanism, no parallel collection-routing path. This is a
+RECOMMENDATION for `cm-07`'s own research step to apply at build time
+(the same "recommend now, apply for real at build time" posture §2.3
+open question #1 already established for `meta` — neither key exists in
+the live `config.toml` today, confirmed §11.1). **Why a genuinely
+separate collection, not a metadata flag on the `meta` collection
+itself:** the operator's own words are explicit — "so meta is separate
+from intake" — a flag-based design would keep every not-yet-distributed
+entry physically co-located with already-distributed cross-project
+memory, meaning `recall(query, 'meta')` could surface a not-yet-reviewed,
+not-yet-scope-routed entry as if it were settled cross-project memory —
+exactly the kind of silent scope-conflation §10.2's own residual-risk
+reasoning already rejects for a different reason (client-scope leakage).
+A physically separate collection makes "has this been distributed yet"
+a structural fact (which collection the point lives in), not a
+metadata field a caller could forget to filter on.
+
+**`resolved_scope_candidate` carried forward, unchanged in origin, inert
+here:** `cm-06` already computes this (real, shipped code,
+`clusterConversations.ts`) — `cm-07` continues to accept it as
+pass-through metadata on every persisted intake entry (nullable,
+identical shape to §10.2's original design) but performs ZERO logic
+against it — it is neither read nor branched on anywhere in `cm-07`'s own
+code, purely carried so `cm-13` (§11.3) has what it needs without
+re-deriving it from `cm-06`'s output a second time. This is a real
+simplification: `cm-07`'s own highest-severity residual risk from round 3
+(§10.2's "a wrong-scope route would put personal content in a
+client-facing collection") no longer exists as a risk IN `cm-07` at all
+— `cm-07` cannot route anywhere but `intake`, structurally, so that
+failure mode is now entirely `cm-13`'s own risk surface to own (§11.3).
+
+**A new, real, stable per-entry identifier — a genuinely new requirement,
+named explicitly:** every entry `cm-07` persists into `intake` now
+carries `metadata.entry_id` (a UUID generated at persist time, distinct
+from `content_hash` — a UUID rather than the hash so a later same-text
+retry, however unlikely, never collides with an already-marked entry's
+identity). This did not exist before this round because nothing
+previously needed to reference a specific intake entry from a LATER,
+SEPARATE story's own write — `cm-13`'s marker mechanism (§11.3) is the
+first thing in this epic that does.
+
+### 11.3 Piece 2 — `cm-13-intake-distribution` (new): reads intake, resolves the real destination, writes there, marks the original
+
+**Reads intake entries — mechanism, named concretely, not hand-waved:**
+neither `recall()` (semantic, top-K, requires a query — cannot enumerate
+"every entry," §11.1) nor `swarm-memory grep` (keyword-scroll, but still
+query-shaped, confirmed via `--help` this pass, §11.1) is a full
+collection enumeration primitive. The real, concrete mechanism: a new,
+narrowly-scoped, READ-ONLY extension of `HttpQdrantClient`
+(`mnemosyne/inventory/qdrant_inventory.py`) — a `scroll_points(name,
+payload_filter=None)` method wrapping Qdrant's own native `POST
+/collections/{name}/points/scroll` endpoint. This is squarely in the same
+risk category as the class's own already-existing `list_collections()`/
+`collection_info()` methods (pure reads), NOT the same category as
+`create_collection()` (ro-06's one deliberate additive-write exception) —
+adding a second read-only method to this class does not touch, weaken, or
+extend its own "no delete/drop method exists anywhere" contract in any
+way. `cm-13` uses this to read every point in the `intake` collection
+(never any other collection), partitioned locally into two sets: entries
+carrying `metadata.entry_type != 'distribution_marker'` (candidates to
+process) and entries carrying `metadata.entry_type ==
+'distribution_marker'` (already-distributed markers, read to compute
+which `entry_id`s to skip).
+
+**Resolves the real destination — the CONFIRMED-candidate-consumption
+logic §10.2 originally designed for `cm-07`, moved here verbatim, not
+reinvented:** for a given intake entry's carried-forward
+`resolved_scope_candidate` (§11.2): if the operator has explicitly
+confirmed that exact `cluster_id`'s candidate in the same human-review
+queue `cm-01`/`cm-05`/`cm-06` already produce (`review_reason:
+'scope_route_candidate'`), `cm-13` writes that entry's content to the
+CONFIRMED real scope. **For every other entry — no candidate, an
+unconfirmed candidate, or a mismatched/stale confirmation naming a
+`cluster_id` this entry doesn't belong to — `cm-13` writes to `scope:
+'meta'`, unconditionally, no exceptions.** This is the exact same safe
+default §10.2 already established, now living in the story that actually
+has a destination-write responsibility (`cm-07` no longer does).
+
+**Writes via the SAME `ingestDocument()`/`remember()` primitive,
+unchanged:** identical discipline to `cm-07`'s own existing "one
+persist primitive, reused, never reimplemented" convention (`[grill
+4.1]`) — `cm-13` is the second, not a competing, caller of that same
+primitive.
+
+**Marks the original intake entry as distributed — the real, concrete
+mechanism, grounded in §11.1's own finding, not invented:** because no
+in-place update-by-id primitive exists anywhere in this epic's real
+dependency surface (§11.1), "marking" is implemented as calling
+`remember()` AGAIN — the same, unchanged, remember()-adjacent primitive,
+never a bespoke new write path — with a NEW, small entry written into the
+SAME `intake` collection: `metadata.entry_type: 'distribution_marker'`,
+`metadata.marks_entry_id: <the original entry's entry_id>`,
+`metadata.distributed_to_scope: <'meta' or the confirmed real scope>`,
+`metadata.distributed_at: <ISO timestamp>`. **This is deliberately
+ADDITIVE, not a mutation — the original intake entry's own point is never
+touched, only a new, linked marker point is written alongside it.** This
+is not merely the closest available mechanism — it is the RIGHT one,
+independently: `ways_of_working.md`'s own hard rule ("never wipe Qdrant
+collections... additive/upsert only, everywhere, no exceptions") governs
+`intake` exactly as it governs every other collection this epic touches;
+an additive marker satisfies "mark and distribute, keep an audit trail"
+(the operator's own words) more literally than an in-place mutation ever
+could, since the original entry's own content remains byte-for-byte
+inspectable after marking, not overwritten.
+
+**Idempotency, named explicitly:** an intake entry whose `entry_id`
+already has a matching `distribution_marker` (from a prior `cm-13` run)
+is skipped — never re-resolved, never re-written to a destination, never
+given a second marker. Re-running `cm-13` any number of times over the
+same intake state produces no duplicate destination writes and no
+duplicate markers.
+
+**A real sequencing note, mirroring `[grill 3.3]`'s own precedent
+(§10.4's "a `cm-08` pilot run will, in practice, always default every
+entry to `meta`" finding) — named here too, not left for an operator to
+rediscover:** `cm-13` runs as its OWN, separate, later pass — never
+inline inside `cm-07`'s own synchronous distillation run, structurally
+enforced by `cm-13`'s own `depends_on: [cm-07]` rather than `cm-07`
+composing it directly. A confirmed-candidate route can only ever be
+exercised in a `cm-13` run that happens AFTER a human has reviewed and
+confirmed a candidate `cm-06`/`cm-07` surfaced in an earlier pass — the
+same "genuine routing only happens in a second, later run" shape §10.2/
+`[grill 3.3]` already established, now correctly homed in the story that
+actually performs the routing write.
+
+`depends_on: [cm-07-distillation-and-persist]`.
+
+### 11.4 Piece 3 — `cm-14-intake-decommission` (new): the epic's one deliberate exception to "no delete path exists" — held to the highest safety bar in this epic or this session
+
+**Scope, stated precisely first, so nothing below is read as broader than
+it is:** removes an intake entry that has ALREADY been successfully
+marked distributed, from the `intake` collection ONLY. Never touches the
+real destination copy (`meta` or a confirmed scope's own collection —
+`cm-13`'s write there is permanent and unaffected by anything `cm-14`
+does). Never touches a source transcript (`~/.claude/projects/*.jsonl`,
+the ChatGPT/Gemini export files — unchanged, permanent, read-only input
+per §2.6's own structural guarantee). Never touches any entry not marked
+distributed.
+
+**(a) Never automatic — explicit, individually-confirmed operator action
+only, no batch-wipe-by-default anywhere:** `cm-14`'s own callable surface
+accepts exactly ONE `entry_id` per invocation — no `--all`, no
+wildcard/pattern match, no "delete every distributed entry" mode exists
+anywhere in this story's own design. Every invocation names the specific
+entry being removed; the operator is the one naming it.
+
+**(b) `cm-14` verifies the distributed state itself — never trusts a
+stale/wrong flag, re-checked immediately before deleting, mirroring
+`crawlAndIngest.ts`'s/`cm-01`'s own "re-checked before every operation,
+never checked once and trusted" discipline exactly, applied here to a
+delete-time guard instead of a fetch-time or persist-time one:**
+immediately before issuing any delete call, `cm-14` (1) re-reads the
+`intake` collection LIVE (via `cm-13`'s own `scroll_points()` primitive,
+§11.3 — reused, not reimplemented) to confirm a `distribution_marker`
+entry naming this exact `entry_id` genuinely exists right now, not from
+a cached report or an earlier `cm-13` run's own self-report; (2)
+independently confirms the real destination actually holds the
+corresponding content (a real read against the marker's own
+`distributed_to_scope`, matching by `entry_id`/`content_hash` in
+metadata — e.g. via `recall()`/`grep` against that scope) before
+proceeding. Either check failing — no marker found, or the destination
+copy can't be independently confirmed — refuses to delete and reports
+the precondition as unmet, loudly, exactly like `cm-01`'s own "match
+found, refuse to persist" posture.
+
+**(c) Optional real backup step before removal — the operator's own
+words, "optionally back it up or just full wipe," a real, concrete
+mechanism, not left abstract:** mirrors this session's own established
+Qdrant-backup precedent
+(`~/Documents/work/personal/qdrant-backup-2026-08-15/` — NDJSON export
+per collection plus docs/config.json, point-counts independently verified
+to match live before being trusted as a real backup, `project_state.md`'s
+own record of that work) — scaled down to a single entry (or the small,
+explicit set the operator named) rather than a whole collection.
+Concrete design: before the delete call, write a timestamped NDJSON file
+(the entry's full `text` + `metadata`, byte-for-byte what's about to be
+removed) to `~/.mnemosyne/intake-decommission-backups/
+<timestamp>-<entry_id>.ndjson` — the same already-established local
+config-directory family `~/.mnemosyne/org-tree.yaml`/`~/.mnemosyne/
+level0-rules.md` already live in (§10.2), not a new, bespoke location.
+**Default is backup-ON — an explicit opt-out flag is required to skip
+it, never the reverse:** mirrors this epic's own consistent "safe default,
+not an opt-out" posture (§10.2's confirms-before-write default, `[grill
+3.2]`'s no-implicit-selection default) — "full wipe" (the operator's own
+second option) is real and offered, but only ever reachable via an
+explicit, named flag, never the default behavior of a bare invocation.
+
+**(d) Named explicitly, in its own dedicated risk section here, as the
+epic's one deliberate exception to "no delete path exists" — why this
+case is categorically different, and what specifically prevents the
+exception from ever being reachable for anything else:**
+
+This epic (§3) and `ro-06` before it (`mnemosyne/onboarding.py`'s own
+docstring) both hold "no delete/drop code path exists anywhere in this
+module" as a structural guarantee, not a policy note — and `cm-14`
+deliberately breaks that pattern once, here, on purpose. The reasoning
+this is safe, stated precisely rather than asserted: removing the epic's
+OWN already-redundant `intake` copy, after `cm-14` has itself
+independently re-verified (not merely trusted) that the same content is
+confirmed to exist at its real, permanent destination, is categorically
+different from deleting a source transcript (irreplaceable, the
+operator's own only copy of raw history) or deleting an only-copy of
+persisted memory (the exact failure mode `ways_of_working.md`'s "never
+wipe Qdrant" rule exists to prevent). `intake` is, by this round's own
+design (§11.2), never the durable home of any entry — it is explicitly a
+"separate, temporary landing collection" (the operator's own words) whose
+entries are meant to eventually not need to exist there once distributed.
+Removing a temporary, already-superseded, independently-re-confirmed copy
+is a different KIND of operation from removing the only copy of
+something — not a looser reading of the same rule, a genuinely different
+case the rule was never written to cover in the first place.
+
+Five concrete, structural guarantees prevent this exception from ever
+being reachable for anything else, named directly (not asserted as a
+feeling):
+
+1. **A new, freestanding module, never imported by any other story's
+   code.** `cm-01` through `cm-13`'s own code never calls into `cm-14`'s
+   delete primitive — there is no code path FROM the rest of this epic
+   INTO this capability at all, only an explicit, separate,
+   operator-invoked entry point.
+2. **Hardcoded/pinned to the `intake` collection's own resolved name
+   only.** The module never accepts a caller-supplied arbitrary
+   collection or scope parameter — it cannot be redirected against
+   `meta` or any confirmed real scope's own collection, structurally, not
+   merely by convention.
+3. **Never merged into `HttpQdrantClient`.** `mnemosyne/inventory/
+   qdrant_inventory.py`'s own class stays exactly as ro-06 left it — its
+   "no delete/drop method exists anywhere in this module" contract
+   remains true for every OTHER caller, forever; `cm-14`'s delete
+   primitive lives in its own, separate file specifically so this
+   contract is never weakened for anyone else who imports that class.
+4. **Single-entry-only, no batch capability, ever** — (a) above,
+   structural, not a default that could be overridden by a flag some
+   future caller adds.
+5. **Never wired into `cm-11`'s orchestrator or `cm-12`'s CLI verb's
+   default/automatic flow.** `cm-11`/`cm-12` (§10.3) compose `cm-02`
+   through `cm-07` unconditionally — `cm-14` is never composed by
+   either, named here explicitly so a future reader of `cm-11`'s own
+   `depends_on` list never assumes decommissioning is part of the
+   generalized pipeline's own automatic behavior.
+
+**This ticket does NOT get built or run as part of this planning pass, or
+as part of `cm-08`'s pilot** — named explicitly, gated behind its own
+future, separate operator go-ahead, mirroring §2.8's own "no full-234-
+session-corpus story exists by design" precedent, applied here to
+decommissioning scale/timing instead of ingestion scale.
+
+`depends_on: [cm-13-intake-distribution]`.
+
+### 11.5 Residual, honestly-named open items (not claimed solved by this amendment)
+
+- **The exact real Qdrant REST delete-call shape** (`POST /collections/
+  {name}/points/delete`, filter-by-payload vs. delete-by-id-list) is named
+  as the real mechanism class but not pinned to an exact request body here
+  — `cm-14`'s own research step confirms the real, current Qdrant API
+  shape directly against the live cluster before implementation, mirroring
+  every other story's own "confirm against the live system, not assumed"
+  discipline in this epic.
+- **Whether `swarm-memory index`'s own `index` CLI command performs any
+  content-hash-based dedup/upsert internally** (as opposed to the TS
+  `remember()` wrapper's own confirmed "always a new file, always a new
+  point" behavior, §11.1) is NOT resolved by this pass — that would
+  require reading the installed `swarm-memory` Python package's own
+  internals, out of scope for a planning-only pass touching only this
+  epic's own files. Named as a real, open question `cm-13`'s own research
+  step should re-confirm before relying on the additive-marker design as
+  the ONLY way "marking" could ever work, though the additive-marker
+  design (§11.3) is independently correct on `ways_of_working.md`'s own
+  "additive/upsert only" grounds regardless of the answer.
+- **Whether `cm-08`'s pilot or `cm-09`'s deep-dive report should be
+  extended to exercise `cm-13` (distribution) for real** is a genuinely
+  open, future question this amendment does not resolve — `cm-08`'s own
+  YAML is unchanged by this pass; extending it is explicitly out of this
+  amendment's own three named changes, mirroring §10.4's own restraint
+  for the Gemini-in-pilot question.
+- **`cm-14`'s own real CLI/operator-invocation surface** (a new
+  `mnemosyne harvest --decommission-intake <entry_id>` flag, a fully
+  separate verb, or an interactive confirm prompt) is named as a future
+  design choice for `cm-14`'s own implementation step, not decided here —
+  this amendment fixes the safety PROPERTIES that surface must have
+  (§11.4 (a)-(d)), not its exact UX.
+
+Grilled at the same rigor as rounds 1-3, plus a dedicated leak/safety
+check — see `docs/grill-record.md` round 4.

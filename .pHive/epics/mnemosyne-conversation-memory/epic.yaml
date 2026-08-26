@@ -69,6 +69,40 @@ description: |
   `onboardRepo()`/`mnemosyne onboard` precedent — proven via synthetic/
   structural tests only, gated on `cm-09`'s own real-data validation.
 
+  Round-4 amendment (2026-08-26, docs/design-discussion.md §11): the
+  operator's own explicit framing this pass — "it should have an intake
+  and then a way to get into the others as we distribute... so meta is
+  separate from intake" — splits the write path into three real pieces.
+  `cm-07` is SIMPLIFIED: it now writes UNCONDITIONALLY to a new,
+  temporary `intake` landing scope (never `meta`, never a confirmed real
+  scope directly) — the confirmed-vs-unconfirmed scope-selection logic it
+  previously owned (round 3, §10.2) moves in full to new story `cm-13-
+  intake-distribution`, which reads intake entries (via a new, read-only
+  `scroll_points()` extension of `HttpQdrantClient`), resolves each
+  entry's real destination (a confirmed real scope, or `meta` as the
+  unconditional safe default), writes there via the same unchanged
+  `remember()` primitive, and marks the original intake entry as
+  distributed by writing a NEW, additive `distribution_marker` entry
+  (never an in-place mutation — no update-by-id primitive exists anywhere
+  in this epic's real dependency surface, confirmed by this round's own
+  re-read of `remember()`/`VectorLayerAdapter.ts`, §11.1) — audit trail
+  preserved, per the operator's own words. New story `cm-14-intake-
+  decommission` is the epic's FIRST, and by design its ONLY, delete-
+  capable operation: removes an already-distributed intake entry from the
+  `intake` collection ONLY, after independently re-verifying (never
+  trusting a stale flag) both the distribution marker's existence and the
+  destination copy's real presence, with an optional real NDJSON backup
+  step (default-on, mirroring this session's own established Qdrant-
+  backup precedent) before any delete. Named explicitly, in its own
+  dedicated risk section, as the epic's one deliberate, narrowly-scoped
+  exception to `ro-06`'s/`ways_of_working.md`'s own "no delete path
+  exists" discipline — never merged into `HttpQdrantClient` itself (that
+  class's own no-delete-method contract stays true for every other
+  caller), single-entry-only, never wired into `cm-11`/`cm-12`'s own
+  automatic pipeline flow. `cm-14` does NOT get built or run as part of
+  this planning pass or `cm-08`'s pilot — gated behind its own future,
+  separate operator go-ahead. 14 stories total (`cm-01`..`cm-14`).
+
   Built by composing the already-shipped `ingestDocument()`/`remember()`
   cascade (ro-10/ro-13, unchanged) with genuinely new pieces: a
   standalone secret/credential scanner (checked twice — parse-time and
@@ -205,6 +239,38 @@ notes: |
   "ready to use" until the operator's own deep-dive has validated the
   real pipeline).
 
+  Round-4 amendment (2026-08-26, docs/design-discussion.md §11, grill
+  round 4 in docs/grill-record.md -- 5 findings plus a dedicated
+  leak/safety check, all resolved). Operator's own framing, verbatim:
+  "it should have an intake and then a way to get into the others as we
+  distribute... so meta is separate from intake" -- "mark and distribute
+  -- keep an audit trail, then allow for a way to decommission it and
+  optionally back it up or just full wipe." Split into three real pieces:
+  cm-07 revised (simplified) to write UNCONDITIONALLY to a new `intake`
+  landing scope only, never `meta`, never a confirmed scope directly --
+  the confirmed-vs-unconfirmed scope-selection logic it owned through
+  round 3 moves in full to new story cm-13-intake-distribution, which
+  reads intake (a new read-only scroll_points() extension of
+  HttpQdrantClient, since no full-enumeration primitive existed before
+  this round), resolves the real destination (confirmed scope or meta
+  default, identical safe-default discipline), writes via the same
+  unchanged remember(), and marks the original intake entry distributed
+  via a NEW, additive distribution_marker entry (never an in-place
+  mutation -- confirmed this pass that no update-by-id primitive exists
+  anywhere in remember()/VectorLayerAdapter.ts). New story cm-14-intake-
+  decommission is the epic's first, and by design only, delete-capable
+  operation -- removes an already-distributed intake entry from intake
+  ONLY, after live-re-verifying (never trusting a stale flag) both the
+  marker and the destination copy's real presence, with a default-on
+  optional NDJSON backup step mirroring this session's own established
+  Qdrant-backup precedent (~/Documents/work/personal/qdrant-backup-
+  2026-08-15/). Named explicitly as the epic's one deliberate exception to
+  ro-06's/ways_of_working.md's "no delete path exists" discipline --
+  never merged into HttpQdrantClient itself, single-entry-only, never
+  wired into cm-11/cm-12's automatic pipeline flow. cm-14 does NOT get
+  built or run this pass or as part of cm-08's pilot -- gated behind its
+  own future, separate operator go-ahead. Story count: 14 (cm-01..cm-14).
+
 stories:
   - id: cm-01-secret-credential-scanner
     title: Standalone secret/credential scanning primitive
@@ -231,7 +297,7 @@ stories:
     complexity: medium
     depends_on: [cm-05-usefulness-trash-triage]
   - id: cm-07-distillation-and-persist
-    title: Bounded distillation into memory entries, persisted via the shipped remember() cascade
+    title: Bounded distillation into memory entries, persisted UNCONDITIONALLY to a new 'intake' landing scope via the shipped remember() cascade
     complexity: high
     depends_on: [cm-06-cross-session-clustering, cm-05-usefulness-trash-triage]
   - id: cm-08-bounded-operator-pilot
@@ -254,3 +320,11 @@ stories:
     title: "mnemosyne harvest CLI verb — generalized pipeline entry point"
     complexity: medium
     depends_on: [cm-11-generalized-pipeline-orchestrator]
+  - id: cm-13-intake-distribution
+    title: Intake distribution — resolve the real destination (meta or a confirmed scope), write there, mark the original intake entry as distributed
+    complexity: high
+    depends_on: [cm-07-distillation-and-persist]
+  - id: cm-14-intake-decommission
+    title: Intake decommission — the epic's ONE deliberate, narrowly-scoped exception to "no delete path exists," removing an already-distributed intake entry only
+    complexity: high
+    depends_on: [cm-13-intake-distribution]
