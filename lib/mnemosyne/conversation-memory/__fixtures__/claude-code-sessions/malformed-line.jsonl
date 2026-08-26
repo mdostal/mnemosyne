@@ -1,0 +1,4 @@
+{"type":"mode","mode":"normal","sessionId":"cc-malformed-001"}
+{"parentUuid":null,"isSidechain":false,"type":"user","uuid":"mu1","timestamp":"2026-01-03T00:00:00.000Z","sessionId":"cc-malformed-001","cwd":"/Users/example/project","gitBranch":"main","version":"2.1.229","userType":"external","entrypoint":"cli","message":{"role":"user","content":"first real turn, before the bad line"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"truncated mid-object, no closing braces at all
+{"parentUuid":"mu1","isSidechain":false,"type":"assistant","uuid":"ma1","timestamp":"2026-01-03T00:00:02.000Z","sessionId":"cc-malformed-001","cwd":"/Users/example/project","gitBranch":"main","version":"2.1.229","message":{"role":"assistant","content":[{"type":"text","text":"a turn after the bad line, never reached"}]}}

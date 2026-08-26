@@ -1,0 +1,11 @@
+{"type":"mode","mode":"normal","sessionId":"cc-unusual-001"}
+{"type":"permission-mode","permissionMode":"bypassPermissions","sessionId":"cc-unusual-001"}
+{"type":"last-prompt","leafUuid":"x","sessionId":"cc-unusual-001"}
+{"type":"ai-title","aiTitle":"A synthetic fixture title","sessionId":"cc-unusual-001"}
+{"type":"attachment","parentUuid":null,"isSidechain":false,"attachment":{"type":"deferred_tools_delta","addedNames":["Foo"]}}
+{"type":"pr-link","sessionId":"cc-unusual-001","prNumber":1,"prUrl":"https://example.invalid/pr/1","prRepository":"example/repo","timestamp":"2026-01-04T00:00:00.000Z"}
+{"type":"system","parentUuid":null,"isSidechain":false,"subtype":"stop_hook_summary","hookCount":1,"hookInfos":[]}
+{"type":"queue-operation","operation":"enqueue","timestamp":"2026-01-04T00:00:01.000Z","sessionId":"cc-unusual-001","content":"queued text, not a real turn"}
+{"type":"frame-link","sessionId":"cc-unusual-001","frameId":"f1"}
+{"type":"file-history-delta","messageId":"m1","snapshotMessageId":"m0","trackingPath":"foo.txt","backup":{"backupFileName":null,"version":1,"backupTime":"2026-01-04T00:00:02.000Z"}}
+{"parentUuid":null,"isSidechain":false,"type":"user","uuid":"uu1","timestamp":"2026-01-04T00:00:03.000Z","sessionId":"cc-unusual-001","cwd":"/Users/example/project","gitBranch":"main","version":"2.1.233","userType":"external","entrypoint":"cli","message":{"role":"user","content":"the only real turn in this fixture"}}
