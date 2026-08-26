@@ -1,0 +1,138 @@
+id: cm-08-bounded-operator-pilot
+epic: mnemosyne-conversation-memory
+title: Bounded, operator-reviewed pilot over a small real sample
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [cm-07-distillation-and-persist]
+
+description: |
+  The explicit, bounded, operator-reviewed PILOT phase docs/design-
+  discussion.md §2.8 requires before any full-corpus ingestion story is
+  ever proposed — the first and ONLY point in this epic's own story
+  decomposition where real personal conversation content is actually
+  persisted to Qdrant. Everything through `cm-07` is code-complete and
+  tested against fixtures alone; this story is where it runs for real,
+  deliberately small.
+
+  Orchestrates `cm-02` → `cm-03`/`cm-04` → `cm-05` → `cm-06` → `cm-07`
+  end-to-end over a small, REAL, OPERATOR-SELECTED sample — a handful of
+  real sessions across at least two different real project slugs, plus a
+  small slice of the real ChatGPT export, exact counts are this story's
+  own acceptance criteria, kept deliberately small.
+
+  **Selection mechanism, named concretely (`[grill 3.2]`, docs/design-
+  discussion.md §2.8):** the operator selects the pilot sample by marking
+  entries directly in `cm-02`'s real, reviewable discovery manifest (a
+  CLI confirm step or an edited manifest file — this story's own
+  implementation step picks the concrete mechanic) — this story never
+  auto-selects "the first N sessions found" on the operator's behalf.
+
+  This story's own execution (running it against real content) happens
+  at BUILD/EXECUTE time, not during this planning pass — this planning
+  pass does not ingest, embed, or persist any real content; it plans the
+  mechanism that will, later, under explicit operator confirmation.
+
+acceptance_criteria:
+  - "Given cm-02's real discovery manifest, when the operator marks a small subset (a named small maximum, e.g. no more than 5 Claude Code sessions and no more than 5 ChatGPT conversations), then the CLI orchestrator accepts exactly that operator-marked subset as the pilot sample — never a larger, auto-expanded set"
+  - "Given the operator-selected sample spans at least 2 distinct real project slugs (a real, verifiable condition given the operator's own '30 plus sessions... different overall mixes' framing), when the pilot runs, then cm-06's clustering step is genuinely exercised across those distinct slugs, not degenerate to a single-slug case"
+  - "Given the pilot sample includes at least one session cm-01's scanner would flag in testing (a real fixture-shaped secret deliberately included in a synthetic pilot dry-run, OR a genuine confirmation the scanner ran with zero matches on the real sample — either outcome is acceptable, but the scan's real execution against real content must be independently confirmed, never assumed skipped-because-clean)"
+  - "Given the pilot completes, when the operator inspects the result, then every persisted entry (cm-07's output) is traceable back to its real source session via the full provenance metadata contract (session_id/project_slug/cluster_id) — a real, spot-checkable guarantee, not merely asserted"
+  - "Given the pilot orchestrator's own CLI, when invoked WITHOUT an explicit operator confirmation step for the sample selection, then it refuses to run — no default/implicit sample selection exists anywhere in this story's code"
+  - "Given the pilot completes successfully, when the real, resulting meta-scope collection is queried via recall(), then at least one real, distilled entry from the pilot is retrievable — a genuine, end-to-end proof the full pipeline works, not merely that each stage passed its own isolated tests"
+
+steps:
+  - id: research
+    description: |
+      Confirm the real, live Qdrant Cloud credential/collection-creation
+      prerequisites this story's real execution will need (mirrors ro-06's
+      own "requires real Qdrant Cloud credentials... mitigated the same
+      way qdrant_inventory.py's own tests already do" precedent) — this
+      story's AUTOMATED test suite still mocks/stubs the live Qdrant call
+      (never a live call in CI), but the story's own real, human-run
+      execution (not this planning pass) will need real credentials
+      confirmed reachable.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests for the CLI orchestrator's own logic (sample-
+      selection confirmation gate, stage sequencing cm-02→...→cm-07,
+      no-implicit-selection refusal) against fake/stubbed stage
+      implementations — never live Qdrant, never real personal content,
+      in the automated suite.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      Implement bin/mnemosyne-conversation-pilot.mjs: reads cm-02's
+      manifest, requires explicit operator marking/confirmation, invokes
+      cm-03/cm-04→cm-05→cm-06→cm-07 in sequence over exactly the marked
+      subset, reports real per-stage results.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: |
+      Independently re-verify no implicit/default sample-selection path
+      exists (read the diff); confirm the CLI's own confirmation gate is
+      real, not a no-op; confirm stage sequencing matches the vertical
+      plan's own dependency order exactly.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-conversation-memory.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: .pHive/epics/mnemosyne-repo-onboarding/stories/ro-06-collection-creation-and-scope-mapping.yaml
+      purpose: "Precedent for real-Qdrant-Cloud-credential-dependent stories keeping their own automated test suite mockable while documenting the real execution's own credential prerequisite separately."
+
+files_to_modify:
+  - file: bin/mnemosyne-conversation-pilot.mjs
+    change: "New file: CLI orchestrator — manifest-driven sample selection, explicit confirmation gate, cm-02..cm-07 stage sequencing, real result reporting."
+  - file: bin/mnemosyne-conversation-pilot.test.mjs
+    change: "New file: tests against stubbed stage implementations, covering the confirmation gate and sequencing."
+
+design_decisions:
+  - decision: "Sample selection is entirely operator-driven via cm-02's own manifest — the orchestrator has no auto-select code path at all."
+    rationale: "`[grill 3.2]` — an earlier draft left this implicit ('a handful of sessions'); a genuinely operator-reviewed pilot requires the operator to be the one who chooses which real content is touched, not an agent guessing on their behalf."
+  - decision: "This story's own real execution (against real content) is explicitly deferred to build/execute time, never performed during planning."
+    rationale: "This planning pass's own explicit instruction: plan the mechanism, never ingest/embed/persist real personal content as part of planning."
+
+cross_cutting:
+  - concern: conversation-privacy-safety
+    action: "The first real end-to-end exercise of both cm-01 scan checkpoints against genuinely real content — this story's own acceptance criteria require independently confirming the scan actually ran (not assumed skipped-because-clean)."
+  - concern: existing-infrastructure
+    action: "Orchestrates already-built stories (cm-02 through cm-07) — introduces zero new persistence/parsing/classification logic itself, purely sequencing + the confirmation gate."
+  - concern: loud-failure
+    action: "Refuses to run without explicit sample confirmation; any stage failure during the real pilot run is reported per-stage, never a generic all-or-nothing pipeline failure."
+
+risks:
+  - severity: high
+    description: "This is the first point real personal conversation content is actually persisted — any latent defect in any upstream story (cm-01 through cm-07) has its real-world blast radius realized here for the first time."
+    mitigation: "Deliberately small, operator-selected sample (named small maximum in acceptance criteria) bounds the real blast radius; every upstream story was independently reviewed and tested against fixtures first; the operator's own explicit confirmation gate is the final human checkpoint before any real content moves."
+  - severity: medium
+    description: "A pilot sample too small or too narrow (e.g. all from one project slug, despite the acceptance criterion) could fail to genuinely exercise cross-session clustering, giving false confidence."
+    mitigation: "Explicit acceptance criterion requiring 2+ distinct real project slugs in the sample — not left to chance or operator oversight."
+
+references:
+  - path: .pHive/epics/mnemosyne-conversation-memory/docs/design-discussion.md
+    relevant_excerpt: "§2.8 `[grill 3.2]` — the resolved, concrete selection-mechanism design this story implements exactly."
+  - path: .pHive/epics/mnemosyne-conversation-memory/docs/vertical-plan.md
+    relevant_excerpt: "Slice 6 — 'the first and ONLY point in this epic's story decomposition where real personal conversation content is persisted — by design, gated behind five full slices of already-working, already-tested infrastructure.'"
+
+metric:
+  applies: true
+  name: conversation_memory.pilot_sample_recall_verified
+  direction: up
+  unit: count
+  baseline: 0
+  target: 1
+  window: "cm-08 pilot run"
+  source:
+    kind: manual
+    ref: "At least one real, distilled pilot entry successfully retrieved via a real recall() call after the pilot completes — the concrete, falsifiable end-to-end proof this epic's own pipeline actually works, not merely that each stage's isolated tests passed."
+  verify_at: "cm-08 pilot run"
+  owner: researcher

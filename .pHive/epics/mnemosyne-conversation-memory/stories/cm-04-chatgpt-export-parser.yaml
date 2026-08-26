@@ -1,0 +1,143 @@
+id: cm-04-chatgpt-export-parser
+epic: mnemosyne-conversation-memory
+title: ChatGPT export (tree-DAG conversations.json) parser and normalizer
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [cm-01-secret-credential-scanner, cm-02-conversation-source-discovery]
+parallel_allowed: true
+parallel_rationale: variation
+
+description: |
+  Turns the real, confirmed ChatGPT export
+  (`~/Downloads/ChatGPT Data Export Feb 5 2026/conversations.json`,
+  47,884,497 bytes, 258 conversations — docs/research-brief.md §1.2) into
+  the SAME shared `ConversationTurn[]` shape `cm-03` produces (`cm-03`'s
+  `types.ts`, imported here unchanged) — a `variation` sibling of the
+  same normalization contract, different input parser.
+
+  Real, confirmed structural difference from `cm-03`'s input (never
+  assumed the same shape): each conversation's real content lives in a
+  `mapping` dict keyed by node id, each node carrying `message` (nullable
+  — root/system scaffold nodes have `message: null`), `parent`, and
+  `children[]` — a TREE, not a flat list. ChatGPT's own message-editing
+  feature creates sibling branches (multiple `children` off one node), so
+  a correct linearization walks from `current_node` BACK through `parent`
+  pointers (the real, currently-active conversation path), never a naive
+  forward walk from the root that could wander into an edited-away
+  branch. Nodes whose `message.metadata.is_visually_hidden_from_
+  conversation` is true (confirmed present on real system-scaffold nodes
+  this planning pass) are filtered — never treated as real conversational
+  turns.
+
+  Runs `cm-01`'s `scanForSecrets()` over every extracted turn, identical
+  discipline to `cm-03` (docs/design-discussion.md §2.8).
+
+acceptance_criteria:
+  - "Given a real conversation object from conversations.json, when parseChatGptExport() runs, then it linearizes the conversation by walking from current_node back through parent pointers, producing one ConversationTurn per real message node in the active path, in chronological order"
+  - "Given a conversation containing a branched/edited message (multiple children off one node — a real condition in a 258-conversation export with message editing enabled), when parsed, then only the ACTIVE path (per current_node) is included — sibling branches abandoned by editing are excluded, verified against a real or realistically-constructed multi-branch fixture, not a synthetic single-branch-only fixture"
+  - "Given a node whose message.metadata.is_visually_hidden_from_conversation is true, or whose message is null (a root/system scaffold node, confirmed present in real export data), when parsed, then that node is excluded from the resulting ConversationTurn[] — never surfaced as a real conversational turn"
+  - "Given a node's message.author.role (system/user/assistant), when parsed, then the resulting ConversationTurn's role field matches exactly — verified against real role values confirmed this planning pass"
+  - "Given the full 258-conversation real export structure (top-level array, each with title/create_time/mapping/... per the real, confirmed keys), when parseChatGptExport() runs over the whole file, then it completes without loading response content it doesn't need (image/file attachment blobs referenced by content_type are never read as conversational text)"
+  - "Given extracted text containing a fixture secret (from cm-01's own test corpus), when parseChatGptExport() runs, then the corresponding ConversationTurn is flagged as quarantined, identical behavior to cm-03's own quarantine acceptance criterion"
+
+steps:
+  - id: research
+    description: |
+      Re-confirm the real conversations.json shape directly (top-level
+      array length, per-conversation key set, per-mapping-node shape)
+      against the real, already-located file
+      (~/Downloads/ChatGPT Data Export Feb 5 2026/conversations.json) —
+      do not build the DAG-walk algorithm from research-brief.md's own
+      citations alone; re-read a handful of real conversations directly,
+      specifically hunting for a real multi-branch (edited) example to
+      confirm the current_node/parent-walk algorithm's correctness
+      against real, not merely hypothetical, branching.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests against real-shaped FIXTURE conversation
+      objects (synthetic content mirroring the real schema exactly,
+      including a genuine multi-branch/edited case and a scaffold-node
+      case, never the operator's actual export content in the automated
+      suite) covering every acceptance criterion.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      Implement lib/mnemosyne/conversation-memory/parseChatGptExport.ts:
+      mapping-tree walk from current_node, scaffold/hidden-node
+      filtering, role/content extraction into cm-03's shared
+      ConversationTurn shape, cm-01 scan integration.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: |
+      Independently re-verify the DAG-walk correctness against the
+      multi-branch fixture (not just the happy-path single-branch case),
+      confirm scaffold nodes never leak through, confirm cm-01's scanner
+      is genuinely called.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-conversation-memory.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/conversation-memory/types.ts
+      purpose: "cm-03's shared ConversationTurn contract, imported here unchanged — this story's entire job is to produce this same shape from a structurally different input."
+    - path: lib/mnemosyne/conversation-memory/scanForSecrets.ts
+      purpose: "cm-01's shared detector, called identically to cm-03's own usage."
+
+files_to_modify:
+  - file: lib/mnemosyne/conversation-memory/parseChatGptExport.ts
+    change: "New file: mapping-tree DAG walk from current_node, scaffold-node filtering, ConversationTurn production, cm-01 scan integration."
+  - file: lib/mnemosyne/conversation-memory/parseChatGptExport.test.ts
+    change: "New file: tests against real-shaped fixture conversation objects, including a genuine multi-branch case."
+  - file: lib/mnemosyne/conversation-memory/__fixtures__/chatgpt-conversations/
+    change: "New directory: synthetic, schema-accurate fixture conversation objects (never real operator export content)."
+
+design_decisions:
+  - decision: "Linearize by walking BACKWARD from current_node through parent pointers, never forward from the tree's root."
+    rationale: "ChatGPT's message-editing feature creates real sibling branches off a shared parent (confirmed structurally possible from the real mapping/children[] shape); current_node is the export's own pointer to the currently-ACTIVE path — a forward walk risks wandering into an edited-away branch and producing a linearization that doesn't match what the operator actually saw/kept."
+  - decision: "Attachment/image content (content_type other than text) is never read as conversational text."
+    rationale: "This story's scope is conversational TEXT memory, matching this epic's own goal (design-discussion §1) — image/file attachment content is out of scope, named explicitly rather than silently attempted and mishandled."
+
+cross_cutting:
+  - concern: conversation-privacy-safety
+    action: "cm-01's scanner runs over every extracted turn — identical parse-time checkpoint to cm-03."
+  - concern: provenance-completeness
+    action: "Every ConversationTurn carries sessionId (mapped from conversation_id), timestamp (from create_time), and a projectSlug of null (ChatGPT conversations have no repo/project association — explicitly null, not omitted, per interfaces.ts's own 'explicit empty over omission' convention already established in ingestDocument.ts)."
+  - concern: existing-infrastructure
+    action: "Zero new persistence mechanism — output feeds cm-05/cm-06/cm-07 exactly like cm-03's output does, through the same shared contract."
+
+risks:
+  - severity: medium
+    description: "A naive/incorrect DAG-walk could silently produce a WRONG linearization for an edited/branched conversation (e.g. including an abandoned branch, or missing part of the real active path) without any obvious signal that something is wrong."
+    mitigation: "Research step explicitly hunts for and confirms a real multi-branch example before implementation; test-spec requires a genuine multi-branch fixture, not only a single-branch happy path — this is a NAMED, first-class acceptance criterion, not an edge case left to chance."
+  - severity: low
+    description: "The real export's `moderation_results`, `plugin_ids`, `gizmo_id`/`gizmo_type` (custom-GPT metadata), and other top-level fields (research-brief §1.2's full key list) are not consumed by this story's first cut."
+    mitigation: "Named explicitly as an accepted scope limitation — this story's job is turn extraction, not full export-fidelity preservation; a future story could extend the ConversationTurn shape's metadata if this proves valuable."
+
+references:
+  - path: .pHive/epics/mnemosyne-conversation-memory/docs/research-brief.md
+    relevant_excerpt: "§1.2 — the full, real, confirmed conversations.json shape (258 conversations, mapping tree structure, scaffold-node metadata) this parser is built against, plus the real byte counts."
+  - path: .pHive/epics/mnemosyne-conversation-memory/docs/design-discussion.md
+    relevant_excerpt: "§3 Risks — 'ChatGPT export's tree-DAG structure is more complex to linearize... a naive mapping-dict walk could mis-thread branched/edited conversations' — the exact risk this story's test-spec step is required to address with a real multi-branch fixture."
+
+metric:
+  applies: true
+  name: conversation_memory.chatgpt_conversations_parsed_successfully
+  direction: up
+  unit: percent
+  baseline: null
+  target: 100
+  window: "cm-08 pilot run"
+  source:
+    kind: manual
+    ref: "Fraction of the pilot's real, operator-selected ChatGPT conversations (including at least one branched/edited one) that parse without a loud failure or a linearization the operator flags as wrong — measured directly in cm-08."
+  verify_at: "cm-08 pilot run"
+  owner: developer

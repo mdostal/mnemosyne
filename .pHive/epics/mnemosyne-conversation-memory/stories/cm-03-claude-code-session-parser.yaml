@@ -1,0 +1,151 @@
+id: cm-03-claude-code-session-parser
+epic: mnemosyne-conversation-memory
+title: Claude Code JSONL transcript parser and normalizer
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [cm-01-secret-credential-scanner, cm-02-conversation-source-discovery]
+parallel_allowed: true
+parallel_rationale: variation
+
+description: |
+  Turns a real Claude Code session JSONL file (docs/research-brief.md
+  §1.1's confirmed schema: line-per-event, `type: "user"|"assistant"`,
+  `message.content` as a string or an array of `text`/`thinking`/
+  `tool_use`/`tool_result` blocks, `uuid`/`parentUuid` threading,
+  `cwd`/`gitBranch`/`timestamp` metadata) into the shared
+  `ConversationTurn[]` normalized shape both this story and `cm-04`
+  produce (docs/structured-outline.md §2, Phase 2) — the ONE contract
+  every downstream story (`cm-05`/`cm-06`/`cm-07`) depends on, never a
+  source-specific field.
+
+  Streams the file line-by-line — a real, testable memory bound, never
+  loading a 50MB+ file fully into a single in-memory string (this
+  session's own transcript is 53,166,373 bytes, confirmed directly this
+  planning pass). `thinking` blocks' opaque, large base64 `signature`
+  field is DROPPED entirely (pure noise, confirmed directly by reading a
+  real assistant turn this planning pass — no semantic content, a
+  cryptographic signature over the model's own internal reasoning).
+  `tool_use`/`tool_result` blocks are reduced to one bounded excerpt line
+  each (tool name + a short truncated summary), never dropped entirely
+  (tool activity is often real signal for WHAT was built) and never kept
+  in full (a real `Bash` tool call's `input.command` can itself be
+  arbitrarily long).
+
+  Runs `cm-01`'s `scanForSecrets()` over every extracted turn's text
+  before returning — secrets never reach `cm-05`'s LLM classification
+  call, not just never reach storage (docs/design-discussion.md §2.8,
+  the "run twice" design).
+
+acceptance_criteria:
+  - "Given a real Claude Code session JSONL file, when parseClaudeCodeSession() runs, then it produces one ConversationTurn per real user/assistant turn, in original order, each carrying role, extracted text, timestamp, sessionId, and decoded projectSlug"
+  - "Given an assistant turn containing a `thinking` content block, when parsed, then the block's `signature` field is never present anywhere in the resulting ConversationTurn — verified by asserting the raw signature string never appears in output"
+  - "Given an assistant turn containing a `tool_use` block, when parsed, then the resulting turn's text includes a bounded excerpt (tool name + truncated summary, capped at a named constant) — never the full raw `input` payload verbatim, and never silently dropped/omitted from the turn's text entirely"
+  - "Given a 50MB+ real session file, when parseClaudeCodeSession() runs, then it processes the file via line-by-line streaming — verified by a test asserting peak memory usage does not scale with the full file size (a real, measured bound, not merely a code-review claim)"
+  - "Given extracted text containing a fixture secret (from cm-01's own test corpus), when parseClaudeCodeSession() runs, then the corresponding ConversationTurn is flagged as quarantined (never silently dropped, never silently passed through unflagged) — verified against cm-01's real scanForSecrets() output, not a stubbed/mocked scan result"
+  - "Given a session JSONL file with malformed/unparseable lines (a real, expected condition — harness bookkeeping lines like `{\"type\":\"mode\",...}` are valid-but-non-conversational, confirmed directly this planning pass), when parseClaudeCodeSession() runs, then non-conversational lines are skipped (never treated as a parse failure) and the function fails loudly only on a genuinely malformed JSON line, naming the line number"
+
+steps:
+  - id: research
+    description: |
+      Re-confirm the real JSONL schema directly against 2-3 real, current
+      session files from different real projects (not assumed from this
+      planning pass's own earlier sampling alone — confirm it still holds
+      for sessions this story's implementer reads fresh). Confirm the
+      exact set of non-conversational line `type` values to skip (`mode`,
+      `permission-mode`, `file-history-snapshot`, and any others found).
+      Decide the tool-excerpt bound (a named constant, e.g. 200 chars)
+      and document the rationale.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests against real, checked-in FIXTURE session files
+      (synthetic content mirroring the real schema, never the operator's
+      actual transcripts in the automated suite) covering every
+      acceptance criterion, including a large-file streaming-memory test
+      and a quarantine-flagging test using cm-01's real fixture secrets.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      Implement lib/mnemosyne/conversation-memory/parseClaudeCodeSession.ts
+      and the shared lib/mnemosyne/conversation-memory/types.ts
+      (ConversationTurn contract, also consumed by cm-04). Line-by-line
+      streaming read, thinking-signature drop, tool-excerpt bounding,
+      cm-01 scan integration.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: |
+      Independently re-verify streaming behavior (no full-file buffering
+      anywhere in the diff), confirm cm-01's scanner is genuinely called
+      (not stubbed out), confirm no signature/raw-tool-payload leakage
+      into output.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-conversation-memory.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/conversation-memory/scanForSecrets.ts
+      purpose: "cm-01's shared detector, called here at parse time — before any LLM classification call ever sees extracted text."
+    - path: lib/mnemosyne/ingest/ingestDocument.ts
+      purpose: "The eventual, unchanged persist primitive this story's OUTPUT feeds (via cm-07) — this story itself never calls remember()/ingestDocument() directly."
+
+files_to_modify:
+  - file: lib/mnemosyne/conversation-memory/types.ts
+    change: "New file: the shared ConversationTurn contract, imported by cm-04/cm-05/cm-06/cm-07."
+  - file: lib/mnemosyne/conversation-memory/parseClaudeCodeSession.ts
+    change: "New file: streaming JSONL parser, thinking-signature drop, tool-excerpt bounding, cm-01 scan integration."
+  - file: lib/mnemosyne/conversation-memory/parseClaudeCodeSession.test.ts
+    change: "New file: tests against fixture session files."
+  - file: lib/mnemosyne/conversation-memory/__fixtures__/claude-code-sessions/
+    change: "New directory: synthetic, schema-accurate fixture session files (never real operator transcripts)."
+
+design_decisions:
+  - decision: "Line-by-line streaming, never a full-file in-memory load."
+    rationale: "Real sessions run 6MB to 53MB+ (confirmed this planning pass); a full-file load for every one of 234+ real sessions is an avoidable memory/latency cost this story's own design should not incur."
+  - decision: "Tool-call blocks reduced to a bounded excerpt, never dropped or kept in full."
+    rationale: "Tool activity is real signal (what was actually built/changed), but raw tool payloads (a full Bash command string, a full file-read result) are exactly the kind of noise design-discussion §2.7 identifies as the reason raw transcripts can't feed ingestDocument() directly."
+  - decision: "This story's output is normalized turns, never a direct remember()/ingestDocument() call."
+    rationale: "Persistence is cm-07's job alone (design-discussion §2.1) — keeps this story's own blast radius bounded to parsing correctness, testable with zero live Qdrant dependency."
+
+cross_cutting:
+  - concern: conversation-privacy-safety
+    action: "cm-01's scanner runs over every extracted turn before this story returns — the parse-time checkpoint of the epic's two-checkpoint secret-scan design."
+  - concern: provenance-completeness
+    action: "Every ConversationTurn carries sessionId/timestamp/projectSlug/turnIndex — the provenance fields cm-07's eventual persisted entries trace back to a real position in the source session, never an anonymous blob."
+  - concern: existing-infrastructure
+    action: "Zero new persistence mechanism — this story's output is consumed by cm-05/cm-06/cm-07, which alone compose the existing remember() cascade."
+
+risks:
+  - severity: medium
+    description: "The real JSONL schema could vary across Claude Code CLI versions (this session's own transcript records `version: 2.1.229` on every line) — a schema assumption confirmed against one version's output might not hold for an older or newer session file among the real 234+."
+    mitigation: "Research step samples multiple real, current sessions; unparseable/unexpected block types fail loudly (named acceptance criterion) rather than being silently skipped, surfacing version-drift issues instead of hiding them."
+  - severity: low
+    description: "Tool-excerpt bounding could discard genuinely important signal (a critical command whose truncated summary loses the part that mattered)."
+    mitigation: "Named, accepted limitation — the full raw session file remains the read-only source of truth on disk, permanently, so nothing is unrecoverably lost; a future refinement of the excerpt strategy is a separate, later decision."
+
+references:
+  - path: .pHive/epics/mnemosyne-conversation-memory/docs/research-brief.md
+    relevant_excerpt: "§1.1 — the full, real, confirmed JSONL schema (envelope fields, content block types, the thinking-signature noise finding) this parser is built against."
+  - path: .pHive/epics/mnemosyne-conversation-memory/docs/structured-outline.md
+    relevant_excerpt: "§2 Phase 2 — the exact ConversationTurn contract shape and the streaming/excerpting design decisions."
+
+metric:
+  applies: true
+  name: conversation_memory.claude_code_sessions_parsed_successfully
+  direction: up
+  unit: percent
+  baseline: null
+  target: 100
+  window: "cm-08 pilot run"
+  source:
+    kind: manual
+    ref: "Fraction of the pilot's real, operator-selected Claude Code sessions that parse without a loud failure — measured directly in cm-08."
+  verify_at: "cm-08 pilot run"
+  owner: developer

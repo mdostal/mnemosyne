@@ -1,0 +1,192 @@
+id: cm-07-distillation-and-persist
+epic: mnemosyne-conversation-memory
+title: Bounded distillation into memory entries, persisted via the shipped remember() cascade
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [cm-06-cross-session-clustering, cm-05-usefulness-trash-triage]
+
+description: |
+  What "clean up the conversations and context" concretely produces
+  (docs/design-discussion.md §2.7, required-coverage area #4) — the real
+  transformation, named explicitly, never left abstract: a raw session
+  (up to 50MB+) becomes a BOUNDED, small number of high-signal memory
+  entries per session, never a 1:1 chunk-per-4KB re-embedding of the raw
+  transcript (which would produce an absurd ~12,500 chunks for a 50MB
+  session under `ingestDocument()`'s own `CHUNK_SIZE_BYTES = 4_000` —
+  explicitly rejected, docs/design-discussion.md §2.7).
+
+  Per session, produces: (a) a small number of decision/fact entries
+  (concrete, durable claims the session established), (b) a small number
+  of open-question entries (unresolved threads, explicitly tagged as
+  such — never presented as settled fact), and (c) exactly ONE
+  session-summary entry (carrying `cm-05`'s own summary forward, tagged
+  with full source-session provenance).
+
+  **Mechanism for (a)/(b), named explicitly (docs/design-discussion.md
+  §9 amendment — round 1 never specified this at all):** ONE bounded
+  Gemini call per distilled session, via `cm-05`'s own shared
+  `geminiClient.ts` primitive (imported unchanged, never reimplemented —
+  mirrors `cm-04` importing `cm-03`'s `types.ts`, §2.1), input capped to
+  a named max character count identically to `cm-05`'s own discipline,
+  returning `{ decisions: string[], openQuestions: string[] }` (each
+  bounded to a named max count). Deliberately a SEPARATE call from
+  `cm-05`'s own triage call, not merged into one: this call only ever
+  runs for the strict subset of sessions that already passed triage as
+  `keep`/`uncertain` AND were selected/clustered (`[grill 2.1]`), while
+  `cm-05`'s own call runs for every discovered session including ones
+  that end up `trash`. Merging them would make every session pay this
+  call's cost even when immediately discarded — the opposite of the
+  heuristic-prefilter's own cost-bounding purpose (§2.5); kept separate,
+  this call's real volume is already bounded to a strict subset of
+  `cm-05`'s, for free, by the pipeline's own existing shape.
+
+  This is the ONLY story in this epic that calls `ingestDocument()`/
+  `remember()` — every other story (`cm-01`...`cm-06`) produces
+  intermediate, in-memory or locally-cached artifacts, never touching
+  Qdrant. Runs `cm-01`'s `scanForSecrets()` ONE FINAL TIME, immediately
+  before each `remember()` call, over the final distilled text — the
+  persist-time checkpoint of the epic's two-checkpoint design (docs/
+  design-discussion.md §2.8), mirroring `crawlAndIngest.ts`'s own
+  "re-checked immediately before every individual fetch, never checked
+  once and trusted" discipline exactly.
+
+  Writes with `scope: 'meta'` (docs/design-discussion.md §2.3's first
+  real consumer of `meta` scope) and
+  `metadata.source: 'external_conversation'`,
+  `metadata.chat_source: 'claude-code' | 'chatgpt'`, `metadata.
+  session_id`, `metadata.project_slug`, `metadata.cluster_id` — carrying
+  forward `m-09`'s own good provenance-completeness design decision
+  (`chat_source`/timestamp/participants) while extending it with fields
+  m-09 never anticipated (docs/design-discussion.md §7).
+
+acceptance_criteria:
+  - "Given a triaged, clustered session, when distillAndRemember() runs, then it produces a BOUNDED number of memory entries (a named maximum constant, e.g. no more than N decision/fact entries plus exactly 1 summary entry) — never one entry per raw chunk of the original transcript"
+  - "Given the final distilled text for any entry, when distillAndRemember() runs, then cm-01's scanForSecrets() is called on it IMMEDIATELY BEFORE the corresponding remember() call — verified by call-order instrumentation in the test, not merely asserted present somewhere in the function"
+  - "Given a scan match on distilled text immediately before persist, when distillAndRemember() runs, then that specific entry's remember() call is NEVER made — the match is quarantined into the same human-review structure cm-01/cm-05 already establish, and the run continues with the remaining entries rather than aborting entirely (mirrors ingestDocument()'s own partial-failure reporting discipline)"
+  - "Given a successful distillation, when the resulting remember() calls are inspected, then every one uses scope='meta' and carries metadata.source='external_conversation', chat_source, session_id, project_slug, and cluster_id (cluster_id explicitly null for a session cm-06 did not cluster, never omitted) — the full provenance-completeness contract, never a partial subset"
+  - "Given this story's own call to ingestDocument(), when reviewed, then it is called UNCHANGED (same public signature, no forked/modified copy) — verified by confirming the import is the real ro-10/ro-13 module, not a local reimplementation"
+  - "Given an open-question entry, when persisted, then its metadata/text explicitly marks it as an unresolved/open item (a distinct tag, e.g. metadata.entry_type='open_question') — never indistinguishable from a decision/fact entry at recall() time"
+  - "Given a triaged keep/uncertain session, when distillAndRemember() runs, then the decision/fact and open-question entries are produced by exactly ONE bounded call to the shared geminiClient.ts primitive (imported from cm-05, never a reimplemented copy) — verified by confirming the import is the real shared module, and that its input is capped to the same named max character count discipline as cm-05's own call"
+  - "Given a trash-verdict session, when distillAndRemember() runs, then it is never invoked at all for that session — this story's own extraction call only ever runs on the strict subset of sessions that reached cm-06's clustering input, verified by a test asserting geminiClient.ts is never called for a trash-verdict fixture"
+
+steps:
+  - id: research
+    description: |
+      Confirm meta scope's real, live behavior end-to-end (docs/design-
+      discussion.md §3's named risk: "meta scope is thinly implemented
+      today") — does a remember() call with scope='meta' against the
+      live, configured layer stack actually route to a real collection
+      today, or does it require additional wiring this story must add?
+      Confirm directly against the live code (client.ts, layers/
+      registry.ts), not assumed from the type system alone. Decide the
+      real collection-naming convention for this epic's own meta
+      collection (open question #1, docs/design-discussion.md §5),
+      surfacing the operator's answer as a prerequisite before
+      implementation proceeds. Confirm dostal-shared-gemini's real,
+      current rate limits/model catalog directly against the live API
+      (design-discussion §9.7), same sub-task as cm-05's own research
+      step, independently re-confirmed here rather than assumed carried
+      over unchanged.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests against a fake IngestClient (mirrors
+      ingestDocument.ts's own testing convention, never live Qdrant)
+      covering every acceptance criterion, including the persist-time
+      scan-then-quarantine-then-continue behavior and the full
+      provenance-metadata contract.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      Implement lib/mnemosyne/conversation-memory/distillAndRemember.ts:
+      bounded entry production (decision/fact/open-question/summary),
+      persist-time cm-01 scan, ingestDocument() calls with full
+      provenance metadata, partial-failure/quarantine reporting.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: |
+      Independently re-verify (highest scrutiny in this epic, mirrors
+      ro-06's own precedent for its own highest-blast-radius story): the
+      persist-time scan genuinely runs before every remember() call
+      (read the diff, confirm call order); entry counts are genuinely
+      bounded; ingestDocument() is genuinely unmodified/unforked; no
+      code path bypasses the scan for any entry type.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-conversation-memory.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/ingest/ingestDocument.ts
+      purpose: "The ONLY persist primitive this story calls — unchanged, never forked. Its MAX_INGEST_BYTES/CHUNK_SIZE_BYTES caps are why bounded distillation (not raw re-chunking) is this story's own core design decision."
+    - path: lib/mnemosyne/interfaces.ts
+      purpose: "Scope type ('project'|'enterprise'|'meta') and the Provenance/Content shapes this story's metadata contract is held to."
+    - path: lib/mnemosyne/conversation-memory/scanForSecrets.ts
+      purpose: "cm-01's shared detector, called here as the persist-time checkpoint — the second of the epic's two checkpoints."
+    - path: lib/mnemosyne/conversation-memory/geminiClient.ts
+      purpose: "cm-05's shared Gemini API primitive, imported unchanged here for this story's own, separate bounded call producing decision/fact/open-question entries (docs/design-discussion.md §9.6)."
+
+files_to_modify:
+  - file: lib/mnemosyne/conversation-memory/distillAndRemember.ts
+    change: "New file: bounded distillation (decision/fact/open-question/summary entry production), persist-time cm-01 scan, ingestDocument() calls with full provenance metadata."
+  - file: lib/mnemosyne/conversation-memory/distillAndRemember.test.ts
+    change: "New file: tests against a fake IngestClient, covering bounded-entry-count, scan-order, and provenance-metadata acceptance criteria."
+
+design_decisions:
+  - decision: "Bounded entry count per session (a named maximum), never one entry per raw 4KB chunk."
+    rationale: "ingestDocument()'s own CHUNK_SIZE_BYTES=4000 would produce ~12,500 chunks for a 50MB session if fed raw content — explicitly rejected (design-discussion §2.7); the fix is distillation producing genuinely small, high-signal output, not raising ingestDocument()'s own caps."
+  - decision: "Persist-time secret scan runs immediately before EACH remember() call, never once per whole session."
+    rationale: "Mirrors crawlAndIngest.ts's own SSRF-guard discipline exactly — re-checked before every individual operation, never cached/trusted from an earlier check."
+  - decision: "scope='meta', metadata.source='external_conversation' — carrying forward, not reinventing, m-09's own chat_source/provenance design."
+    rationale: "docs/design-discussion.md §7's explicit AC-by-AC supersession table for m-09 — its good design decisions are preserved, its unconfirmed assumptions (Gemini/Workbench format) are corrected."
+  - decision: "Decision/fact and open-question entries are produced by ONE bounded call to cm-05's shared geminiClient.ts, kept SEPARATE from cm-05's own triage call rather than merged into it."
+    rationale: "docs/design-discussion.md §9.6 — round 1 never named a mechanism for this at all (a real, pre-existing gap this correction resolves, not an implementation-time guess it overrides). Separate calls keep each call's cost scoped to exactly the sessions that need it: cm-05's call runs on every discovered session (including trash-bound ones), this story's call only on the strict subset that already passed triage and clustering — merging them would make every session pay this story's own extraction cost even when immediately discarded."
+
+cross_cutting:
+  - concern: conversation-privacy-safety
+    action: "The persist-time checkpoint of the epic's two-checkpoint secret-scan design — this story's single highest-scrutiny cross-cutting requirement, held to ro-06/ro-11's own independent-reviewer-re-verification bar."
+  - concern: provenance-completeness
+    action: "Full metadata contract (source/chat_source/session_id/project_slug/cluster_id) on every persisted entry — explicit acceptance criterion, not left to implementation-time judgment."
+  - concern: existing-infrastructure
+    action: "ingestDocument()/remember() called unchanged — no forked copy, no parallel persistence mechanism."
+  - concern: loud-failure
+    action: "A persist-time scan match quarantines that specific entry and continues with the rest (partial-failure reporting), never a silent skip and never a full-run abort that hides which entries actually landed. geminiClient.ts's own loud-failure-on-malformed-response/exhausted-retry behavior (cm-05's own acceptance criteria) applies identically here — never a silently-guessed decision/open-question entry."
+  - concern: existing-infrastructure
+    action: "geminiClient.ts imported unchanged from cm-05 — never a second, independently-implemented Gemini call path (docs/design-discussion.md §9.6)."
+
+risks:
+  - severity: critical
+    description: "This is the ONLY story in the epic that actually writes real content to a persisted, searchable store — any gap in the persist-time scan checkpoint, or any bounded-entry-count violation letting near-raw content through, has this epic's single highest real blast radius."
+    mitigation: "Two independent scan checkpoints (parse-time in cm-03/cm-04, persist-time here) rather than relying on either alone; independent reviewer re-verification of call order (not the description); the pilot-before-full-corpus sequencing (cm-08) means this story's real-world exposure is deliberately small and operator-reviewed before any scale-out."
+  - severity: medium
+    description: "meta scope's thin current implementation (design-discussion §3) could require unplanned wiring work discovered only during this story's own research/implementation steps."
+    mitigation: "Named explicitly as a risk, not assumed solved; the research step's own first task is confirming meta scope's real, live behavior before implementation proceeds, surfacing any gap as an early, visible finding rather than a late implementation surprise."
+
+references:
+  - path: .pHive/epics/mnemosyne-conversation-memory/docs/design-discussion.md
+    relevant_excerpt: "§2.1, §2.7, §2.8 — the full distillation design, the 'why raising the cap is the wrong fix' reasoning, and the two-checkpoint secret-scan discipline this story implements the second half of. §9.6 — the Gemini-call mechanism for decision/fact/open-question extraction (round 1's own unspecified gap), and why it's a separate call from cm-05's, not merged."
+  - path: .pHive/epics/mnemosyne-conversation-memory/stories/cm-05-usefulness-trash-triage.yaml
+    relevant_excerpt: "geminiClient.ts's own origin story — the shared Gemini primitive this story imports unchanged rather than reimplementing."
+  - path: .pHive/epics/mnemosyne-repo-onboarding/stories/ro-06-collection-creation-and-scope-mapping.yaml
+    relevant_excerpt: "The rigor bar (research-gated, independent-reviewer-re-verification, explicit no-bypass-anywhere posture) this story — the epic's own single highest-blast-radius story — is held to."
+
+metric:
+  applies: true
+  name: conversation_memory.persisted_entries_per_session
+  direction: down
+  unit: count
+  baseline: null
+  target: 10
+  window: "cm-08 pilot run"
+  source:
+    kind: manual
+    ref: "Real, measured count of memory entries produced per pilot session in cm-08, reported in cm-09's deep-dive report — the concrete, falsifiable proof that distillation genuinely bounds output (never approaching ingestDocument()'s own ~12,500-chunk raw-reindex worst case)."
+  verify_at: "cm-08 pilot run"
+  owner: researcher

@@ -1,0 +1,196 @@
+name: mnemosyne-conversation-memory
+title: Conversation memory — discovery, triage, clustering, and distillation of real chat history
+target_codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+methodology: tdd
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: dev
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [privacy-safety, multi-system-integration, data-pipeline, real-scale-personal-data]
+  roster: [researcher, technical-writer, tpm]
+  per_tag_reasoning:
+    privacy-safety: "New, first-class privacy/safety risk category (secret scanning before persist, human-gated triage, no-auto-delete) — the highest-blast-radius concern this repo has planned to date, held to ro-06/ro-11's own rigor bar."
+    multi-system-integration: "New parsing layer (2 source-specific parsers) + triage + clustering + distillation, composing but genuinely extending 4 already-shipped subsystems (ingestDocument, remember() cascade, memory-levels taxonomy, org-tree/scope model)."
+    data-pipeline: "A 7-phase sequential pipeline (discover -> parse -> triage -> cluster -> distill -> pilot -> deep-dive validation), each phase's output the next phase's real input."
+    real-scale-personal-data: "234+ real Claude Code session transcripts (up to ~50MB+ each, 4.0GB total incl. scratch) plus a real 258-conversation/47.9MB ChatGPT export — real, confirmed volume, not assumed."
+  confidence: high
+  gate_decisions:
+    scale: large
+    h_v_required: true
+    structured_outline_required: true
+
+description: |
+  Operator's own words (verbatim, full context in docs/design-discussion.md
+  §1): "at some point we need a way to filter through ALL of the things
+  discussed, get it into memories, and figure out usefulness and trash and
+  stuff... ideally then we are able to correctly cluster items and index
+  and deal with it to break out and clean up the conversations and context
+  as well -- i have chatted across 30 plus sessions and different things
+  and different overall mixes of which ones are helping with what... so,
+  ideally we can solidify and fix that into mnemosyne memory at some point
+  as well -- and that will need a DEEP DIVE test"
+
+  Real data reconnaissance (docs/research-brief.md §1) confirms: 234 real
+  (non-scratch) Claude Code project directories under
+  `~/.claude/projects/` out of 1404 total, individual session transcripts
+  ranging from ~6MB to 50MB+ (this session's own transcript: 53,166,373
+  bytes), plus a real, confirmed 258-conversation/47,884,497-byte ChatGPT
+  export (`~/Downloads/ChatGPT Data Export Feb 5 2026/conversations.json`).
+  A real Gemini export was searched for; round 1's "confirmed ABSENT"
+  conclusion was CORRECTED 2026-08-25 (docs/design-discussion.md §9,
+  operator-flagged): Gemini API access is real and reachable via
+  Portunus (`{{secret:personalsites-487021-dostal-shared-gemini}}`, same
+  shared-swarm provenance as the already-proven-working
+  `dostal-shared-qdrant` key), and its real role is powering `cm-05`/
+  `cm-07`'s LLM-shaped steps, not retrieving chat history (a Gemini API
+  key cannot do that — §9.2). A real, single Gemini conversation export
+  (Share-link capture) was also found on this machine once the search
+  was widened, proving the export capability itself is real even though
+  no full-account Takeout export exists yet — `cm-10` makes this a real,
+  gated (not absent) part of this epic's own plan.
+
+  Built by composing the already-shipped `ingestDocument()`/`remember()`
+  cascade (ro-10/ro-13, unchanged) with genuinely new pieces: a
+  standalone secret/credential scanner (checked twice — parse-time and
+  persist-time, no bypass, mirroring ro-11's SSRF-guard posture exactly),
+  real-source discovery, source-specific transcript parsers (Claude Code,
+  ChatGPT, and a gated Gemini parser, `cm-10`) into a shared normalized
+  shape, heuristic+Gemini-LLM usefulness/trash triage with a mandatory
+  human-review gate (never automated deletion), embedding-based
+  cross-session clustering faceted by real project-slug metadata (the
+  existing production embedder, no new LLM/API surface), and a bounded
+  Gemini-LLM-backed distillation mechanism that turns a raw 50MB+
+  transcript into a small number of high-signal memory entries. Gemini
+  API access (Portunus, `dostal-shared-gemini`) is the concrete LLM
+  provider for the triage and distillation steps — see §9 for the
+  correction and rationale.
+
+  Explicitly, non-silently SUPERSEDES `mnemosyne-foundation`'s open
+  `m-09-external-chat-ingestion` story (docs/design-discussion.md §7 has
+  the full AC-by-AC disposition table) — m-09's exact deliverable (chat
+  parsers + content-hash dedup + an ingestion pipeline for
+  Gemini/Claude-Workbench exports) is fully re-covered by this epic's
+  `cm-03`/`cm-04` against the two REAL confirmed sources, with m-09's own
+  good design decisions (dedup by content hash, source-metadata
+  completeness) explicitly carried forward, not reinvented. `m-09`'s own
+  `note:` field is updated (docs-only) to point here; its `status:` field
+  is left unchanged (this repo's story-status enum has no `superseded`
+  convention to reuse) — the operator owns the final call on formally
+  closing it in `mnemosyne-foundation`'s own tracking.
+
+  Deliberately, explicitly contains NO full-234-session-corpus-ingestion
+  story (`ways_of_working.md`'s "don't build ahead of an explicit CBA"
+  rule, and this planning pass's own explicit instruction) — the epic
+  ends at a small, real, operator-selected PILOT (`cm-08`) and the
+  operator's own explicitly-requested DEEP DIVE validation test (`cm-09`),
+  producing a real, human-inspectable report the operator reviews before
+  any full-corpus decision is made, itself a genuinely separate, future,
+  not-yet-planned decision.
+
+notes: |
+  Planned 2026-08-25. Full research -> design-discussion -> grill (5
+  findings, all 5 resolved in round 1, unresolved_count: 0) -> H/V ->
+  structured-outline (large scope, confirmed against real code/data
+  reading, not assumed from the operator's own hint alone) pass. See
+  docs/ for the full trail.
+
+  Real research highlights (docs/research-brief.md has full citations):
+  - 1404 total ~/.claude/projects/ dirs, 234 real (non-scratch) after the
+    established `-private-tmp|-private-var-folders|scratchpad` filter.
+  - This session's own transcript: 53,166,373 bytes (~50.7MB) -- confirms
+    the operator's own "52MB" estimate.
+  - Real ChatGPT export: 258 conversations, 47,884,497-byte
+    conversations.json, a tree-DAG (`mapping` keyed by node id, walked
+    from `current_node` via `parent` pointers) -- structurally distinct
+    from Claude Code's linear, role-tagged JSONL.
+  - Round 1: no real Gemini export found anywhere on this machine (real
+    search performed, not assumed) -- m-09's "Gemini" framing considered
+    stale. CORRECTED 2026-08-25 (docs/design-discussion.md §9,
+    operator-flagged): Gemini API access is real/reachable via Portunus
+    (dostal-shared-gemini, same shared-swarm provenance/access pattern as
+    the already-proven-working dostal-shared-qdrant key; billing
+    confirmed enabled on personalsites-487021), and its real role is
+    powering cm-05/cm-07 as the LLM, not chat-history retrieval (a
+    Gemini API key structurally cannot do that). A real, single Gemini
+    conversation export (Share-link capture, not Takeout) was also found
+    at ~/Documents/work/moving-chaos/source_index/ once the search was
+    widened past round 1's own maxdepth-3 limit -- proof the export
+    capability is real, though no full-account Takeout export exists yet
+    (re-confirmed, wider search). New story cm-10 makes Gemini
+    conversation ingestion a real, gated, reachable part of this epic's
+    plan rather than a dropped/absent one.
+
+  Explicit, operator-facing relationship/decision notes (not silently
+  resolved):
+  - `meta` scope (already in the type system, thinly implemented) is
+    given its first real, concrete meaning by this epic -- not a new
+    Level 5 (docs/design-discussion.md §2.2/§2.3).
+  - A real, named, unresolved tension is surfaced (not silently ignored):
+    this epic's own `meta`-scope collection is scoped operator-personal-
+    only, but the deeper guarantee that a FUTURE third-party product
+    embedding Mnemosyne (Mode B, this repo's own "Roll Your Own RAG"
+    north star) never surfaces this content is explicitly out of scope
+    here (docs/design-discussion.md `[grill 3.1]`, open question #1).
+  - 5 open questions genuinely need the operator's explicit answer before
+    execution -- see docs/design-discussion.md §5 and
+    docs/structured-outline.md §6. Open question 5 (Gemini parser) is
+    RESOLVED as of the §9 correction; the other 4 stand unchanged.
+
+  Round-2 amendment (2026-08-25, docs/design-discussion.md §9, grill
+  round 2 in docs/grill-record.md -- 5 findings, all resolved): corrected
+  round 1's "Gemini confirmed absent" conclusion. cm-05/cm-07 revised to
+  name Gemini (Portunus dostal-shared-gemini) as their concrete LLM
+  provider via a new shared lib/mnemosyne/conversation-memory/
+  geminiClient.ts primitive; cm-02's gemini: not_found manifest entry
+  corrected to gemini: not_staged; new story cm-10-gemini-conversation-
+  ingestion added, gated on the operator staging a real export (a real
+  Share-link capture already exists on this machine as proof-of-
+  mechanism, at ~/Documents/work/moving-chaos/source_index/, not pulled
+  into this epic without separate explicit opt-in); m-09's own note:
+  field corrected to match.
+
+stories:
+  - id: cm-01-secret-credential-scanner
+    title: Standalone secret/credential scanning primitive
+    complexity: high
+    depends_on: []
+  - id: cm-02-conversation-source-discovery
+    title: Real-source discovery — Claude Code sessions + confirmed exports
+    complexity: medium
+    depends_on: []
+  - id: cm-03-claude-code-session-parser
+    title: Claude Code JSONL transcript parser and normalizer
+    complexity: high
+    depends_on: [cm-01-secret-credential-scanner, cm-02-conversation-source-discovery]
+  - id: cm-04-chatgpt-export-parser
+    title: ChatGPT export (tree-DAG conversations.json) parser and normalizer
+    complexity: high
+    depends_on: [cm-01-secret-credential-scanner, cm-02-conversation-source-discovery]
+  - id: cm-05-usefulness-trash-triage
+    title: Heuristic + LLM usefulness/trash triage with mandatory human review gate
+    complexity: high
+    depends_on: [cm-03-claude-code-session-parser, cm-04-chatgpt-export-parser]
+  - id: cm-06-cross-session-clustering
+    title: Embedding-based cross-session clustering faceted by project slug
+    complexity: medium
+    depends_on: [cm-05-usefulness-trash-triage]
+  - id: cm-07-distillation-and-persist
+    title: Bounded distillation into memory entries, persisted via the shipped remember() cascade
+    complexity: high
+    depends_on: [cm-06-cross-session-clustering, cm-05-usefulness-trash-triage]
+  - id: cm-08-bounded-operator-pilot
+    title: Bounded, operator-reviewed pilot over a small real sample
+    complexity: medium
+    depends_on: [cm-07-distillation-and-persist]
+  - id: cm-09-deep-dive-validation-test
+    title: Deep-dive validation test — the operator's own named requirement
+    complexity: high
+    depends_on: [cm-08-bounded-operator-pilot]
+  - id: cm-10-gemini-conversation-ingestion
+    title: Gemini conversation export (Share-link/Takeout) parser and normalizer — gated on operator staging a real export
+    complexity: high
+    depends_on: [cm-01-secret-credential-scanner, cm-02-conversation-source-discovery]

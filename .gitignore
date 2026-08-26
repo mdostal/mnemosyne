@@ -71,3 +71,5 @@ config/minerva.local.yaml
 !.pHive/epics/mnemosyne-agent-harness-install/**
 !.pHive/epics/mnemosyne-repo-onboarding/
 !.pHive/epics/mnemosyne-repo-onboarding/**
+!.pHive/epics/mnemosyne-conversation-memory/
+!.pHive/epics/mnemosyne-conversation-memory/**

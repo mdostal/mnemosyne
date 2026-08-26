@@ -1,0 +1,151 @@
+id: cm-09-deep-dive-validation-test
+epic: mnemosyne-conversation-memory
+title: Deep-dive validation test — the operator's own named requirement
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [cm-08-bounded-operator-pilot]
+
+description: |
+  The operator's own explicit, verbatim words: "that will need a DEEP
+  DIVE test." This is a real, structurally distinct story in this
+  epic's decomposition (required-coverage area #6) — never folded
+  silently into a generic "test" step of another story, per this
+  planning pass's own explicit instruction.
+
+  A thorough, real validation pass against `cm-08`'s REAL pilot output —
+  never synthetic fixtures, never a re-run of the unit/integration test
+  suites already covered by `cm-01` through `cm-08`'s own `test`/
+  `test-spec` steps (this story is not a redundant re-test of code
+  correctness; it validates real OUTCOME quality against real content).
+
+  Produces a real, inspectable output the operator can review before
+  trusting the system with the rest of their real history:
+
+  - **Per-session before/after:** real raw byte size vs. real number of
+    distilled entries produced (cm-07's bounded-count contract, made
+    concrete and visible per pilot session).
+  - **Every triage verdict, with its rationale** (cm-05's queue,
+    surfaced in full for the pilot sample — not summarized away).
+  - **Every cluster assignment** (cm-06's output, including whether the
+    cross-slug clustering acceptance criterion's real condition was
+    genuinely met).
+  - **Every secret-scan quarantine hit** — category + rough location
+    ONLY, content redacted (mirrors `cm-01`'s own redacted-preview
+    contract); the report itself is treated as sensitive/local-only
+    (docs/design-discussion.md `[grill 5.1]`'s named residual risk —
+    even a redacted report can reveal a secret's existence/category, so
+    the report is never treated as safe-to-share by virtue of redaction
+    alone).
+  - **Real `recall()` spot-checks** — a handful of real queries against
+    the pilot's own real, persisted content, confirming distilled memory
+    is genuinely retrievable and relevant (not merely that it was
+    written without error).
+
+acceptance_criteria:
+  - "Given cm-08's completed pilot run, when the deep-dive validation runs, then it reads cm-08's REAL output artifacts (the discovery manifest subset, the triage queue, the cluster assignments, the persisted entries) — never synthetic/fixture data standing in for them"
+  - "Given the per-session before/after section, when generated, then it reports the REAL raw source byte size (from cm-02's manifest) alongside the REAL count of distilled entries cm-07 actually produced for that session — both real, measured numbers, never estimated or assumed"
+  - "Given every triage verdict in the pilot sample, when the report is generated, then EACH ONE (not a sampled subset) appears with its real summary and rationale — the operator sees 100% of the pilot's own triage decisions, not a representative slice"
+  - "Given every secret-scan quarantine hit in the pilot run (if any), when the report is generated, then it names the category and rough location but NEVER reproduces the raw matched value — verified by a test asserting no fixture secret value appears verbatim anywhere in the generated report"
+  - "Given the report is generated, when inspected, then it is written to a local file path (never published, never sent over a network, never included in any artifact this planning convention would share externally) — the report's own sensitivity is treated as real, not merely redaction-implied safety"
+  - "Given the pilot's persisted content, when a real recall() spot-check query is run (a query genuinely related to the pilot sample's real topic, decided by this story's own research step), then at least one real, relevant hit is returned — a real, human-judged relevance check, not merely 'zero errors returned'"
+  - "Given the completed report, when presented to the operator, then it explicitly states whether it recommends proceeding to a future full-corpus decision or not — a real, stated recommendation (not a bare data dump the operator has to interpret unassisted), while making clear the FINAL decision remains the operator's own (per docs/design-discussion.md §5 open question #2, never pre-committed by this story)"
+
+steps:
+  - id: research
+    description: |
+      Design the report's real structure/format (a Markdown document,
+      mirroring this epic's own docs/ convention) and decide the real
+      recall() spot-check queries to run against the pilot's actual
+      topic content (informed by cm-08's real pilot sample, decided
+      concretely once that sample is known — not invented generically
+      here).
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests for the report-generation logic against
+      synthetic pilot-output fixtures (mirroring the real shape of
+      cm-08's artifacts) covering every acceptance criterion, including
+      the redaction/no-raw-secret-value assertion and the
+      recommendation-statement requirement.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      Implement the deep-dive report generator, consuming cm-08's real
+      output artifacts and producing
+      .pHive/epics/mnemosyne-conversation-memory/docs/deep-dive-report.md
+      (or an equivalent operator-facing artifact) per the acceptance
+      criteria above.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: |
+      Independently re-verify the redaction guarantee (no raw secret
+      value anywhere in a generated report, tested against real
+      fixture-shaped secrets, not merely code-reviewed); confirm the
+      report covers 100% of pilot triage verdicts, not a sample; confirm
+      the report is never written to a network-reachable/shareable
+      location by this story's own code.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-conversation-memory.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: .pHive/epics/mnemosyne-conversation-memory/docs/design-discussion.md
+      purpose: "§2.9's full deep-dive design and `[grill 5.1]`'s named residual redaction-context-leakage risk, which this story's own report-sensitivity acceptance criterion directly implements."
+
+files_to_modify:
+  - file: lib/mnemosyne/conversation-memory/generateDeepDiveReport.ts
+    change: "New file: reads cm-08's real pilot artifacts, produces the operator-facing validation report per the acceptance criteria."
+  - file: lib/mnemosyne/conversation-memory/generateDeepDiveReport.test.ts
+    change: "New file: tests against synthetic pilot-output fixtures, including redaction and completeness assertions."
+
+design_decisions:
+  - decision: "This is its own story, never a step folded into cm-08's own test phase."
+    rationale: "The operator's own explicit, separately-named requirement ('that will need a DEEP DIVE test') — folding it into cm-08's generic test step would silently demote a requirement the operator stated as its own distinct thing, exactly the failure mode this task's own instructions warned against."
+  - decision: "The report covers the FULL pilot sample (100% of triage verdicts), never a representative subset."
+    rationale: "A sampled report would undermine the report's own purpose — the operator needs to see everything the pilot actually did before trusting the system with the rest of their real history, not a curated highlight reel."
+  - decision: "The report itself is treated as sensitive/local-only, never assumed safe to share by virtue of redaction alone."
+    rationale: "`[grill 5.1]` — redacted-but-contextual output (e.g. a redacted AWS_SECRET_ACCESS_KEY=*** line) can still reveal a credential's existence/naming convention; named as a real, accepted residual risk rather than claimed fully solved."
+
+cross_cutting:
+  - concern: conversation-privacy-safety
+    action: "The report's own redaction guarantee and local-only-sensitivity treatment are this concern's final checkpoint in the epic — the human-facing artifact that makes every upstream safety mechanism's real behavior visible and auditable."
+  - concern: documentation
+    action: "The report format itself, once generated once for real, should get a short discoverable doc note (what it covers, where it's written, that it's local-only) for future re-runs."
+  - concern: loud-failure
+    action: "If any of cm-08's expected output artifacts are missing/malformed, the report generator fails loudly naming which artifact — never silently generates a report with gaps presented as complete."
+
+risks:
+  - severity: medium
+    description: "A report that LOOKS thorough (covers every named section) but whose recall() spot-checks are too narrow/easy could give false confidence about real retrieval quality."
+    mitigation: "Research step explicitly designs spot-check queries against the pilot's own real, known topic content (not generic/trivial queries likely to succeed regardless of real quality) — a genuine, not rubber-stamp, check."
+  - severity: low
+    description: "Report-generation itself could inadvertently become a second place secret-adjacent content gets written (beyond the quarantine queue cm-01/cm-05 already produce)."
+    mitigation: "Explicit acceptance criterion + independent reviewer re-verification that no raw secret value appears anywhere in a generated report, tested against real fixture-shaped secrets."
+
+references:
+  - path: .pHive/epics/mnemosyne-conversation-memory/docs/design-discussion.md
+    relevant_excerpt: "§2.9 — the operator's own quote taken as a structural requirement, and the full deep-dive report design (per-session before/after, full triage/cluster/quarantine coverage, real recall() spot-checks)."
+  - path: .pHive/epics/mnemosyne-conversation-memory/docs/structured-outline.md
+    relevant_excerpt: "§6 decision point #4 — this epic deliberately ends here, with this story's own report being the artifact that gates any future full-corpus decision."
+
+metric:
+  applies: true
+  name: conversation_memory.deep_dive_recall_spotchecks_relevant
+  direction: up
+  unit: percent
+  baseline: null
+  target: 100
+  window: "cm-08 pilot run"
+  source:
+    kind: manual
+    ref: "Operator's own real, human judgment of relevance for every recall() spot-check query run against the pilot's real persisted content, recorded directly in the generated deep-dive report."
+  verify_at: "cm-08 pilot run"
+  owner: researcher

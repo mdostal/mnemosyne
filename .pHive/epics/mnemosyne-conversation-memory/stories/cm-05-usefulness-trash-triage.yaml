@@ -1,0 +1,189 @@
+id: cm-05-usefulness-trash-triage
+epic: mnemosyne-conversation-memory
+title: Heuristic + LLM usefulness/trash triage with mandatory human review gate
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [cm-03-claude-code-session-parser, cm-04-chatgpt-export-parser]
+
+description: |
+  Real, concrete design for classifying a session as worth keeping vs.
+  discardable noise (docs/design-discussion.md §2.5, required-coverage
+  area #2) — named explicitly as a HYBRID heuristic-prefilter +
+  bounded-LLM-classification pipeline, never LLM-only from turn 1 (real
+  cost/scale reasoning: 234+ real sessions, several 50MB+, makes
+  full-transcript LLM classification both expensive and low-signal, most
+  bytes being tool-call/thinking noise `cm-03` already strips).
+
+  Two stages:
+  1. A pure, deterministic heuristic prefilter over `ConversationTurn[]`'s
+     own structural signals (turn count, real elapsed wall-clock span
+     from first to last timestamp, ratio of tool-activity turns to text
+     turns, presence/absence of an `attributionSkill`-equivalent signal)
+     — produces a priority score, NEVER a keep/trash decision by itself.
+  2. ONE bounded LLM call per session (input capped to a named max
+     character count, fed the heuristic stage's own extracted, already-
+     noise-stripped text) returns `{ verdict, summary, rationale }`,
+     where `verdict` is `keep` | `trash` | `uncertain` — a real THIRD
+     bucket, not a forced binary choice when the classifier itself isn't
+     confident.
+
+  **Provider, named explicitly (docs/design-discussion.md §9, correcting
+  round 1's own gap — the LLM provider was never named at all):** Gemini,
+  via Portunus's `{{secret:personalsites-487021-dostal-shared-gemini}}`
+  reference, resolved at call time only, never inlined/hardcoded/logged —
+  the SAME shared-swarm credential family, same access pattern
+  (`gcloud secrets versions access latest --secret=dostal-shared-gemini
+  --project=personalsites-487021`), as the already-proven-working
+  `dostal-shared-qdrant` key `mnemosyne-repo-onboarding` already resolves
+  successfully. This story introduces the shared low-level primitive
+  `lib/mnemosyne/conversation-memory/geminiClient.ts` (Portunus resolution,
+  bounded-input enforcement, structured-JSON-response parsing, rate-
+  limit-aware retry/backoff) that `cm-07` also imports unchanged for its
+  own, separate bounded call (mirrors `cm-04` importing `cm-03`'s
+  `types.ts` unchanged, design-discussion §2.1 — one shared module, never
+  reimplemented, per `[grill 4.1]`'s already-established convention).
+  `GOOGLE_GENERATIVE_AI_API_KEY` (a distinct, unrelated production secret
+  with its own rotation policy — design-discussion §9.1) is explicitly
+  NOT used here.
+
+  **The human review/confirm gate is structural, not a policy note:**
+  every `trash` AND `uncertain` verdict is written to a real, on-disk,
+  operator-reviewable queue file. Nothing is ever deleted — not the
+  source transcript (read-only input, permanently, per `cm-02`'s own
+  contract) and not any already-persisted memory (no delete path exists
+  anywhere in this story's code, mirroring `ro-11`'s "no delete path
+  exists in the module at all" additive-only discipline). A `trash`
+  verdict controls whether a session is EVER PROPOSED for `cm-07`'s
+  distillation step, never whether existing memory gets pruned.
+
+acceptance_criteria:
+  - "Given a session's ConversationTurn[], when the heuristic prefilter runs, then it produces a real, deterministic priority score from structural signals alone (turn count, elapsed span, tool-to-text ratio) — verified by asserting the SAME input always produces the SAME score (no non-determinism, no hidden randomness)"
+  - "Given the heuristic prefilter's own output, when the LLM classification call is made, then its input text is capped at a named maximum character count — verified by a test asserting the call is never made with input exceeding that constant, regardless of the source session's real size"
+  - "Given an LLM classification response, when parsed, then the resulting verdict is exactly one of keep/trash/uncertain — never a fourth value, never left unset"
+  - "Given a trash or uncertain verdict, when triageSession() completes, then that session's verdict+summary+rationale is appended to a real, on-disk review queue file — verified by reading the file back and confirming the entry is present"
+  - "Given a keep verdict, when triageSession() completes, then that session's verdict+summary+rationale is ALSO recorded (not just trash/uncertain) — the queue is a complete triage record, not merely an exception list, so cm-06/cm-07's later consumption has a real, complete input to filter by verdict"
+  - "Given this story's full module, when reviewed, then no code path exists anywhere that deletes, truncates, or modifies a source session file, nor any code path that deletes already-persisted Mnemosyne memory based on a verdict — verified by an independent reviewer reading the diff, not trusting the description"
+  - "Given a quarantined ConversationTurn (from cm-03/cm-04's parse-time cm-01 scan), when triageSession() runs, then that turn's raw text is never included in the bounded LLM call's input — quarantined content is excluded from the classification prompt entirely, not merely redacted within it"
+  - "Given geminiClient.ts's own implementation, when reviewed, then the Portunus-resolved API key is used only as an in-memory outbound-call credential — never logged, never written to the on-disk review queue file, never included in any error message's own text — verified by an independent reviewer reading the diff for every call site and every catch/log statement, not trusting the description"
+  - "Given the live Gemini API returns a rate-limit (429-class) error, when geminiClient.ts's call runs, then it retries with backoff up to a named bounded attempt count, then fails loudly (never silently returns a guessed/default verdict) — verified by a test against a stubbed client that returns 429 on the first N calls"
+
+steps:
+  - id: research
+    description: |
+      Design the heuristic prefilter's exact scoring formula and the
+      LLM call's exact prompt shape + input character cap. Confirm which
+      real, already-present JSONL fields (research-brief §1.1's
+      `attributionSkill`, `gitBranch`, real timestamp deltas) are
+      reliable-enough signals versus noisy ones — a real design decision,
+      not assumed. Decide the on-disk queue file's schema and location
+      (mirrors org-tree.yaml's convention, per cm-02's own precedent).
+      Confirm `dostal-shared-gemini`'s real, current rate limits and
+      model catalog directly against the live Gemini API (design-
+      discussion §9.7) before picking a specific model id — this repo's
+      billed GCP project (`personalsites-487021`, `billingEnabled: true`,
+      confirmed this pass) puts the key on the paid tier, not the more
+      restrictive free tier, but the exact quota is read live, never
+      hard-pinned from a planning-time guess.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests for the heuristic prefilter (deterministic,
+      pure-function tests) and the LLM-call integration (against a
+      stubbed/fake LLM client, never a live model call in the automated
+      suite — mirrors ingestDocument.ts's own IngestClient structural-
+      interface-for-testing convention) covering every acceptance
+      criterion, including the quarantine-exclusion and no-delete-path
+      checks.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      Implement lib/mnemosyne/conversation-memory/triageSession.ts:
+      heuristic scoring, bounded LLM call construction/parsing, queue-
+      file append (never overwrite-in-place of prior entries — additive,
+      matching the epic's own no-silent-loss discipline).
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: |
+      Independently re-verify: no delete path anywhere in the diff;
+      quarantined content genuinely excluded from the LLM prompt (not
+      merely redacted within it, which would still consume the same
+      surrounding context); the queue file records EVERY verdict
+      (keep included), not only trash/uncertain.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-conversation-memory.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/conversation-memory/types.ts
+      purpose: "The ConversationTurn[] input shape this story consumes, produced identically by cm-03 and cm-04."
+    - path: lib/mnemosyne/ingest/ingestDocument.ts
+      purpose: "The IngestClient minimal-structural-interface testing convention (fake object, never live Qdrant) this story's own LLM-client interface for testing mirrors."
+
+files_to_modify:
+  - file: lib/mnemosyne/conversation-memory/triageSession.ts
+    change: "New file: heuristic prefilter + bounded LLM classification call + queue-file append."
+  - file: lib/mnemosyne/conversation-memory/triageSession.test.ts
+    change: "New file: tests against a stubbed LLM client and synthetic ConversationTurn[] fixtures."
+  - file: lib/mnemosyne/conversation-memory/geminiClient.ts
+    change: "New file: shared, reused-by-cm-07 Gemini API primitive — resolves dostal-shared-gemini via Portunus at call time (never persisted/logged), enforces the caller's bounded-input cap, parses structured JSON responses, rate-limit-aware retry/backoff, loud failure on exhausted retries or malformed responses."
+  - file: lib/mnemosyne/conversation-memory/geminiClient.test.ts
+    change: "New file: tests against a stubbed HTTP layer (never a live API call in the automated suite) covering input-cap enforcement, retry/backoff, and loud-failure-on-malformed-response."
+
+design_decisions:
+  - decision: "Three-way verdict (keep/trash/uncertain), never a forced binary."
+    rationale: "Operator's own quote asks to 'figure out usefulness and trash' — a classifier forced into a binary choice on genuinely ambiguous content would either over-trash (real loss risk) or over-keep (defeats the triage's purpose); uncertain is a real, honest third state."
+  - decision: "Heuristic prefilter runs first and ALWAYS, bounding every LLM call's input regardless of source session size."
+    rationale: "234+ sessions x up to 50MB+ each makes unbounded LLM input a real cost risk (design-discussion §3); this is the concrete mechanism that keeps `cm-08`'s pilot cost measurable and bounded before any full-corpus decision."
+  - decision: "The queue file records every verdict (not just trash/uncertain), append-only."
+    rationale: "cm-06's clustering (`[grill 2.1]`, design-discussion §2.6) needs a complete keep+uncertain input set, not merely an exception list; append-only matches this epic's own no-silent-loss discipline for its own generated artifacts, not just source transcripts."
+  - decision: "Gemini (dostal-shared-gemini, via Portunus) is the concrete LLM provider, introduced here as a shared geminiClient.ts primitive cm-07 also reuses, rather than left unnamed or reimplemented per-caller."
+    rationale: "Round 1 designed 'a bounded LLM call' without naming a provider at all (design-discussion §9 amendment) — a real, load-bearing gap since cm-08's pilot cannot make a real LLM call against an unnamed provider. dostal-shared-gemini is the same shared-swarm credential family, same access pattern, as the already-proven-working dostal-shared-qdrant key; GOOGLE_GENERATIVE_AI_API_KEY (a distinct, unrelated production secret) is explicitly not used. One shared client module, not reimplemented in cm-07, mirrors this epic's own established cm-01 convention (`[grill 4.1]`)."
+
+cross_cutting:
+  - concern: conversation-privacy-safety
+    action: "Quarantined (cm-01-flagged) content is structurally excluded from the LLM prompt, never merely redacted within it — this story's own acceptance criteria enforce that a secret never reaches a model call. The Gemini API key itself is resolved via Portunus at call time only, never logged/persisted (design-discussion §9.1)."
+  - concern: loud-failure
+    action: "An LLM call returning a malformed/unparseable response (not exactly one of keep/trash/uncertain) fails loudly, naming the actual response received, never silently defaulted to a guessed verdict. A rate-limited (429) call retries with bounded backoff, then fails loudly rather than silently degrading."
+  - concern: provenance-completeness
+    action: "Every queue entry carries the session's real id/path/size (from cm-02's manifest) alongside the verdict/summary/rationale, so a human reviewer can trace a verdict back to its real source."
+  - concern: existing-infrastructure
+    action: "geminiClient.ts is one shared module cm-07 reuses unchanged (design-discussion §9.6) — never a second, independently-implemented Gemini call path."
+
+risks:
+  - severity: high
+    description: "LLM classification cost at real scale (234+ sessions) could be higher than expected even with the heuristic prefilter and input cap, if the bounded input is itself still large or the per-call cost assumption is wrong."
+    mitigation: "Real cost is measured on cm-08's small, bounded pilot BEFORE any full-corpus commitment — this story's own acceptance criteria bound input size, making the real per-call cost knowable and extrapolatable from a small, cheap sample."
+  - severity: medium
+    description: "A `trash` verdict on a session the operator actually valued is a real, if non-destructive, mistake — the operator may not think to go back and re-review a `trash`-queued session that never gets surfaced again."
+    mitigation: "Structural non-destructiveness (source untouched, nothing deleted) means the mistake is always recoverable; cm-09's deep-dive report explicitly surfaces every verdict + rationale for the pilot sample so the operator can catch a wrong verdict early, before scale."
+  - severity: low
+    description: "dostal-shared-gemini's real, current rate limits/model catalog are not known at planning time — a wrong assumption here could either under-throttle (real 429s at cm-08 pilot scale) or over-throttle (unnecessarily slow pilot)."
+    mitigation: "Billing is confirmed enabled on personalsites-487021 (design-discussion §9.7), ruling out the more restrictive unbilled free tier; the research step's own new sub-task confirms real limits live against the current API before implementation, never hard-pinned from this planning pass's own guess."
+
+references:
+  - path: .pHive/epics/mnemosyne-conversation-memory/docs/design-discussion.md
+    relevant_excerpt: "§2.5 — the full triage pipeline design, real cost/scale reasoning, and the structural (not policy-only) no-delete guarantee. §9 — the Gemini-provider correction (Portunus reference, billing confirmation, shared geminiClient.ts convention)."
+  - path: .pHive/epics/mnemosyne-repo-onboarding/stories/ro-11-bounded-website-crawl.yaml
+    relevant_excerpt: "The 'no delete path exists in the module at all' additive-only discipline this story's own no-delete acceptance criterion mirrors."
+
+metric:
+  applies: true
+  name: conversation_memory.triage_llm_input_cap_violations
+  direction: down
+  unit: count
+  baseline: null
+  target: 0
+  window: "every triageSession() call, permanently"
+  source:
+    kind: manual
+    ref: "Reviewer's independently-run check confirming the LLM classification call's input never exceeds the named character cap, across every test case and every cm-08 pilot session — the real, verifiable proxy for keeping real-world LLM cost bounded and knowable before any full-corpus decision."
+  verify_at: integrate
+  owner: reviewer

@@ -1,0 +1,125 @@
+id: cm-06-cross-session-clustering
+epic: mnemosyne-conversation-memory
+title: Embedding-based cross-session clustering faceted by project slug
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [cm-05-usefulness-trash-triage]
+
+description: |
+  How related content across DIFFERENT sessions gets correctly grouped by
+  topic/theme (docs/design-discussion.md §2.6, required-coverage area
+  #3) — the operator's own words, "different overall mixes of which ones
+  are helping with what."
+
+  **Real design decision, resolved explicitly (`[grill 2.1]`, docs/
+  design-discussion.md §2.6):** clusters `keep` AND `uncertain`
+  `cm-05`-verdict sessions — `trash`-verdict sessions never reach this
+  story's input at all, not merely excluded from its output.
+
+  **Mechanism:** embedding-based similarity over each session's `cm-05`
+  summary (small, bounded text — never the raw transcript, never the
+  full normalized-turn list), via the SAME embedder Mnemosyne's vector
+  layer already uses in production (no new embedding infrastructure).
+  Project-slug (already captured by `cm-02`'s discovery manifest and
+  carried through `cm-03`'s `ConversationTurn.projectSlug`) is a
+  first-class metadata FACET on top of similarity clustering, never a
+  replacement for it — the operator's own quote implies mixing happens
+  BOTH within and across project slugs, so slug-only grouping would be
+  too coarse.
+
+acceptance_criteria:
+  - "Given a set of triage-queue entries with keep or uncertain verdicts, when clusterConversations() runs, then every one of them receives a cluster assignment — verified none are silently dropped from clustering"
+  - "Given a set of triage-queue entries including trash-verdict sessions, when clusterConversations() runs, then trash-verdict sessions are excluded from the function's INPUT set entirely (never passed in, not merely filtered from output) — verified by a test asserting the embedding call is never made for a trash-verdict session's summary"
+  - "Given two sessions with genuinely similar summaries (real semantic overlap) but DIFFERENT project slugs, when clusterConversations() runs, then they CAN be assigned to the same cluster — verified the clustering mechanism is not slug-partitioned by default (a real test proving cross-slug clustering works, not merely asserted)"
+  - "Given a cluster assignment, when inspected, then it carries both a cluster_id and the real project-slug facet(s) of its member sessions — the facet is available as a queryable/filterable dimension alongside the similarity-based grouping, never discarded after clustering runs"
+  - "Given the SAME input set run twice, when clusterConversations() runs, then cluster assignments are stable/reproducible (verified directly — not merely a hope) for a deterministic clustering algorithm choice, OR any non-determinism in the chosen approach is named explicitly as an accepted characteristic in this story's own design_decisions, never silently assumed away"
+
+steps:
+  - id: research
+    description: |
+      Confirm the real embedder Mnemosyne's vector layer uses in
+      production (read the live VectorLayerAdapter/client.ts embedding
+      call, not assumed). Decide the real clustering algorithm (a simple
+      similarity-threshold/agglomerative approach vs. a library
+      dependency) — if a new dependency is introduced, validate it via
+      context7/web research at this step per this repo's own always-on
+      validation discipline (not assumed safe because it's a common
+      library).
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests against a stubbed embedder (never a live
+      embedding call in the automated suite) and synthetic triage-queue
+      fixtures covering every acceptance criterion, including the
+      cross-slug clustering case and the trash-exclusion case.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      Implement lib/mnemosyne/conversation-memory/clusterConversations.ts:
+      keep/uncertain filtering, embedding calls over summaries,
+      similarity-based grouping, project-slug facet attachment.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: |
+      Independently re-verify trash-verdict sessions never reach the
+      embedding call (read the diff), confirm cross-slug clustering is
+      real (not accidentally slug-partitioned by an implementation
+      shortcut).
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-conversation-memory.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/layers/VectorLayerAdapter.ts
+      purpose: "The real, already-in-production embedder this story reuses — no new embedding infrastructure."
+
+files_to_modify:
+  - file: lib/mnemosyne/conversation-memory/clusterConversations.ts
+    change: "New file: keep/uncertain filtering, embedding-based similarity clustering, project-slug facet attachment."
+  - file: lib/mnemosyne/conversation-memory/clusterConversations.test.ts
+    change: "New file: tests against a stubbed embedder and synthetic triage-queue fixtures."
+
+design_decisions:
+  - decision: "Clustering input is cm-05's own SUMMARIES, never raw transcripts or the full normalized-turn list."
+    rationale: "Keeps embedding-call volume/cost bounded (one small summary per session, not per-turn or per-chunk), and mirrors this epic's own consistent 'distilled text, not raw content' discipline (design-discussion §2.1, §2.7)."
+  - decision: "Project-slug is a facet alongside similarity, never a partition boundary."
+    rationale: "The operator's own quote ('different overall mixes of which ones are helping with what') implies real cross-project topical overlap that a slug-only grouping would miss."
+
+cross_cutting:
+  - concern: existing-infrastructure
+    action: "Reuses the vector layer's existing embedder — no new embedding infrastructure, no new external API credential surface beyond what remember()'s vector layer already requires in production."
+  - concern: provenance-completeness
+    action: "Every cluster assignment carries the real project-slug facet(s) of its members, traceable back to cm-02's discovery manifest."
+
+risks:
+  - severity: low
+    description: "Embedding-based clustering could produce clusters that don't map to anything the operator recognizes (R10, docs/design-discussion.md §4 risk registry)."
+    mitigation: "Project-slug facet anchors clusters to a real, recognizable signal alongside pure similarity; cm-09's deep-dive report explicitly surfaces cluster assignments for the pilot sample so the operator can judge real cluster quality before any scale-out."
+
+references:
+  - path: .pHive/epics/mnemosyne-conversation-memory/docs/design-discussion.md
+    relevant_excerpt: "§2.6 and `[grill 2.1]` — the full clustering design and the resolved keep/uncertain-only input-set decision."
+  - path: .pHive/epics/mnemosyne-conversation-memory/docs/structured-outline.md
+    relevant_excerpt: "§4 risk registry R10 — clusters not mapping to operator-recognizable groupings, and its named mitigation."
+
+metric:
+  applies: true
+  name: conversation_memory.cross_slug_clusters_formed
+  direction: up
+  unit: count
+  baseline: 0
+  target: 1
+  window: "cm-08 pilot run"
+  source:
+    kind: manual
+    ref: "At least one real cluster spanning 2+ distinct real project slugs in cm-08's pilot output — the concrete, falsifiable proof that clustering is genuinely cross-project, not accidentally slug-partitioned, reported in cm-09's deep-dive report."
+  verify_at: "cm-08 pilot run"
+  owner: researcher

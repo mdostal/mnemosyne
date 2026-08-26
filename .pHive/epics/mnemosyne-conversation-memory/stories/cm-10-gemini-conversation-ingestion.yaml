@@ -1,0 +1,177 @@
+id: cm-10-gemini-conversation-ingestion
+epic: mnemosyne-conversation-memory
+title: Gemini conversation export (Share-link/Takeout) parser and normalizer — gated on operator staging a real export
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [cm-01-secret-credential-scanner, cm-02-conversation-source-discovery]
+parallel_allowed: false
+parallel_rationale: "Genuinely blocked on a real precondition (below), unlike cm-03/cm-04's parallel_allowed: true — this story cannot start real (non-speculative) implementation until the precondition is met, so it is not offered as a parallel-eligible slice of this epic's own build sequence."
+
+description: |
+  A real, reachable (not absent) third sibling of `cm-03`/`cm-04` — same
+  normalized `ConversationTurn[]` output contract (docs/design-
+  discussion.md §2.1), different input parser — added by the round-2
+  correction documented in docs/design-discussion.md §9 after the
+  operator flagged round 1's "Gemini confirmed absent" conclusion as
+  wrong.
+
+  **Gated, not speculative — the real, named precondition, stated
+  explicitly so this story is never started against invented sample
+  data (this epic's own "real data, not assumed" discipline, §5 open
+  question 5 as originally stated):** `cm-02`'s discovery manifest must
+  contain at least one Gemini export the operator has explicitly staged
+  into its fixed, named export-file list (the same convention the
+  ChatGPT export already follows) — either (a) one or more Gemini
+  "Share" public-link captures (`gemini.google.com/share/<id>`, saved as
+  raw HTML the way a real example already exists on this machine at
+  `~/Documents/work/moving-chaos/source_index/gemini_share_raw.html` —
+  proof-of-mechanism only, NOT pulled into this epic's own fixtures or
+  pilot sample without the operator's separate, explicit opt-in, since it
+  belongs to an unrelated personal project, design-discussion §9.8), or
+  (b) a future Google Takeout "Gemini Apps Activity" bulk export (design-
+  discussion §9.4 confirms none exists on this machine today). Until
+  that precondition is met, this story's `research` step's own first
+  task is confirming it is STILL unmet (not assumed stale) before any
+  further work proceeds — mirroring `ro-11`'s own "re-checked before
+  every operation, never checked once and trusted" discipline, applied
+  here to a planning-time precondition instead of a runtime guard.
+
+  Two real, structurally distinct input shapes this story's research step
+  must pin down BEFORE implementation (never assumed identical to
+  `cm-04`'s ChatGPT tree-DAG shape just because both are AI-chat
+  exports):
+  - **Share-link HTML capture:** a saved `gemini.google.com/share/<id>`
+    page. Real, confirmed this pass (design-discussion §9.3): the page is
+    a client-rendered SPA whose real conversation data is embedded in
+    inline `AF_initDataCallback` JS data-hydration blobs (Google's
+    standard SPA-state pattern — structurally the same FAMILY of
+    mechanism as ChatGPT's own `__NEXT_DATA__` blob, per `cm-04`'s own
+    research, but a different, Google-specific JSON shape that has never
+    been parsed by any story in this epic and must be re-confirmed
+    directly against a real staged export, not assumed from this
+    story's own description).
+  - **Takeout "Gemini Apps Activity" export:** format not yet confirmed
+    on this machine (none exists, §9.4) — this story's research step
+    must obtain Google's own current, real Takeout schema documentation
+    (or a real sample, if the operator produces one) before designing a
+    parser, never inventing a schema from assumption.
+
+  Runs `cm-01`'s `scanForSecrets()` over every extracted turn, identical
+  discipline to `cm-03`/`cm-04` (docs/design-discussion.md §2.8).
+
+acceptance_criteria:
+  - "Given cm-02's real, current discovery manifest, when this story's research step runs, then it explicitly confirms whether a real Gemini export is staged — if none is staged, the story halts at research with a loudly-stated 'precondition not met' finding, never proceeding to test-spec/implement against invented sample data"
+  - "Given a real, operator-staged Share-link HTML capture, when parseGeminiShareExport() runs, then it extracts the AF_initDataCallback data-hydration blob(s), parses the real (research-confirmed, not assumed) turn structure, and produces one ConversationTurn per real message, in chronological order, with role values normalized to the same 'system'|'user'|'assistant' set cm-03/cm-04 already use"
+  - "Given a real, operator-staged Takeout Gemini Apps Activity export, when parseGeminiTakeoutExport() runs, then it produces the same normalized ConversationTurn[] shape, against the real, current Takeout schema confirmed by this story's own research step (never an assumed/invented schema)"
+  - "Given extracted text containing a fixture secret (cm-01's own test corpus), when either parser runs, then the corresponding ConversationTurn is flagged as quarantined, identical behavior to cm-03/cm-04's own quarantine acceptance criterion"
+  - "Given this story's own fixtures, when reviewed, then they are synthetic, schema-accurate constructions — never the operator's real moving-chaos Share-link content, and never any other real personal conversation content, mirroring cm-04's own 'never the operator's actual export content in the automated suite' rule"
+
+steps:
+  - id: research
+    description: |
+      FIRST task, before anything else: re-confirm cm-02's discovery
+      manifest for a real staged Gemini export. If none exists, stop
+      here and report the precondition as still unmet — do not proceed
+      to test-spec/implement. If one exists, re-read it directly (not
+      from this story's own description alone) to confirm the real
+      AF_initDataCallback blob shape (Share-link case) or the real
+      Takeout schema (bulk-export case), specifically hunting for a
+      multi-turn, real example the way cm-04's own research step hunted
+      for a real multi-branch ChatGPT conversation.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests against real-shaped FIXTURE data (synthetic
+      content mirroring the real, research-confirmed schema exactly,
+      never the operator's actual staged export content in the automated
+      suite) covering every acceptance criterion.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      Implement lib/mnemosyne/conversation-memory/parseGeminiShareExport.ts
+      and/or lib/mnemosyne/conversation-memory/parseGeminiTakeoutExport.ts
+      (whichever real export type(s) are actually staged, per the research
+      step's own finding): data-blob/schema parsing, role/content
+      extraction into cm-03's shared ConversationTurn shape, cm-01 scan
+      integration.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: |
+      Independently re-verify the parser's correctness against the real
+      staged export's actual shape (not just the synthetic fixtures);
+      confirm cm-01's scanner is genuinely called; confirm no real
+      personal conversation content leaked into the committed fixture
+      corpus.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-conversation-memory.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/conversation-memory/types.ts
+      purpose: "cm-03's shared ConversationTurn contract, imported here unchanged — this story's entire job is to produce this same shape from a structurally different (and not-yet-fully-confirmed) input."
+    - path: lib/mnemosyne/conversation-memory/scanForSecrets.ts
+      purpose: "cm-01's shared detector, called identically to cm-03/cm-04's own usage."
+    - path: lib/mnemosyne/conversation-memory/parseChatGptExport.ts
+      purpose: "cm-04's own precedent for parsing a real, JS-data-hydrated AI-chat export — the closest structural sibling this story's Share-link parser is modeled on, per design-discussion §9.3's own AF_initDataCallback/__NEXT_DATA__ comparison."
+
+files_to_modify:
+  - file: lib/mnemosyne/conversation-memory/parseGeminiShareExport.ts
+    change: "New file (built only once a real Share-link export is staged): AF_initDataCallback blob parsing, ConversationTurn production, cm-01 scan integration."
+  - file: lib/mnemosyne/conversation-memory/parseGeminiTakeoutExport.ts
+    change: "New file (built only once a real Takeout export is staged, and only if the operator's staged export is this type rather than/in addition to a Share-link capture): Takeout schema parsing, ConversationTurn production, cm-01 scan integration."
+  - file: lib/mnemosyne/conversation-memory/parseGeminiShareExport.test.ts
+    change: "New file: tests against real-shaped synthetic fixtures."
+  - file: lib/mnemosyne/conversation-memory/__fixtures__/gemini-conversations/
+    change: "New directory: synthetic, schema-accurate fixture data (never the operator's real moving-chaos Share-link content or any other real personal conversation content)."
+
+design_decisions:
+  - decision: "Genuinely gated on a real, named precondition (a staged export in cm-02's discovery list) — never built against invented sample data, and the research step's first job is re-confirming the precondition is still unmet before any further work."
+    rationale: "docs/design-discussion.md §5 open question 5's original recommendation (round 1) — 'building a parser against invented sample data violates this session's own real-data-not-assumed discipline' — still holds; round 2's correction (§9) fixes the FRAMING (reachable, not absent) without abandoning that discipline. The real moving-chaos Share-link artifact proves the mechanism, not a ready-made fixture corpus for this epic."
+  - decision: "The moving-chaos Share-link export is NOT pulled into this epic's fixtures or pilot sample automatically."
+    rationale: "It belongs to an unrelated personal project (relocation planning) the operator saved for that project's own purposes — using it here without the operator's separate, explicit opt-in would be exactly the kind of silent scope-widening this epic's own privacy-safety posture (§2.8) exists to prevent."
+  - decision: "Two possible real export shapes (Share-link HTML, Takeout bulk export) are both named, with implementation scoped to whichever the operator actually stages first — not both built speculatively."
+    rationale: "The two are structurally different (single-conversation client-rendered SPA capture vs. a bulk, Google-defined Takeout schema) and only one is proven to exist as a real, producible artifact on this machine today (Share-link, §9.3); building a Takeout parser against no real sample would repeat exactly the mistake round 1's own recommendation warned against for Gemini generally."
+
+cross_cutting:
+  - concern: conversation-privacy-safety
+    action: "cm-01's scanner runs over every extracted turn — identical parse-time checkpoint to cm-03/cm-04. The gating precondition itself is a privacy-safety control: no real personal Gemini content is processed by this story until the operator explicitly stages it for this purpose."
+  - concern: provenance-completeness
+    action: "Every ConversationTurn carries sessionId (derived from the Share-link id or Takeout entry id), timestamp, and a projectSlug of null (mirrors cm-04's own 'explicit empty over omission' convention for a source with no repo/project association)."
+  - concern: existing-infrastructure
+    action: "Zero new persistence mechanism — output feeds cm-05/cm-06/cm-07 exactly like cm-03/cm-04's output does, through the same shared ConversationTurn contract, once this story is actually built."
+
+risks:
+  - severity: low
+    description: "This story may never actually start if the operator never stages a real Gemini export — a real, accepted possibility, not a defect in this story's own design."
+    mitigation: "Named explicitly as an accepted, gated outcome (design-discussion §9.8) — the story exists so Gemini is a real, reachable, trackable part of this epic's own plan, not so it is guaranteed to build regardless of real preconditions."
+  - severity: medium
+    description: "A Share-link HTML capture's AF_initDataCallback blob format is Google-internal and undocumented publicly — it could change or vary across capture dates without warning, unlike ChatGPT's own more stable conversations.json export format."
+    mitigation: "Research step re-confirms the real, current shape directly against whatever export is actually staged at build time (never trusting this planning pass's own §9.3 findings as still-accurate without re-verification) — mirrors cm-04's own 're-confirm the real shape directly... do not build from citations alone' discipline."
+
+references:
+  - path: .pHive/epics/mnemosyne-conversation-memory/docs/design-discussion.md
+    relevant_excerpt: "§9 — the full Gemini correction: Portunus/GCP verification, the API-key-vs-chat-history structural distinction, the real moving-chaos Share-link evidence, and this story's own gating rationale."
+  - path: .pHive/epics/mnemosyne-conversation-memory/stories/cm-04-chatgpt-export-parser.yaml
+    relevant_excerpt: "The closest sibling story's own rigor bar (real-shape re-confirmation before implementation, synthetic-fixtures-only discipline, cm-01 scan integration) this story is held to."
+
+metric:
+  applies: true
+  name: conversation_memory.gemini_precondition_status
+  direction: up
+  unit: percent
+  baseline: 0
+  target: 100
+  window: "checked at the start of every future planning/build pass over this epic, until met"
+  source:
+    kind: manual
+    ref: "cm-02's discovery manifest's own gemini: not_staged / staged status (docs/design-discussion.md §9.6) — the real, verifiable proxy for whether this story's gating precondition has been met yet. 0% (not_staged) at the time of this correction; not this story's own build-success metric, since it may never build if the precondition is never met (an accepted, named outcome, not a target this story is scored against)."
+  verify_at: "cm-02 discovery manifest, any future re-run"
+  owner: researcher

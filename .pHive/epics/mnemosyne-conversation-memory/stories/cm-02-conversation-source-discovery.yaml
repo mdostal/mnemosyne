@@ -1,0 +1,135 @@
+id: cm-02-conversation-source-discovery
+epic: mnemosyne-conversation-memory
+title: Real-source discovery — Claude Code sessions + confirmed exports
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: []
+parallel_allowed: true
+parallel_rationale: bounded-slice
+
+description: |
+  Enumerates real conversation sources without the operator manually
+  pointing at each one (docs/design-discussion.md §2.4, required-coverage
+  area #1). Read-only — this story never reads conversation CONTENT
+  (only filenames, sizes, mtimes), and never writes to any source path.
+
+  Two source kinds, both confirmed real this planning pass (docs/
+  research-brief.md §1), never assumed:
+  - `~/.claude/projects/<slug>/<session-id>.jsonl` — walked and filtered
+    using the SAME scratch heuristic already used during this epic's own
+    research (`grep -vE '^-private-tmp|^-private-var-folders|scratchpad'`),
+    refined with one additional real signal (a project-slug that decodes
+    to a path outside any operator-confirmed project root is a WEAK
+    signal, surfaced for confirmation, never a hard silent exclude).
+  - A fixed, named list of confirmed export files — currently exactly
+    `~/Downloads/ChatGPT Data Export Feb 5 2026/conversations.json` — NOT
+    a generic Downloads-directory scan (research confirmed the same
+    directory also holds an OpenAI Export.zip, LinkedIn export, Drive
+    export, and Photos export bundles; a generic scan would false-
+    positive on all of them).
+
+acceptance_criteria:
+  - "Given the real ~/.claude/projects/ directory tree, when discoverSources() runs, then it enumerates every subdirectory and applies the established scratch-filter pattern, producing a manifest entry per real session file (path, byte size, mtime, decoded project slug)"
+  - "Given a directory matching the scratch-filter exclude pattern (^-private-tmp, ^-private-var-folders, scratchpad), when discoverSources() runs, then that directory's sessions are excluded from the manifest by default, with the exclusion itself recorded (not silently omitted with no trace)"
+  - "Given a directory whose decoded slug falls outside any operator-confirmed project root, when discoverSources() runs, then it is INCLUDED in the manifest but flagged with a weak-scratch-confidence marker — never silently dropped, never silently promoted to full confidence"
+  - "Given the confirmed ChatGPT export file path, when discoverSources() runs, then it appears in the manifest as a named, fixed entry — the function never performs a generic directory scan of ~/Downloads or any other directory beyond the fixed, named list"
+  - "Given no Gemini export is staged in discoverSources()'s own fixed, named export-file list (the same convention the ChatGPT export follows — corrected from an earlier 'confirmed absent' framing, docs/design-discussion.md §9.3/§9.6: real Gemini export capability exists, just not staged here yet), when discoverSources() runs, then the manifest includes an explicit `gemini: not_staged` entry — the gap is visible, never silently omitted, and never worded as if the underlying capability doesn't exist"
+  - "Given discoverSources() completes, when the manifest is inspected, then zero conversation CONTENT has been read from any source file — only filesystem metadata (path/size/mtime) and, for the JSONL case, decoded slug — verified by a test asserting no file handle for content is ever opened for `.jsonl` sources during discovery"
+  - "Given the manifest is written to disk, when re-run, then it is idempotent and re-computable from scratch (a fresh manifest always reflects real, current filesystem state — never a stale cache silently trusted)"
+
+steps:
+  - id: research
+    description: |
+      Re-confirm the real directory-name-to-path decoding convention
+      (Claude Code slugifies an absolute path into the directory name,
+      e.g. leading `/` and internal `/` both become `-`) by cross-
+      checking a handful of real, already-known project paths against
+      their real directory names. Confirm the exact set of "operator-
+      confirmed project roots" this story's weak-signal check compares
+      against (candidates: Code/, Documents/work/ — confirm against the
+      real sample of 234 dirs, not assumed).
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests against a real, fixture-mirrored directory
+      structure (never the operator's actual ~/.claude/projects/ tree in
+      the automated suite — a synthetic tree mirroring the real naming
+      convention) covering every acceptance criterion.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      Implement lib/mnemosyne/conversation-memory/discoverSources.ts:
+      directory walk + scratch-filter + weak-signal flagging + fixed
+      export-file list + manifest write to
+      ~/.mnemosyne/conversation-sources.yaml.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: |
+      Confirm no content-reading code path exists anywhere in this
+      module (read the diff); confirm the export-file list is genuinely
+      fixed/named, not a generic scan.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-conversation-memory.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/onboarding/orgTree.ts
+      purpose: "The `~/.mnemosyne/*.yaml`, operator-global registry convention (read fresh every call, YAML not JSON) this story's own manifest file follows."
+
+files_to_modify:
+  - file: lib/mnemosyne/conversation-memory/discoverSources.ts
+    change: "New file: directory walk, scratch-filter, weak-signal flagging, fixed export-file list, manifest write."
+  - file: lib/mnemosyne/conversation-memory/discoverSources.test.ts
+    change: "New file: tests against a synthetic fixture directory tree."
+
+design_decisions:
+  - decision: "Fixed, named list of export files — never a generic Downloads-directory scan."
+    rationale: "Research confirmed multiple non-conversation export bundles (OpenAI Export.zip, LinkedIn, Drive, Photos) share the same directory — a generic scan would produce false-positive candidates."
+  - decision: "Weak scratch-signal directories are included-but-flagged, never silently excluded."
+    rationale: "The scratch-filter's own established pattern is a heuristic, not ground truth; a false exclude would silently drop real project work from the operator's own history without any trace."
+  - decision: "gemini: not_staged (not not_found/absent) — the manifest's own Gemini entry is worded to reflect that real Gemini export capability exists and is reachable, just not yet placed in this story's fixed discovery list."
+    rationale: "docs/design-discussion.md §9.3 found a real (single, unrelated-project) Gemini conversation export on this machine, correcting round 1's 'confirmed absent' framing. cm-02's own fixed-list discipline (never a generic scan) is unchanged — this is a wording correction to the manifest's own entry, not a scope change to what this story auto-discovers. Once the operator stages a real export into this story's fixed list, cm-10-gemini-conversation-ingestion becomes buildable against it."
+
+cross_cutting:
+  - concern: conversation-privacy-safety
+    action: "Discovery is read-only over metadata only (never content) — this story's own acceptance criteria enforce that boundary structurally, the first line of defense before cm-01's content-level scanning even applies."
+  - concern: documentation
+    action: "The manifest schema and the scratch-filter heuristic's real, current definition need a discoverable doc entry once this story ships."
+  - concern: existing-infrastructure
+    action: "Reuses the operator-global `~/.mnemosyne/*.yaml` registry convention (orgTree.ts) rather than inventing a new home."
+
+risks:
+  - severity: low
+    description: "Scratch-filter false negatives/positives at real 234-dir scale — a real project directory misclassified as scratch, or vice versa."
+    mitigation: "Weak-signal flagging (never silent exclude/include) surfaces ambiguous cases for operator confirmation rather than resolving them automatically."
+  - severity: low
+    description: "Directory-name-to-path decoding assumption (slugification convention) could be wrong for an edge case (paths with unusual characters)."
+    mitigation: "Research step cross-checks the decoding against real, known-good samples before the implementation step relies on it."
+
+references:
+  - path: .pHive/epics/mnemosyne-conversation-memory/docs/research-brief.md
+    relevant_excerpt: "§1.1 — the real, confirmed 1404-total/234-real directory counts and the exact scratch-filter pattern already used and refined this planning pass."
+  - path: .pHive/epics/mnemosyne-conversation-memory/docs/design-discussion.md
+    relevant_excerpt: "§2.4 — the full discovery design, including the weak-signal refinement and the explicit Gemini-absence manifest entry."
+
+metric:
+  applies: true
+  name: conversation_memory.discovery_manifest_coverage
+  direction: up
+  unit: percent
+  baseline: null
+  target: 100
+  window: first-run
+  source:
+    kind: manual
+    ref: "Operator spot-check: real, known session directories from the researcher's own manual sample appear in the generated manifest with correct scratch-confidence flags."
+  verify_at: integrate
+  owner: researcher
