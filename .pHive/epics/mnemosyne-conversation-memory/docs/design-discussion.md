@@ -715,6 +715,17 @@ Google Takeout "Gemini Apps Activity" export exists anywhere discoverable
 on this machine today.** This part of round 1's finding stands, re-
 verified with a wider net, not merely re-asserted.
 
+**Correction (2026-08-25, round 3) — see §10.1.** The conclusion above was
+accurate as of this round's own re-verification. A real Google Takeout
+export has since arrived on this machine (operator-initiated, outside
+this epic's own research activity, surfaced to this planning pass as a
+confirmed-this-pass fact rather than discovered by a new search). §10.1
+documents the precise, evidence-grounded update: real, but small (2
+conversations under one Takeout category, not the comprehensive
+account-wide archive this section's own heading describes) — left in
+place rather than rewritten, mirroring §5's own struck-through-not-deleted
+convention for exactly this kind of dated finding.
+
 ### 9.5 Determination — (c), both real and separable
 
 Per the task's own framing, both readings are true and distinct, not one
@@ -853,3 +864,370 @@ from the epic's own story list either. See §9.6 and the story's own YAML.
 
 Grilled at the same rigor as round 1 — see `docs/grill-record.md` round 2
 (5 findings, all resolved).
+
+## 10. Amendment (2026-08-25) — round 3: Takeout export, scope-routing, and pipeline generalization
+
+Three new, real, confirmed-this-pass facts, each folded in per the
+operator's own explicit go-ahead for a targeted amendment pass
+(planning-only, same discipline as round 2: additive, not a rewrite of
+rounds 1-2's own text). Grilled in `docs/grill-record.md` round 3.
+
+### 10.1 A real, small Gemini Takeout export now exists — §9.4 corrected precisely
+
+A real Google Takeout export zip now exists at
+`/Users/mdostal/Downloads/Google Takeout Aug 26 2026.zip` (2,964 bytes).
+Confirmed this pass via a file-listing-only inspection (`unzip -l` —
+names and sizes, no extraction, no content read, per this pass's own hard
+privacy constraint, honored identically to this branch's own established
+discipline for the `moving-chaos` Share-link file, §9.3):
+
+```
+Takeout/Gemini in Workspace/Conversation History/conversation_1776360476.txt  (4,300 bytes)
+Takeout/Gemini in Workspace/Conversation History/conversation_1780973211.txt  (1,083 bytes)
+Takeout/Gemini/gemini_scheduled_actions_data.html                            (11 bytes, empty)
+Takeout/Gemini/gemini_gems_data.html                                         (11 bytes, empty)
+```
+
+**What this does and does not prove, stated precisely, not overclaimed
+(mirrors §9.3's own discipline exactly):** this is REAL — the first
+export in this epic's own history to actually satisfy `cm-10`'s named
+gating precondition (a real export staged into `cm-02`'s fixed, named
+discovery list, §9.6) — but it is SMALL: exactly 2 conversations, not a
+comprehensive account-wide history the way the 258-conversation ChatGPT
+export is comprehensive. It does NOT retroactively make §9.4's own
+"no full-account Takeout export exists" conclusion wrong as a statement
+about *that* re-verification's own moment in time — it supersedes it
+going forward. Two further precise observations, not assumed away:
+
+- The plain **`Gemini`** Takeout category itself is present in this
+  export but **empty** (both files 11 bytes — no scheduled-actions or
+  custom-Gems data). Only the **`Gemini in Workspace`** category carries
+  real content.
+- **`Gemini in Workspace` is a real, previously-unconsidered product
+  surface, named explicitly so a future implementer never assumes it's
+  the same thing as the consumer `gemini.google.com` app §9.2/§9.3
+  already disambiguated:** Google Workspace's Gemini side-panel
+  (Gmail/Docs/Sheets in-app assistant) is a structurally distinct
+  integration point from the standalone consumer chat app the
+  `moving-chaos` Share-link capture came from. Nothing in this pass
+  confirms whether `Gemini in Workspace`'s Takeout schema matches the
+  standalone consumer Gemini Takeout schema `cm-10`'s own story
+  originally anticipated researching (§`cm-10`'s own "Takeout 'Gemini
+  Apps Activity'" framing) — this is a real, open schema question for
+  `cm-10`'s own research step to resolve at build time against the real
+  staged file, never assumed identical to either the Share-link shape or
+  a generic "Gemini Takeout" shape invented from this planning pass's
+  own file-listing-only inspection. Added as a fourth real Gemini-related
+  product surface alongside `[grill 2.1.1]`'s existing three-way
+  disambiguation (consumer app / Developer API / Gemini CLI) — this is a
+  variant OF the consumer-app surface (a different Google product
+  integrating the same underlying assistant), not a fifth wholly separate
+  product, but distinct enough at the export-schema level to name
+  explicitly.
+
+**Concrete disposition:**
+
+- **`cm-02`'s discovery manifest** — the fixed, named export-file list
+  gains this real path as a second named entry (alongside the ChatGPT
+  export), and the manifest's own Gemini entry is corrected from
+  `gemini: not_staged` to `gemini: staged (takeout, 2 conversations)` —
+  see the story's own YAML for the exact acceptance-criterion wording.
+- **`cm-10`'s gating precondition is now MET, for the Takeout path
+  specifically** — not the Share-link path, which remains separately
+  unstaged (the `moving-chaos` artifact stays proven-as-mechanism-only,
+  never opted into this epic without the operator's own separate,
+  explicit consent, §9.8, unchanged by this correction). `cm-10`'s own
+  YAML is updated to reflect this precisely: the story is no longer
+  purely speculative for the Takeout shape, though its own research step
+  must still re-confirm this directly at build time (never trust this
+  planning pass's own finding as still-current — the same
+  "re-checked before every operation" discipline `cm-10` already commits
+  to for its own precondition-status check, §`cm-10`'s own YAML).
+- **This planning pass performed NO content-level research into the
+  export's real schema** — confirming the file listing is the full
+  extent of what this pass read, per its own explicit hard constraint.
+  Schema confirmation (opening and reading `conversation_*.txt`, which
+  is real, legitimate build-time research once `cm-10` actually starts)
+  is deliberately left to `cm-10`'s own research step, not performed
+  speculatively here.
+
+### 10.2 Scope-routing — an existing, real, named client scope a cluster could legitimately belong to
+
+**Real, confirmed-this-pass finding:** `swarm-memory`'s own config at
+`~/.config/swarm-memory/config.toml` — the SAME file
+`VectorLayerAdapter.remember()` already reads via its `swarm-memory
+config` shell-out (`VectorLayerAdapter.ts:213-226`, confirmed by direct
+read this pass, and independently confirmed as the real, live location by
+`ro-06`'s own research spike, `mnemosyne/onboarding.py`'s docstring) — has
+a real, existing `[scopes]` entry: `arizona =
+"clients_arizona_compound_memory"`, backing a real project directory at
+`~/Documents/work/personal/arizona-compound` (confirmed to exist on disk
+this pass). `interfaces.ts`'s own `Scope` type doc comment already
+anticipates this: `'project'|'enterprise'|'meta'` is explicitly named as
+"at minimum" — "additional scope values may be added by later stories
+without breaking this contract" (`interfaces.ts` lines 87-90) — so
+`arizona` is not an invented concept; it is a real, already-registered,
+already-load-bearing scope key the exact same `remember()` write path
+`cm-07` already calls could resolve TODAY, for a different repo's own
+onboarding.
+
+**`[grill-anticipated]` "Scope" vocabulary, disambiguated once, explicitly
+— named here so `cm-06`/`cm-07`'s own story text never conflates the two
+things a reader could reasonably call "scope":** (1) **Mnemosyne's own
+`Scope` type** (`interfaces.ts`, `'project'|'enterprise'|'meta'` "at
+minimum") — the caller-facing enum `remember()`/`recall()` accept as a
+parameter; (2) **`swarm-memory`'s own `[scopes]` registry**
+(`config.toml`, keys like `top`/`clients`/`arizona`/`personal`) — the
+underlying scope-key-to-collection-name MAP `VectorLayerAdapter`
+resolves (1)'s values against at runtime. They are not two competing
+systems — (2) is the real, live resolution table (1)'s values are looked
+up in (§9.1-style direct code confirmation, not assumed): `cfg.scopes?.
+[scope]`. `arizona` is a real key in (2) already; using it as a (1)-typed
+value is additive to an already-extensible contract, not a new concept
+this epic invents.
+
+**The gap named, concretely:** `cm-06` (clustering) and `cm-07`
+(distillation/persist), as currently designed, only ever target this
+epic's own `meta`-scope collection (§2.3) — there is no design today for
+a cluster whose project-slug signal clearly matches an EXISTING, real,
+already-registered scope like `arizona` to route into THAT scope's own
+collection instead. A cluster of conversation-memory sessions genuinely
+about the Arizona compound project belongs, arguably, in
+`clients_arizona_compound_memory` — the same real collection
+`arizona-compound`'s own future onboarding (`ro-05`/`ro-06`'s own
+pipeline, a different, already-shipped epic) would resolve to — not
+buried in this epic's own cross-project `meta` collection where the
+operator's `recall(query, 'meta')` sweep would still surface it, but
+mixed in with everything else rather than living where a future
+`arizona-compound`-scoped query would find it directly.
+
+**Design, read-only, additive to `cm-06`/`cm-07` (not a new ticket — the
+schema fits both existing stories cleanly: `cm-06` already computes the
+per-cluster project-slug facet this decision consumes; `cm-07` is the
+epic's ONLY story that ever calls `remember()`, so it is the only correct
+place the actual scope value gets chosen):**
+
+1. **`cm-06` gains a read-only scope-resolution sub-step.** For each
+   cluster, given its member sessions' real project-slug facet(s)
+   (already computed, §2.6), check for a match against REAL, ALREADY-
+   EXISTING scope registries — never invented, never auto-created:
+   - `swarm-memory`'s own `[scopes]` table, read via the exact SAME
+     `swarm-memory config` shell-out `VectorLayerAdapter.remember()`
+     already performs (never a second, independently-implemented
+     TOML/JSON parse of `config.toml` — mirrors `[grill 4.1]`'s own "one
+     primitive, reused, never reimplemented" convention, applied here to
+     an already-shipped OTHER story's own shell-out, not a new shared
+     module this epic introduces).
+   - `~/.mnemosyne/org-tree.yaml`, if it exists — confirmed THIS pass: it
+     does **not** exist on this machine today (only
+     `~/.mnemosyne/level0-rules.md` is present). The check is included in
+     the design anyway, read defensively (`ro-04`'s own established
+     "missing file is not an error, returns empty" contract, never
+     assumed present), so this design isn't stale the moment that
+     registry appears from a different, already-shipped epic's own future
+     work.
+   - Match is a **plain, conservative string/slug comparison against
+     REAL, PRE-EXISTING scope keys only** — never fuzzy, never
+     inferred from content, never a NEW scope name proposed. A match is
+     only proposed when the cluster's member sessions' project-slug
+     facet(s) are UNAMBIGUOUS (all members agree, or the matching slug is
+     the overwhelming majority) — a cluster spanning genuinely mixed
+     slugs with no single dominant match produces no scope-route
+     candidate at all, falls through to the default below.
+   - **Zero side effects, structurally:** this sub-step never creates a
+     scope, a collection, or an org-tree entry — a pure read against
+     already-existing registries, mirroring `ro-06`'s own explicit
+     "Additive-only, by design: no delete/drop code path exists anywhere
+     in this module" discipline (`mnemosyne/onboarding.py`'s own
+     docstring), extended here to "no CREATE path exists either" — this
+     step only ever reads, never writes, a registry.
+   - Output: `Content.metadata.resolved_scope_candidate` (nullable) on
+     the cluster, alongside the existing `cluster_id`/`cluster_label`
+     facets — a CANDIDATE, not a decision.
+
+2. **A scope-route candidate is surfaced into the SAME human-review queue
+   `cm-05`/`cm-01` already produce** (§2.5, §2.8's own established
+   pattern — never a new, parallel review surface), tagged distinctly:
+   `review_reason: 'scope_route_candidate'`, naming the matched real
+   scope key and its real collection name, requiring the operator's own
+   EXPLICIT, per-cluster confirmation before it is ever acted on —
+   mirrors `cm-01`'s own `quarantine_reason: 'secret_detected'` tagging
+   convention exactly, same queue file, same non-automatic posture.
+
+3. **`cm-07` consumes ONLY confirmed candidates.** At persist time, for
+   any given cluster: if the operator has explicitly confirmed a
+   `scope_route_candidate` for that specific `cluster_id` in the review
+   queue, `cm-07` writes that cluster's entries with the CONFIRMED real
+   scope value instead of `'meta'` (full existing provenance-metadata
+   contract unchanged otherwise — `chat_source`/`session_id`/
+   `project_slug`/`cluster_id` all still present). **For every other
+   cluster — no match found, a match found but not yet confirmed, or an
+   ambiguous cluster that never produced a candidate at all — `cm-07`'s
+   existing, unchanged behavior applies: `scope: 'meta'`, no exceptions.**
+   This is the safe default, not an opt-out: absence of an explicit
+   confirmation is never treated as an implicit yes.
+
+**Residual risk, named explicitly, not silently assumed closed (the
+task's own required framing) — the highest-severity failure mode this
+design point could introduce:** a project-slug match is a HEURISTIC, not
+a guarantee. Two real, concrete ways it could be wrong: (a) an
+operator-personal conversation session merely MENTIONS or is tangentially
+related to a client project without actually belonging to that client's
+own confidential work; (b) a coincidental slug collision (e.g. an
+operator project literally named `clients` or `personal` colliding with a
+generic-sounding, already-registered scope key in `config.toml`'s own
+`[scopes]` table — both real, existing keys today). A wrong-scope route
+would put the operator's own personal conversation content into a
+client-facing collection — a real, cross-boundary content leak, the
+single highest-severity outcome this specific design point could ever
+introduce, categorically worse than this epic's existing worst-case
+(personal content ending up in the operator's OWN `meta` collection,
+still fully under the operator's own control). **The concrete
+confirms-before-write control that prevents it, stated precisely, not
+hand-waved:** step 3 above is unconditional — no code path in `cm-07`
+routes to a non-`meta` scope without a real, on-disk, operator-authored
+confirmation record tied to that exact `cluster_id`; the resolution
+sub-step (step 1) NEVER writes a scope value directly to any
+`remember()` call, it only ever proposes a candidate into a queue a human
+must act on. This mirrors `cm-08`'s own "no implicit/default sample
+selection exists anywhere in this story's code" discipline (`[grill
+3.2]`), applied here to scope selection rather than pilot-sample
+selection — the same category of control for the same reason.
+
+**A real cross-epic coordination point, named rather than silently
+assumed frictionless:** `remember()`'s own `RememberOptions.scope` is
+TypeScript-typed as the literal union `Scope = 'project' | 'enterprise' |
+'meta'` (`interfaces.ts`, owned by the already-shipped
+`mnemosyne-foundation` epic, outside this epic's own `files_to_modify`
+scope). Passing a real registry key like `'arizona'` through that
+parameter is anticipated by `interfaces.ts`'s OWN doc comment (quoted
+above) but is not YET type-safe without either a local widening
+mechanism `cm-07`'s own implementation must choose, or a small, additive
+change to `Scope`'s own declaration coordinated with whoever owns that
+file today. Named explicitly as a real, small, cross-epic dependency
+`cm-07`'s own research step must surface and resolve BEFORE
+implementation (not a blocker to this planning-only pass, which changes
+no code) — never silently assumed to be a non-issue just because the
+runtime behavior (the `cfg.scopes?.[scope]` lookup) already works for
+arbitrary string keys today.
+
+### 10.3 Generalizing the pipeline — a real, repeatable component, not a one-operator script
+
+The operator explicitly asked that this be added to THIS epic, not
+deferred to a future one. Precedent followed exactly: `.pHive/epics/
+mnemosyne-repo-onboarding/` (shipped, merged to `main`, v0.15.0) —
+`onboardRepo()` (`lib/mnemosyne/onboarding/onboardRepo.ts`, `ro-02`) is
+the one shared orchestrator BOTH its deployment modes compose; `mnemosyne
+onboard` (`bin/mnemosyne-onboard.mjs`, wired into `bin/mnemosyne`'s
+existing `if [ "${1:-}" = "<verb>" ]` dispatch pattern, `ro-05`/`ro-07`)
+is its real CLI entry point.
+
+**Two new stories, `cm-11`/`cm-12`, mirroring that exact split** (shared
+orchestrator vs. CLI-verb wiring, the same division `ro-02` vs. `ro-05`
+already establishes as this repo's own real convention for "package a
+pipeline as a repeatable component"):
+
+- **`cm-11-generalized-pipeline-orchestrator`** — a new,
+  parameterized `harvestConversationHistory()` orchestrator
+  (`lib/mnemosyne/conversation-memory/harvestConversationHistory.ts`)
+  that composes `cm-02` → `cm-03`/`cm-04`/`cm-10` → `cm-05` → `cm-06` →
+  `cm-07` exactly as `cm-08`'s own pilot orchestrator already sequences
+  them (§2.8), but against OPERATOR-SUPPLIED inputs — a sessions-root
+  directory and a caller-provided list of named export files — instead
+  of `cm-02`'s own hardcoded constants (this operator's own
+  `~/.claude/projects/`, this operator's own specifically-named ChatGPT
+  and Gemini export paths). `cm-02`'s own "fixed, named list, never a
+  generic scan" discipline (§2.4) is explicitly PRESERVED, not loosened,
+  by parameterization — it becomes a caller-supplied fixed list, never a
+  caller-supplied directory-sweep pattern.
+- **`cm-12-harvest-cli-verb`** — the new `mnemosyne harvest` CLI verb
+  (`bin/mnemosyne-harvest.mjs`), wired into `bin/mnemosyne`'s existing
+  dispatch pattern exactly the way `onboard` already is, exposing
+  `cm-11`'s orchestrator with operator-supplied path/source flags plus
+  `cm-08`'s own confirmation-gate discipline preserved as CLI flags (no
+  implicit default sample/source selection, ever).
+
+**Verb name, decided explicitly, not left arbitrary:** `harvest` — never
+`onboard` (already means "bring a REPO online": Layer-1 sync, persona
+seed, file index, base-level report — a structurally different real
+action against a structurally different input). Reusing `onboard` for a
+conversation-history pipeline would conflate two unrelated real actions
+the same way `[grill 2.1.1]` (round 2) named for the word "Gemini" —
+disambiguated once, explicitly, the same discipline applied to a verb
+name this time. Confirmed unused anywhere in this repo's own `bin/`
+directory, `package.json`'s own `bin` map, or as a term elsewhere in this
+codebase (grepped this pass) before selecting it.
+
+**`[design decision, stated explicitly per the task's own instruction]`
+Proof posture — synthetic/structural correctness only, never a real
+second operator's real conversation history:** `cm-11`/`cm-12`'s own
+test suites (and their own acceptance criteria) are held to fixtures and
+structural correctness ONLY. There is no real second operator's data
+available to this repo, and using anyone else's real conversation content
+without their own explicit involvement would violate this epic's own
+`conversation-privacy-safety` posture (§2.8) — the exact same posture that
+already governs why `cm-10`'s own fixtures may never be the operator's
+real `moving-chaos` content (§9.8) and why `cm-02`'s own test suite never
+runs against this operator's real `~/.claude/projects/` tree either
+(`cm-02`'s own YAML). **The ONLY real-data proof this epic ever produces
+remains `cm-08`'s pilot and `cm-09`'s deep-dive test, both scoped to THIS
+operator's own data, exactly as already planned — `cm-11`/`cm-12` do not
+add, extend, widen, or substitute for that real-data proof in any way.**
+A genuinely different second operator's own first real run against their
+own machine remains the actual validation event for cross-operator
+correctness, explicitly named as unverified BY THIS EPIC — not
+overclaimed as solved by a synthetic fixture suite alone (mirrors `[grill
+5.1]`'s "name what isn't fully solved" discipline).
+
+**Dependency, stated explicitly per the task's own instruction:** `cm-11`
+`depends_on: [cm-09-deep-dive-validation-test]` (not merely the more
+obvious `cm-07`/`cm-08`, both already transitively required via `cm-09`'s
+own dependency chain) — the generalized component is not packaged as
+"ready to use" until the operator's own deep-dive test has actually
+validated the real pipeline against real data. Generalizing an
+as-yet-unvalidated pipeline would risk packaging a mechanism whose
+real-world correctness is still only fixture-proven at the moment of
+packaging. `cm-12` `depends_on: [cm-11-generalized-pipeline-
+orchestrator]`. `epic.yaml`'s own `stories:` list is updated to match.
+
+**Explicitly out of scope for `cm-11`/`cm-12`, named rather than silently
+assumed covered:** multi-operator LLM/credential provisioning. `cm-05`/
+`cm-07`'s own `geminiClient.ts` resolves ONE specific Portunus reference
+(`dostal-shared-gemini`, §9.1) — a different operator running this
+generalized component on their own machine would need their OWN LLM
+credential, a genuinely separate, unplanned concern this correction does
+not solve. `cm-11` parameterizes INPUT PATHS only, never the LLM
+provider — named explicitly so a future reader never assumes
+"generalized" means "credential-portable" too.
+
+### 10.4 Residual, honestly-named open items (not claimed solved by this correction)
+
+- **Whether `cm-08`/`cm-09` should now ALSO exercise a small Gemini
+  Takeout slice**, now that `cm-10`'s Takeout precondition is met, is a
+  real, live question this correction does NOT resolve — `cm-08`'s own
+  YAML still names only Claude Code sessions and a ChatGPT slice as its
+  pilot sample composition. Left open, not silently decided either way:
+  the operator may want `cm-10` built and folded into a future pilot
+  iteration, or may prefer keeping the 2-conversation Gemini sample out
+  of the pilot entirely given its small size. Not opened this pass —
+  would require modifying `cm-08`/`cm-09`, outside this amendment's own
+  three named changes.
+- **The `Gemini in Workspace` vs. standalone-consumer-Gemini schema
+  question (§10.1)** is NOT resolved here — genuinely deferred to
+  `cm-10`'s own research step at build time, against the real staged
+  file, never assumed identical to the Share-link shape this epic already
+  researched.
+- **The `Scope`-type cross-epic coordination point (§10.2)** is named,
+  not resolved — `cm-07`'s own research step gains the concrete sub-task
+  of confirming the real, safe implementation approach (local widening vs.
+  a coordinated `interfaces.ts` change) before implementation proceeds.
+- **Whether ANY cluster in a REAL future pilot/deep-dive run will ever
+  actually produce a confirmed scope-route candidate** is unverified by
+  this planning pass — `cm-08`'s own pilot sample (per its existing
+  acceptance criteria) spans at least 2 real project slugs, but whether
+  any of them happens to match a real, already-registered `swarm-memory`
+  scope key is a real-data question this design enables answering, not
+  one this pass answers itself.
+
+Grilled at the same rigor as rounds 1-2 — see `docs/grill-record.md`
+round 3.

@@ -22,11 +22,15 @@ description: |
     refined with one additional real signal (a project-slug that decodes
     to a path outside any operator-confirmed project root is a WEAK
     signal, surfaced for confirmation, never a hard silent exclude).
-  - A fixed, named list of confirmed export files — currently exactly
-    `~/Downloads/ChatGPT Data Export Feb 5 2026/conversations.json` — NOT
-    a generic Downloads-directory scan (research confirmed the same
-    directory also holds an OpenAI Export.zip, LinkedIn export, Drive
-    export, and Photos export bundles; a generic scan would false-
+  - A fixed, named list of confirmed export files — currently
+    `~/Downloads/ChatGPT Data Export Feb 5 2026/conversations.json` and
+    (as of the round-3 amendment, docs/design-discussion.md §10.1)
+    `~/Downloads/Google Takeout Aug 26 2026.zip` (a real, small, 2-
+    conversation Gemini export under its "Gemini in Workspace" Takeout
+    category — confirmed via file-listing-only inspection, no content
+    read) — NOT a generic Downloads-directory scan (research confirmed
+    the same directory also holds an OpenAI Export.zip, LinkedIn export,
+    Drive export, and Photos export bundles; a generic scan would false-
     positive on all of them).
 
 acceptance_criteria:
@@ -34,7 +38,7 @@ acceptance_criteria:
   - "Given a directory matching the scratch-filter exclude pattern (^-private-tmp, ^-private-var-folders, scratchpad), when discoverSources() runs, then that directory's sessions are excluded from the manifest by default, with the exclusion itself recorded (not silently omitted with no trace)"
   - "Given a directory whose decoded slug falls outside any operator-confirmed project root, when discoverSources() runs, then it is INCLUDED in the manifest but flagged with a weak-scratch-confidence marker — never silently dropped, never silently promoted to full confidence"
   - "Given the confirmed ChatGPT export file path, when discoverSources() runs, then it appears in the manifest as a named, fixed entry — the function never performs a generic directory scan of ~/Downloads or any other directory beyond the fixed, named list"
-  - "Given no Gemini export is staged in discoverSources()'s own fixed, named export-file list (the same convention the ChatGPT export follows — corrected from an earlier 'confirmed absent' framing, docs/design-discussion.md §9.3/§9.6: real Gemini export capability exists, just not staged here yet), when discoverSources() runs, then the manifest includes an explicit `gemini: not_staged` entry — the gap is visible, never silently omitted, and never worded as if the underlying capability doesn't exist"
+  - "Given the real, now-staged Gemini Takeout export at `~/Downloads/Google Takeout Aug 26 2026.zip` (2 conversation-history files, 4,300 and 1,083 bytes, under the 'Gemini in Workspace' Takeout category — confirmed via file-listing-only inspection, docs/design-discussion.md §10.1), when discoverSources() runs, then this fixed, named export-file entry appears in the manifest as `gemini: staged (takeout, 2 conversations)` — corrected from the prior `not_staged` wording now that a real (if small) export sits in the fixed list, WITHOUT wording this as if it were a comprehensive account-wide history (it is not — the plain 'Gemini' Takeout category in this same export was itself empty)"
   - "Given discoverSources() completes, when the manifest is inspected, then zero conversation CONTENT has been read from any source file — only filesystem metadata (path/size/mtime) and, for the JSONL case, decoded slug — verified by a test asserting no file handle for content is ever opened for `.jsonl` sources during discovery"
   - "Given the manifest is written to disk, when re-run, then it is idempotent and re-computable from scratch (a fresh manifest always reflects real, current filesystem state — never a stale cache silently trusted)"
 
@@ -95,8 +99,8 @@ design_decisions:
     rationale: "Research confirmed multiple non-conversation export bundles (OpenAI Export.zip, LinkedIn, Drive, Photos) share the same directory — a generic scan would produce false-positive candidates."
   - decision: "Weak scratch-signal directories are included-but-flagged, never silently excluded."
     rationale: "The scratch-filter's own established pattern is a heuristic, not ground truth; a false exclude would silently drop real project work from the operator's own history without any trace."
-  - decision: "gemini: not_staged (not not_found/absent) — the manifest's own Gemini entry is worded to reflect that real Gemini export capability exists and is reachable, just not yet placed in this story's fixed discovery list."
-    rationale: "docs/design-discussion.md §9.3 found a real (single, unrelated-project) Gemini conversation export on this machine, correcting round 1's 'confirmed absent' framing. cm-02's own fixed-list discipline (never a generic scan) is unchanged — this is a wording correction to the manifest's own entry, not a scope change to what this story auto-discovers. Once the operator stages a real export into this story's fixed list, cm-10-gemini-conversation-ingestion becomes buildable against it."
+  - decision: "gemini: staged (takeout, 2 conversations) — not not_staged, not not_found/absent — the manifest's own Gemini entry is worded to reflect that a real, small export now sits in this story's own fixed, named list, WITHOUT overclaiming it as comprehensive."
+    rationale: "docs/design-discussion.md §9.3 found a real (single, unrelated-project) Gemini Share-link conversation export on this machine, correcting round 1's 'confirmed absent' framing (round 2). docs/design-discussion.md §10.1 (round 3) confirms a further, distinct, real export now exists: a Google Takeout zip at ~/Downloads/Google Takeout Aug 26 2026.zip containing 2 real conversations under 'Gemini in Workspace' — genuinely staged into this story's own fixed, named export-file list (mirroring exactly how the ChatGPT export path is a fixed, named entry), not merely reachable-in-principle the way round 2's Share-link finding was. cm-02's own fixed-list discipline (never a generic scan) is unchanged — this is a wording correction to the manifest's own entry reflecting new real state, not a scope change to what this story auto-discovers. cm-10-gemini-conversation-ingestion's own gating precondition is now MET for this Takeout path specifically (its own YAML has the full detail); the separate Share-link path remains unstaged, unchanged."
 
 cross_cutting:
   - concern: conversation-privacy-safety
@@ -118,7 +122,7 @@ references:
   - path: .pHive/epics/mnemosyne-conversation-memory/docs/research-brief.md
     relevant_excerpt: "§1.1 — the real, confirmed 1404-total/234-real directory counts and the exact scratch-filter pattern already used and refined this planning pass."
   - path: .pHive/epics/mnemosyne-conversation-memory/docs/design-discussion.md
-    relevant_excerpt: "§2.4 — the full discovery design, including the weak-signal refinement and the explicit Gemini-absence manifest entry."
+    relevant_excerpt: "§2.4 — the full discovery design, including the weak-signal refinement and the explicit Gemini manifest entry. §10.1 (round 3) — the real, small, 2-conversation Gemini Takeout export now staged, and the precise gemini: staged manifest wording it drove."
 
 metric:
   applies: true

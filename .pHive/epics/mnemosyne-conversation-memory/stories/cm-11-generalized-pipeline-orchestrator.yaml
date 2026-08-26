@@ -1,0 +1,185 @@
+id: cm-11-generalized-pipeline-orchestrator
+epic: mnemosyne-conversation-memory
+title: Generalized, parameterized pipeline orchestrator — any operator, any machine
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [cm-02-conversation-source-discovery, cm-03-claude-code-session-parser, cm-04-chatgpt-export-parser, cm-05-usefulness-trash-triage, cm-06-cross-session-clustering, cm-07-distillation-and-persist, cm-09-deep-dive-validation-test]
+
+description: |
+  Added by the round-3 amendment (2026-08-25, docs/design-discussion.md
+  §10.3) at the operator's own explicit request — added to THIS epic, not
+  deferred to a separate future one. Packages this epic's own real
+  pipeline (discovery -> parse -> triage -> cluster -> distill, `cm-02`
+  through `cm-07`/`cm-10`) into a genuinely repeatable component any
+  operator could run against their OWN local conversation history on
+  their OWN machine, following `.pHive/epics/mnemosyne-repo-onboarding/`'s
+  own already-shipped precedent (merged to `main`, v0.15.0) exactly:
+  `onboardRepo()` (`lib/mnemosyne/onboarding/onboardRepo.ts`, `ro-02`) is
+  the one shared orchestrator both its deployment modes compose; this
+  story is the same kind of piece for THIS epic's own pipeline.
+
+  As currently designed, every stage of this pipeline is hardcoded to
+  THIS operator's own specific paths: `cm-02`'s discovery step walks
+  `~/.claude/projects/` and a fixed, named list containing THIS
+  operator's own specific ChatGPT export path and (as of `cm-02`'s own
+  round-3 update) THIS operator's own specific Gemini Takeout path.
+  `cm-08`'s own `bin/mnemosyne-conversation-pilot.mjs` already sequences
+  `cm-02` -> `cm-03`/`cm-04` -> `cm-05` -> `cm-06` -> `cm-07`
+  end-to-end, but only ever against THIS operator's own manifest.
+
+  This story implements `harvestConversationHistory()`
+  (`lib/mnemosyne/conversation-memory/harvestConversationHistory.ts`), a
+  new, genuinely parameterized composition function that:
+
+  - Parameterizes `cm-02`'s discovery inputs — a `sessionsRoot` directory
+    (default `~/.claude/projects/`, override-able) and a caller-supplied
+    list of named export-file entries (`{ type, path }`) — instead of
+    `cm-02`'s own literal hardcoded constants. `cm-02`'s own "fixed,
+    named list, never a generic directory scan" discipline (§2.4) is
+    explicitly PRESERVED, not loosened: parameterizing WHO supplies the
+    list is not the same as making the list itself a generic scan
+    pattern — a caller-supplied fixed list stays a fixed list.
+  - Sequences `cm-02` -> `cm-03`/`cm-04`/`cm-10` (whichever parser types
+    the supplied source list actually contains) -> `cm-05` -> `cm-06` ->
+    `cm-07`, identical stage order to `cm-08`'s own already-proven
+    sequencing, against the parameterized inputs instead of this
+    operator's own hardcoded manifest.
+  - Reuses `cm-08`'s own confirmation-gate discipline unchanged (no
+    implicit/default sample or source selection, ever) — this story adds
+    zero new privacy/safety logic of its own; every already-shipped
+    safety mechanism (`cm-01`'s two-checkpoint scan, the human-review
+    gate, `meta`-scope persist, `cm-06`/`cm-07`'s own round-3 scope-
+    routing confirms-before-write discipline) carries over UNCHANGED.
+
+  **Explicitly out of scope, named rather than silently assumed
+  covered:** multi-operator LLM/credential provisioning. `cm-05`/`cm-07`'s
+  own `geminiClient.ts` resolves ONE specific Portunus reference
+  (`dostal-shared-gemini`) — a different operator running this
+  generalized component on their own machine would need their OWN LLM
+  credential, a genuinely separate, unplanned concern this story does
+  not solve. This story parameterizes INPUT PATHS only, never the LLM
+  provider.
+
+acceptance_criteria:
+  - "Given a supplied sessionsRoot directory different from ~/.claude/projects/ (a synthetic fixture tree), when harvestConversationHistory()'s discovery phase runs, then it enumerates sessions from the SUPPLIED root, never falling back to or hardcoding this operator's own ~/.claude/projects/ path"
+  - "Given a supplied, operator-provided list of named export files (synthetic fixture paths, never this operator's own real ChatGPT/Gemini export paths), when discovery runs, then only those supplied entries appear in the manifest — the fixed-list discipline (never a generic directory scan) is preserved with a caller-supplied list, not cm-02's own literal hardcoded constant"
+  - "Given harvestConversationHistory() is invoked WITHOUT an explicit operator confirmation for the sample/source selection (mirroring cm-08's own no-implicit-default-selection contract), then it refuses to run — identical discipline to cm-08's own CLI orchestrator, not a looser one for this generalized entry point"
+  - "Given a synthetic multi-source fixture set (a fixture Claude Code session tree AND a fixture export file), when harvestConversationHistory() runs end-to-end with cm-05/cm-06/cm-07's own real Gemini/embedder calls stubbed (mirroring cm-08's own test discipline), then it produces the same stage-by-stage result shape cm-08's pilot produces — proving the generalization is structurally faithful to the already-proven pipeline, not a divergent reimplementation"
+  - "Given this story's own test suite, when reviewed, then every test runs against synthetic, structural fixtures only — never a live second operator's real conversation history (none exists or is available to this repo) and never this operator's own real ~/.claude/projects/ tree or real export content either, verified by an independent reviewer reading every fixture path in the diff"
+
+steps:
+  - id: research
+    description: |
+      Read onboardRepo.ts's exact parameterization pattern (mode-typed
+      options object, each already-shipped primitive composed, never
+      reimplemented) as the structural precedent to follow. Re-read
+      cm-02's own real, current hardcoded constants (the literal
+      ~/.claude/projects/ path and the literal export-file list) directly
+      from its own source before generalizing them — never guessing at
+      what's hardcoded from this story's own description alone. Re-read
+      cm-08's own bin/mnemosyne-conversation-pilot.mjs sequencing and
+      confirmation-gate implementation as the second structural precedent
+      this story's own orchestrator must match.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests against synthetic, structural fixtures only
+      (a fixture sessions-root directory tree mirroring the real Claude
+      Code naming convention, fixture export files mirroring cm-03/cm-04/
+      cm-10's own already-research-confirmed real schemas) covering every
+      acceptance criterion, with cm-05/cm-06/cm-07's own external calls
+      stubbed — never a live second operator's real data, and never this
+      operator's own real conversation history either, in the automated
+      suite.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      Implement lib/mnemosyne/conversation-memory/
+      harvestConversationHistory.ts: parameterized sessionsRoot/
+      export-list inputs, cm-02..cm-07/cm-10 stage sequencing (composed,
+      never reimplemented), cm-08's own confirmation-gate discipline
+      reused unchanged.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: |
+      Independently re-verify: no hardcoded path from cm-02's own
+      original constants survives in this story's new orchestrator (read
+      the diff); the fixed-list discipline was not accidentally loosened
+      into a generic scan; no test fixture is this operator's own real
+      content; the confirmation-gate discipline matches cm-08's own
+      exactly, not a weaker variant.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-conversation-memory.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/onboarding/onboardRepo.ts
+      purpose: "The real, shipped precedent (mnemosyne-repo-onboarding, ro-02) this story's own orchestrator structurally mirrors: one parameterized function composing already-shipped primitives, never reimplementing them."
+    - path: bin/mnemosyne-conversation-pilot.mjs
+      purpose: "cm-08's own real stage-sequencing and confirmation-gate implementation — the second structural precedent this story's orchestrator must match, generalized to accept parameterized inputs instead of this operator's own hardcoded manifest."
+    - path: lib/mnemosyne/conversation-memory/discoverSources.ts
+      purpose: "cm-02's own real, current hardcoded sessionsRoot/export-list constants this story's research step must re-read directly before generalizing them."
+
+files_to_modify:
+  - file: lib/mnemosyne/conversation-memory/harvestConversationHistory.ts
+    change: "New file: parameterized orchestrator composing cm-02 through cm-07/cm-10, reusing cm-08's own confirmation-gate discipline."
+  - file: lib/mnemosyne/conversation-memory/harvestConversationHistory.test.ts
+    change: "New file: tests against synthetic, structural fixtures only, with external calls stubbed."
+
+design_decisions:
+  - decision: "Proven via synthetic/structural correctness tests only, never a real second operator's real conversation history."
+    rationale: "docs/design-discussion.md §10.3 — no real second operator's data is available to this repo, and using anyone else's real conversation content without their own explicit involvement would violate this epic's own conversation-privacy-safety posture (§2.8). The ONLY real-data proof this epic ever produces remains cm-08's pilot and cm-09's deep-dive test, both scoped to THIS operator's own data as already planned — this story does not add, extend, widen, or substitute for that real-data proof in any way. A genuinely different second operator's own first real run against their own machine remains the actual validation event for cross-operator correctness, explicitly named as unverified BY THIS EPIC, not overclaimed as solved by a synthetic fixture suite alone."
+  - decision: "depends_on includes cm-09-deep-dive-validation-test specifically (not merely cm-07, which the module-composition rationale below would justify on its own) as a real-data VALIDATION gate, a categorically different kind of dependency than the module-import dependencies on cm-02 through cm-07 — cm-08 itself is deliberately NOT listed (its own real execution against real content happens at build time, already transitively required via cm-09's own chain)."
+    rationale: "The generalized component is not packaged as 'ready to use' until the operator's own deep-dive test has actually validated the real pipeline against real data (the operator's own explicit instruction, docs/design-discussion.md §10.3). Generalizing an as-yet-unvalidated pipeline would risk packaging a mechanism whose real-world correctness is still only fixture-proven at the moment of packaging — cm-09 is the readiness gate; cm-02 through cm-07 (listed separately below) are the module-import dependencies. Both kinds of dependency are real and distinct, so both are graph-enforced rather than collapsing to whichever happens to transitively cover the other."
+  - decision: "Multi-operator LLM/credential provisioning is explicitly OUT of scope for this story."
+    rationale: "cm-05/cm-07's own geminiClient.ts resolves ONE specific Portunus reference (dostal-shared-gemini) — a different operator would need their own credential, a genuinely separate, unplanned concern. This story only generalizes INPUT-PATH parameterization, named explicitly so a future reader never assumes 'generalized' also means 'credential-portable.'"
+  - decision: "cm-02's own fixed, named export-file list discipline (never a generic directory scan) is preserved as a caller-supplied fixed list, never loosened into a caller-supplied scan pattern."
+    rationale: "Parameterizing WHO supplies the list is orthogonal to WHETHER the list stays fixed and named — the whole point of the fixed-list discipline (avoiding false-positive matches on unrelated export bundles, cm-02's own design_decisions) applies with equal force to a second operator's own Downloads directory, which this story has no way to know is free of similar false-positive candidates."
+  - decision: "depends_on explicitly enumerates every story whose real runtime module this orchestrator composes (cm-02 through cm-07, plus cm-09) — cm-10 is deliberately NOT listed, composed conditionally only when the caller's supplied source list actually contains a staged Gemini export."
+    rationale: "docs/grill-record.md round 3 finding 4 — `[grill 4.1]`'s own established convention ('a shared module's consumers should have the dependency ENFORCED BY THE GRAPH, not merely true by transitive accident') applies here: an earlier draft listed only cm-09, relying on cm-02 through cm-07 being transitively required through cm-09's own dependency chain — real, but accidental, not graph-enforced. cm-10 is excluded from depends_on on purpose, not by oversight: unlike cm-02 through cm-07 (an unconditional, always-composed core sequence this story's own orchestrator cannot run without), cm-10 may never be built at all (its own gating precondition, cm-10's own YAML) — a hard depends_on on a story that might permanently stay unbuilt would incorrectly block this story's own dependency graph from ever being satisfiable. The orchestrator's own implementation composes cm-10's parser ONLY IF it exists and the supplied source list contains a Gemini export; this asymmetry (cm-02-07 unconditional core vs. cm-10 conditional/optional) is named explicitly here so a future implementer never assumes cm-10 is required, or conversely, mistakenly demotes cm-03/cm-04 to optional-feeling status by analogy."
+
+cross_cutting:
+  - concern: conversation-privacy-safety
+    action: "Test suite constraint: synthetic, structural fixtures only, never this operator's own real content and never a real second operator's data (none available). Every already-shipped safety mechanism (cm-01's scan, the human-review gate, cm-06/cm-07's scope-routing confirms-before-write discipline) carries over unchanged — this story adds zero new privacy/safety logic of its own."
+  - concern: existing-infrastructure
+    action: "Composes cm-02 through cm-07/cm-10 unchanged — mirrors onboardRepo()'s own 'compose, never reimplement' discipline exactly. Zero new persistence, parsing, classification, or clustering logic; purely parameterization + sequencing, identical in kind to cm-08's own orchestrator."
+  - concern: documentation
+    action: "harvestConversationHistory()'s own parameter contract (sessionsRoot, export-list shape, confirmation-gate contract) needs a discoverable doc entry once this story ships, mirroring onboardRepo()'s own documented mode-parameterization."
+
+risks:
+  - severity: medium
+    description: "A second operator's real conversation history could have structurally different shapes (different Claude Code session directory conventions, different export formats/versions) this story's synthetic fixtures cannot fully anticipate."
+    mitigation: "Fixtures are schema-accurate per cm-02/cm-03/cm-04/cm-10's own already-research-confirmed real schemas; a genuinely different second operator's first real run remains the actual validation event, explicitly named as unverified by this story alone (mirrors this story's own design_decisions above) — never overclaimed as solved by fixture coverage."
+  - severity: low
+    description: "Generalization could quietly loosen a safety discipline (e.g. the fixed-list export discipline drifting into a generic scan) when parameterized for flexibility."
+    mitigation: "Acceptance criteria explicitly require the fixed-list discipline survive parameterization; the reviewer step independently re-verifies no generic-scan code path was introduced, not merely that the description claims otherwise."
+
+references:
+  - path: .pHive/epics/mnemosyne-conversation-memory/docs/design-discussion.md
+    relevant_excerpt: "§10.3 — the full generalization design: the onboardRepo()/mnemosyne onboard precedent, the synthetic-only proof posture, the cm-09 dependency rationale, and the explicit credential-provisioning non-goal."
+  - path: .pHive/epics/mnemosyne-repo-onboarding/stories/ro-02-onboard-repo-core-orchestrator.yaml
+    relevant_excerpt: "The real, shipped precedent this story's own orchestrator structurally mirrors — one parameterized function composing already-shipped primitives."
+  - path: .pHive/epics/mnemosyne-conversation-memory/stories/cm-08-bounded-operator-pilot.yaml
+    relevant_excerpt: "The real stage-sequencing and confirmation-gate discipline this story's orchestrator generalizes without loosening."
+
+metric:
+  applies: true
+  name: conversation_memory.harvest_orchestrator_structural_coverage
+  direction: up
+  unit: percent
+  baseline: 0
+  target: 100
+  window: first-run
+  source:
+    kind: manual
+    ref: "Every acceptance criterion above passes against synthetic fixtures — a structural-correctness proxy, explicitly NOT a real cross-operator validation metric (no real second operator's data exists to measure that against, per this story's own design_decisions)."
+  verify_at: integrate
+  owner: researcher

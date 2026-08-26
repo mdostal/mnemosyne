@@ -5,8 +5,8 @@ status: pending
 complexity: high
 methodology: tdd
 depends_on: [cm-01-secret-credential-scanner, cm-02-conversation-source-discovery]
-parallel_allowed: false
-parallel_rationale: "Genuinely blocked on a real precondition (below), unlike cm-03/cm-04's parallel_allowed: true — this story cannot start real (non-speculative) implementation until the precondition is met, so it is not offered as a parallel-eligible slice of this epic's own build sequence."
+parallel_allowed: true
+parallel_rationale: "REVISED (round 3, docs/design-discussion.md §10.1): the precondition below is now MET for the Takeout export shape specifically — a real, small (2-conversation) Gemini Takeout export is staged in cm-02's fixed, named export-file list (~/Downloads/Google Takeout Aug 26 2026.zip). This story is no longer purely speculative for that shape, so it is now offered as a parallel-eligible slice like cm-03/cm-04, scoped to the Takeout parser specifically. The Share-link parser half remains genuinely gated — the moving-chaos artifact stays proven-as-mechanism-only, not opted into this epic (§9.8, unchanged) — so an implementer picking up this story should expect to build parseGeminiTakeoutExport.ts first/only, unless the operator separately opts the Share-link artifact in. **Precisely scoped, not overclaimed (docs/grill-record.md round 3 finding 5):** 'parallel-eligible' here means the research/schema-confirmation and implementation steps can now genuinely START against real data — it does NOT mean the parser is proven trivial or low-risk to build. The staged sample is real but tiny (2 conversations), its real schema is still wholly unconfirmed by this planning pass (content-level research is this story's own build-time job, never performed here — §10.1), and the 'Gemini in Workspace' vs. standalone-consumer-app schema question remains genuinely open. Treat this flip as 'no longer blocked from starting,' not as 'de-risked.'"
 
 description: |
   A real, reachable (not absent) third sibling of `cm-03`/`cm-04` — same
@@ -37,6 +37,27 @@ description: |
   every operation, never checked once and trusted" discipline, applied
   here to a planning-time precondition instead of a runtime guard.
 
+  **Round-3 update (2026-08-25, docs/design-discussion.md §10.1) — the
+  gating precondition above is now MET for the Takeout shape
+  specifically.** A real Google Takeout export now exists at
+  `~/Downloads/Google Takeout Aug 26 2026.zip` (2,964 bytes), staged into
+  `cm-02`'s fixed, named export-file list. Confirmed this pass via a
+  file-listing-only inspection (`unzip -l` — no content extracted or
+  read, per this pass's own hard privacy constraint): 2 real conversation
+  files under `Takeout/Gemini in Workspace/Conversation History/`
+  (4,300 and 1,083 bytes), plus an empty plain-`Gemini`-category pair of
+  files (11 bytes each — no scheduled-actions/gems data). This is real
+  but SMALL — 2 conversations, not a comprehensive account-wide history —
+  and it surfaces a genuinely new, previously-unconsidered nuance: the
+  content lives under Google's **`Gemini in Workspace`** Takeout category
+  specifically, a real, distinct product surface (the Workspace side-panel
+  assistant in Gmail/Docs/Sheets) this story's own research step must
+  confirm is schema-equivalent to (or distinct from) the standalone
+  consumer `gemini.google.com` app's own Takeout export — never assumed
+  identical to the Share-link shape below just because both say "Gemini."
+  The Share-link path's own precondition (below) remains SEPARATELY
+  unmet — this correction does not change that.
+
   Two real, structurally distinct input shapes this story's research step
   must pin down BEFORE implementation (never assumed identical to
   `cm-04`'s ChatGPT tree-DAG shape just because both are AI-chat
@@ -51,34 +72,55 @@ description: |
     been parsed by any story in this epic and must be re-confirmed
     directly against a real staged export, not assumed from this
     story's own description).
-  - **Takeout "Gemini Apps Activity" export:** format not yet confirmed
-    on this machine (none exists, §9.4) — this story's research step
-    must obtain Google's own current, real Takeout schema documentation
-    (or a real sample, if the operator produces one) before designing a
-    parser, never inventing a schema from assumption.
+  - **Takeout "Gemini Apps Activity" / "Gemini in Workspace" export:**
+    a real, staged sample now exists as of round 3
+    (`~/Downloads/Google Takeout Aug 26 2026.zip`, §10.1) — 2 real
+    conversation files under `Gemini in Workspace/Conversation History/`.
+    This planning pass performed NO content-level inspection of that
+    file (file-listing-only, per its own hard privacy constraint) — this
+    story's own research step, at build time, must open and confirm the
+    real schema directly against that staged file (legitimate, real
+    build-time research, distinct from this planning pass's own
+    constraint), never inventing a schema from Google's general
+    documentation alone, and must explicitly confirm whether `Gemini in
+    Workspace`'s export schema matches the standalone consumer
+    `gemini.google.com` app's own Takeout category (the plain `Gemini`
+    category in this same export was itself empty, so that comparison
+    remains genuinely unconfirmed) before designing the parser.
 
   Runs `cm-01`'s `scanForSecrets()` over every extracted turn, identical
   discipline to `cm-03`/`cm-04` (docs/design-discussion.md §2.8).
 
 acceptance_criteria:
   - "Given cm-02's real, current discovery manifest, when this story's research step runs, then it explicitly confirms whether a real Gemini export is staged — if none is staged, the story halts at research with a loudly-stated 'precondition not met' finding, never proceeding to test-spec/implement against invented sample data"
+  - "Given this round-3 amendment's own re-confirmation (docs/design-discussion.md §10.1), the Takeout precondition is now MET — a real, staged Gemini Takeout export (2 conversations, under 'Gemini in Workspace') sits in cm-02's fixed, named export-file list; this story's own research step, when it actually runs at build time, must re-confirm this directly against the live manifest rather than trusting this planning pass's own finding as still-current (mirrors this story's own already-established 're-checked before every operation, never checked once and trusted' discipline, applied here to its own precondition-status finding, not just the original unmet-state check)"
   - "Given a real, operator-staged Share-link HTML capture, when parseGeminiShareExport() runs, then it extracts the AF_initDataCallback data-hydration blob(s), parses the real (research-confirmed, not assumed) turn structure, and produces one ConversationTurn per real message, in chronological order, with role values normalized to the same 'system'|'user'|'assistant' set cm-03/cm-04 already use"
-  - "Given a real, operator-staged Takeout Gemini Apps Activity export, when parseGeminiTakeoutExport() runs, then it produces the same normalized ConversationTurn[] shape, against the real, current Takeout schema confirmed by this story's own research step (never an assumed/invented schema)"
+  - "Given a real, operator-staged Takeout export, when parseGeminiTakeoutExport() runs, then it produces the same normalized ConversationTurn[] shape, against the real, current Takeout schema confirmed directly against the actually-staged file by this story's own research step (never an assumed/invented schema, and never assumed identical to the Share-link shape or a generic 'Gemini Takeout' shape merely because both share the word 'Gemini')"
   - "Given extracted text containing a fixture secret (cm-01's own test corpus), when either parser runs, then the corresponding ConversationTurn is flagged as quarantined, identical behavior to cm-03/cm-04's own quarantine acceptance criterion"
-  - "Given this story's own fixtures, when reviewed, then they are synthetic, schema-accurate constructions — never the operator's real moving-chaos Share-link content, and never any other real personal conversation content, mirroring cm-04's own 'never the operator's actual export content in the automated suite' rule"
+  - "Given this story's own fixtures, when reviewed, then they are synthetic, schema-accurate constructions — never the operator's real moving-chaos Share-link content, never the operator's real staged Takeout content either, and never any other real personal conversation content, mirroring cm-04's own 'never the operator's actual export content in the automated suite' rule"
 
 steps:
   - id: research
     description: |
       FIRST task, before anything else: re-confirm cm-02's discovery
-      manifest for a real staged Gemini export. If none exists, stop
-      here and report the precondition as still unmet — do not proceed
-      to test-spec/implement. If one exists, re-read it directly (not
-      from this story's own description alone) to confirm the real
+      manifest for a real staged Gemini export. As of round 3 (design-
+      discussion.md §10.1), the Takeout shape's own precondition is MET —
+      re-confirm this directly at build time (never trust this planning
+      pass's own finding as still-current); if the manifest no longer
+      shows it staged, stop and report the precondition as unmet again,
+      do not assume it's still true. The Share-link shape remains
+      separately unmet — confirm this too, independently. If a real
+      export is confirmed staged, re-read it directly (not from this
+      story's own description alone) to confirm the real
       AF_initDataCallback blob shape (Share-link case) or the real
-      Takeout schema (bulk-export case), specifically hunting for a
-      multi-turn, real example the way cm-04's own research step hunted
-      for a real multi-branch ChatGPT conversation.
+      Takeout schema (bulk-export case, including whether `Gemini in
+      Workspace` matches the standalone consumer app's own category),
+      specifically hunting for a multi-turn, real example the way
+      `cm-04`'s own research step hunted for a real multi-branch ChatGPT
+      conversation. This content-level inspection is a legitimate
+      build-time research activity — distinct from, and not performed by,
+      this planning-only amendment pass, which read the export's file
+      listing only.
     agent: researcher
   - id: test-spec
     description: |
@@ -124,21 +166,21 @@ context:
 
 files_to_modify:
   - file: lib/mnemosyne/conversation-memory/parseGeminiShareExport.ts
-    change: "New file (built only once a real Share-link export is staged): AF_initDataCallback blob parsing, ConversationTurn production, cm-01 scan integration."
+    change: "New file (built only once a real Share-link export is staged — remains unstaged as of round 3): AF_initDataCallback blob parsing, ConversationTurn production, cm-01 scan integration."
   - file: lib/mnemosyne/conversation-memory/parseGeminiTakeoutExport.ts
-    change: "New file (built only once a real Takeout export is staged, and only if the operator's staged export is this type rather than/in addition to a Share-link capture): Takeout schema parsing, ConversationTurn production, cm-01 scan integration."
+    change: "New file — now buildable non-speculatively (round 3, §10.1): a real, small Takeout export is staged. Takeout schema parsing (confirmed directly against the real staged file by this story's own research step, including whether 'Gemini in Workspace' matches the standalone consumer app's own category), ConversationTurn production, cm-01 scan integration."
   - file: lib/mnemosyne/conversation-memory/parseGeminiShareExport.test.ts
     change: "New file: tests against real-shaped synthetic fixtures."
   - file: lib/mnemosyne/conversation-memory/__fixtures__/gemini-conversations/
-    change: "New directory: synthetic, schema-accurate fixture data (never the operator's real moving-chaos Share-link content or any other real personal conversation content)."
+    change: "New directory: synthetic, schema-accurate fixture data (never the operator's real moving-chaos Share-link content, never the operator's real staged Takeout content, and never any other real personal conversation content)."
 
 design_decisions:
-  - decision: "Genuinely gated on a real, named precondition (a staged export in cm-02's discovery list) — never built against invented sample data, and the research step's first job is re-confirming the precondition is still unmet before any further work."
-    rationale: "docs/design-discussion.md §5 open question 5's original recommendation (round 1) — 'building a parser against invented sample data violates this session's own real-data-not-assumed discipline' — still holds; round 2's correction (§9) fixes the FRAMING (reachable, not absent) without abandoning that discipline. The real moving-chaos Share-link artifact proves the mechanism, not a ready-made fixture corpus for this epic."
+  - decision: "Genuinely gated on a real, named precondition (a staged export in cm-02's discovery list) — never built against invented sample data, and the research step's first job is re-confirming the precondition's real, current status before any further work."
+    rationale: "docs/design-discussion.md §5 open question 5's original recommendation (round 1) — 'building a parser against invented sample data violates this session's own real-data-not-assumed discipline' — still holds; round 2's correction (§9) fixed the FRAMING (reachable, not absent) without abandoning that discipline. Round 3 (§10.1) goes further: the Takeout precondition is now genuinely MET, not merely reframed — a real, small, 2-conversation export is staged, so this story is no longer purely speculative for that shape. The Share-link shape's precondition remains separately unmet, unchanged by this correction."
   - decision: "The moving-chaos Share-link export is NOT pulled into this epic's fixtures or pilot sample automatically."
-    rationale: "It belongs to an unrelated personal project (relocation planning) the operator saved for that project's own purposes — using it here without the operator's separate, explicit opt-in would be exactly the kind of silent scope-widening this epic's own privacy-safety posture (§2.8) exists to prevent."
-  - decision: "Two possible real export shapes (Share-link HTML, Takeout bulk export) are both named, with implementation scoped to whichever the operator actually stages first — not both built speculatively."
-    rationale: "The two are structurally different (single-conversation client-rendered SPA capture vs. a bulk, Google-defined Takeout schema) and only one is proven to exist as a real, producible artifact on this machine today (Share-link, §9.3); building a Takeout parser against no real sample would repeat exactly the mistake round 1's own recommendation warned against for Gemini generally."
+    rationale: "It belongs to an unrelated personal project (relocation planning) the operator saved for that project's own purposes — using it here without the operator's separate, explicit opt-in would be exactly the kind of silent scope-widening this epic's own privacy-safety posture (§2.8) exists to prevent. Unchanged by round 3 — the newly-staged Takeout export is a DIFFERENT, separately-confirmed real fact, not a reason to relax this decision for the Share-link artifact."
+  - decision: "Two possible real export shapes (Share-link HTML, Takeout bulk export) are both named, with implementation scoped to whichever the operator has actually staged — not both built speculatively."
+    rationale: "The two are structurally different (single-conversation client-rendered SPA capture vs. a bulk, Google-defined Takeout schema). As of round 3 (§10.1), the Takeout shape has moved from 'proven-as-mechanism-only' to 'genuinely staged, real, small sample available' — the Share-link shape has not made that same transition (still proven-as-mechanism-only via the unrelated moving-chaos artifact, not opted in). Implementation should therefore target the Takeout parser first/only unless the operator separately stages a Share-link export too — never build the Share-link parser against invented data just because the Takeout parser is now real."
 
 cross_cutting:
   - concern: conversation-privacy-safety
@@ -150,15 +192,18 @@ cross_cutting:
 
 risks:
   - severity: low
-    description: "This story may never actually start if the operator never stages a real Gemini export — a real, accepted possibility, not a defect in this story's own design."
-    mitigation: "Named explicitly as an accepted, gated outcome (design-discussion §9.8) — the story exists so Gemini is a real, reachable, trackable part of this epic's own plan, not so it is guaranteed to build regardless of real preconditions."
+    description: "This story's Share-link half may never actually start if the operator never separately opts the moving-chaos artifact in (or produces a new Share-link capture) — a real, accepted possibility, not a defect in this story's own design. The Takeout half's own blocking precondition is now resolved (round 3, §10.1), so that half is realistically buildable as soon as this planning pass's own no-build-out restriction lifts."
+    mitigation: "Named explicitly as an accepted, gated outcome for the Share-link half (design-discussion §9.8, unchanged) — the story exists so Gemini is a real, reachable, trackable part of this epic's own plan, not so both shapes are guaranteed to build regardless of real preconditions. The Takeout half's real availability (§10.1) is itself the concrete proof this gating discipline works as designed: it stayed unbuilt exactly until a real precondition was met, never built speculatively in the interim."
   - severity: medium
     description: "A Share-link HTML capture's AF_initDataCallback blob format is Google-internal and undocumented publicly — it could change or vary across capture dates without warning, unlike ChatGPT's own more stable conversations.json export format."
     mitigation: "Research step re-confirms the real, current shape directly against whatever export is actually staged at build time (never trusting this planning pass's own §9.3 findings as still-accurate without re-verification) — mirrors cm-04's own 're-confirm the real shape directly... do not build from citations alone' discipline."
+  - severity: medium
+    description: "The real staged Takeout export's small size (2 conversations) may not exercise every real structural variation the Takeout schema allows (e.g. multi-turn branching if Gemini supports it, attachments, tool-use turns) — a parser built and tested against only 2 real conversations could pass its own tests while still missing a real edge case a larger, more varied corpus would surface."
+    mitigation: "Named explicitly, not claimed solved by the precondition merely being met — cm-09's own deep-dive report (if this story's output is ever included in a future pilot iteration, §10.4) is where real coverage gaps would actually surface; this story's own acceptance criteria are honest about testing against what's actually staged, not a claim of exhaustive real-world coverage."
 
 references:
   - path: .pHive/epics/mnemosyne-conversation-memory/docs/design-discussion.md
-    relevant_excerpt: "§9 — the full Gemini correction: Portunus/GCP verification, the API-key-vs-chat-history structural distinction, the real moving-chaos Share-link evidence, and this story's own gating rationale."
+    relevant_excerpt: "§9 — the full Gemini correction: Portunus/GCP verification, the API-key-vs-chat-history structural distinction, the real moving-chaos Share-link evidence, and this story's own gating rationale. §10.1 (round 3) — the real, small, staged Takeout export that meets this story's own gating precondition for that shape specifically, and the 'Gemini in Workspace' schema question it surfaces."
   - path: .pHive/epics/mnemosyne-conversation-memory/stories/cm-04-chatgpt-export-parser.yaml
     relevant_excerpt: "The closest sibling story's own rigor bar (real-shape re-confirmation before implementation, synthetic-fixtures-only discipline, cm-01 scan integration) this story is held to."
 
@@ -172,6 +217,6 @@ metric:
   window: "checked at the start of every future planning/build pass over this epic, until met"
   source:
     kind: manual
-    ref: "cm-02's discovery manifest's own gemini: not_staged / staged status (docs/design-discussion.md §9.6) — the real, verifiable proxy for whether this story's gating precondition has been met yet. 0% (not_staged) at the time of this correction; not this story's own build-success metric, since it may never build if the precondition is never met (an accepted, named outcome, not a target this story is scored against)."
+    ref: "cm-02's discovery manifest's own gemini: not_staged / staged status (docs/design-discussion.md §9.6, updated §10.1) — the real, verifiable proxy for whether this story's gating precondition has been met yet. 0% (not_staged) at the time of round 2's correction; UPDATED round 3 (2026-08-25): 100% MET for the Takeout shape specifically (a real, staged, 2-conversation export) — the Share-link shape remains its own separately-tracked 0% (not staged, unchanged). Not this story's own build-success metric, since the Share-link half may still never build if that shape's own precondition is never separately met (an accepted, named outcome, not a target this story is scored against)."
   verify_at: "cm-02 discovery manifest, any future re-run"
   owner: researcher

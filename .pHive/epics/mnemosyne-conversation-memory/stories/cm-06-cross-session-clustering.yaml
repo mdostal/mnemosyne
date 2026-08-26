@@ -28,12 +28,60 @@ description: |
   BOTH within and across project slugs, so slug-only grouping would be
   too coarse.
 
+  **Round-3 addition (2026-08-25, docs/design-discussion.md §10.2) —
+  read-only scope-resolution candidate, computed here, acted on nowhere
+  in this story. "Scope" disambiguated once, up front, so this sub-step's
+  own name never collides with `cm-07`'s existing `scope: 'meta'` field:
+  Mnemosyne's own `Scope` TYPE (`interfaces.ts`, `'project'|'enterprise'|
+  'meta'`) is the caller-facing enum `remember()` accepts; `swarm-memory`'s
+  own `[scopes]` REGISTRY (`config.toml`, real keys like `arizona`) is the
+  underlying table that TYPE's values resolve against at runtime — this
+  sub-step reads the SECOND one, to propose a candidate value for the
+  FIRST one's own parameter. Full three-way detail in §10.2.** a real, confirmed-this-pass fact — `swarm-memory`'s
+  own config (`~/.config/swarm-memory/config.toml`, the SAME file
+  `VectorLayerAdapter.remember()` already reads via its `swarm-memory
+  config` shell-out, `VectorLayerAdapter.ts:213-226`) has a real,
+  existing `[scopes]` entry, `arizona = "clients_arizona_compound_
+  memory"`, backing a real project at `~/Documents/work/personal/
+  arizona-compound` — surfaced a real gap: no design existed for a
+  cluster whose project-slug facet clearly matches an EXISTING, already-
+  registered scope (this epic's own writes, §2.3, always targeted `meta`
+  only). This story now ALSO computes, per cluster, a
+  `resolved_scope_candidate` (nullable): a conservative, exact/near
+  string match of the cluster's UNAMBIGUOUS project-slug facet (all/
+  overwhelming-majority member agreement — a mixed-slug cluster produces
+  no candidate) against REAL, ALREADY-EXISTING scope keys read from (a)
+  `swarm-memory`'s own `[scopes]` table, via the exact same `swarm-memory
+  config` shell-out `VectorLayerAdapter.remember()` already performs
+  (never a second, independently-implemented TOML/JSON parse — `[grill
+  4.1]`'s "one primitive, reused, never reimplemented" convention,
+  applied to an already-shipped OTHER story's own shell-out this time),
+  and (b) `~/.mnemosyne/org-tree.yaml`, read defensively if present
+  (confirmed THIS pass: it does not exist on this machine today — only
+  `~/.mnemosyne/level0-rules.md` is — `ro-04`'s own "missing file is not
+  an error" contract applies). **This sub-step is strictly READ-ONLY and
+  has ZERO side effects — it never creates a scope, a collection, or an
+  org-tree entry, mirroring `ro-06`'s own "Additive-only, by design: no
+  delete/drop code path exists anywhere in this module" discipline
+  (`mnemosyne/onboarding.py`), extended here to "no CREATE path exists
+  either."** A candidate is never acted on by this story — it is
+  attached as cluster metadata and surfaced into the SAME human-review
+  queue `cm-01`/`cm-05` already produce, tagged `review_reason:
+  'scope_route_candidate'` (mirrors `cm-01`'s own `quarantine_reason`
+  tagging convention exactly). `cm-07` is the only story that ever acts
+  on a CONFIRMED candidate (see `cm-07`'s own YAML) — this story
+  proposes, it never decides or writes.
+
 acceptance_criteria:
   - "Given a set of triage-queue entries with keep or uncertain verdicts, when clusterConversations() runs, then every one of them receives a cluster assignment — verified none are silently dropped from clustering"
   - "Given a set of triage-queue entries including trash-verdict sessions, when clusterConversations() runs, then trash-verdict sessions are excluded from the function's INPUT set entirely (never passed in, not merely filtered from output) — verified by a test asserting the embedding call is never made for a trash-verdict session's summary"
   - "Given two sessions with genuinely similar summaries (real semantic overlap) but DIFFERENT project slugs, when clusterConversations() runs, then they CAN be assigned to the same cluster — verified the clustering mechanism is not slug-partitioned by default (a real test proving cross-slug clustering works, not merely asserted)"
   - "Given a cluster assignment, when inspected, then it carries both a cluster_id and the real project-slug facet(s) of its member sessions — the facet is available as a queryable/filterable dimension alongside the similarity-based grouping, never discarded after clustering runs"
   - "Given the SAME input set run twice, when clusterConversations() runs, then cluster assignments are stable/reproducible (verified directly — not merely a hope) for a deterministic clustering algorithm choice, OR any non-determinism in the chosen approach is named explicitly as an accepted characteristic in this story's own design_decisions, never silently assumed away"
+  - "Given a cluster whose member sessions UNAMBIGUOUSLY share a project-slug facet that exactly/near-matches a REAL, already-existing key in swarm-memory's own [scopes] table (read via the same swarm-memory config shell-out VectorLayerAdapter.remember() already performs — never a second, independent config-file parser), when clusterConversations() runs, then that cluster's metadata carries a resolved_scope_candidate naming the matched scope key and its real collection name — verified against a stubbed [scopes] table in the test, never a live read of this operator's own real config.toml in the automated suite"
+  - "Given a cluster whose member sessions span genuinely MIXED, non-dominant project slugs (no single slug held by all/an overwhelming majority of members), when clusterConversations() runs, then resolved_scope_candidate is null for that cluster — never a best-guess match on an ambiguous case"
+  - "Given a cluster with a resolved_scope_candidate, when clusterConversations() runs, then NO write, create, or mutation of any kind occurs against the scope registry (swarm-memory's config.toml, org-tree.yaml, or any Qdrant collection) — verified by a test asserting zero write/create calls are made anywhere in this function, matching ro-06's own additive-only, never-auto-create-speculatively discipline extended to 'read-only, full stop' for this story"
+  - "Given ~/.mnemosyne/org-tree.yaml does not exist (the real, confirmed-this-pass state on this machine), when clusterConversations() runs, then it completes normally with no error and no candidate contributed from that source — mirrors ro-04's own established 'missing file is not an error, returns empty' contract, never assumed to require the file's existence"
 
 steps:
   - id: research
@@ -45,7 +93,14 @@ steps:
       dependency) — if a new dependency is introduced, validate it via
       context7/web research at this step per this repo's own always-on
       validation discipline (not assumed safe because it's a common
-      library).
+      library). Confirm the exact real shell-out VectorLayerAdapter.ts
+      makes to read swarm-memory's [scopes] table (`swarm-memory config`,
+      VectorLayerAdapter.ts:213-226) so this story's own scope-resolution
+      sub-step reuses that exact call rather than re-implementing a
+      TOML/JSON parse of config.toml directly (docs/design-discussion.md
+      §10.2). Confirm ~/.mnemosyne/org-tree.yaml's real current schema
+      (ro-04's orgTree.ts) for the fallback lookup, even though it does
+      not exist on this machine today.
     agent: researcher
   - id: test-spec
     description: |
@@ -79,36 +134,49 @@ context:
   codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
   key_files:
     - path: lib/mnemosyne/layers/VectorLayerAdapter.ts
-      purpose: "The real, already-in-production embedder this story reuses — no new embedding infrastructure."
+      purpose: "The real, already-in-production embedder this story reuses — no new embedding infrastructure. Also (round 3, §10.2): lines 213-226 are the exact 'swarm-memory config' shell-out this story's own scope-resolution sub-step reuses to read the real [scopes] table — never a second, independent config-file parser."
+    - path: lib/mnemosyne/onboarding/orgTree.ts
+      purpose: "ro-04's org-tree.yaml reader/writer — this story's own scope-resolution sub-step reads (never writes) the same ~/.mnemosyne/org-tree.yaml location as a secondary, currently-empty scope-mapping source (round 3, §10.2)."
 
 files_to_modify:
   - file: lib/mnemosyne/conversation-memory/clusterConversations.ts
-    change: "New file: keep/uncertain filtering, embedding-based similarity clustering, project-slug facet attachment."
+    change: "New file: keep/uncertain filtering, embedding-based similarity clustering, project-slug facet attachment, read-only resolved_scope_candidate computation (round 3, §10.2)."
   - file: lib/mnemosyne/conversation-memory/clusterConversations.test.ts
-    change: "New file: tests against a stubbed embedder and synthetic triage-queue fixtures."
+    change: "New file: tests against a stubbed embedder, synthetic triage-queue fixtures, and a stubbed [scopes] table — never this operator's own real config.toml or org-tree.yaml in the automated suite."
 
 design_decisions:
   - decision: "Clustering input is cm-05's own SUMMARIES, never raw transcripts or the full normalized-turn list."
     rationale: "Keeps embedding-call volume/cost bounded (one small summary per session, not per-turn or per-chunk), and mirrors this epic's own consistent 'distilled text, not raw content' discipline (design-discussion §2.1, §2.7)."
   - decision: "Project-slug is a facet alongside similarity, never a partition boundary."
     rationale: "The operator's own quote ('different overall mixes of which ones are helping with what') implies real cross-project topical overlap that a slug-only grouping would miss."
+  - decision: "Scope-resolution is a PROPOSAL this story computes, never a DECISION it acts on — the actual scope value used at persist time is chosen exclusively by cm-07, gated on explicit operator confirmation."
+    rationale: "docs/design-discussion.md §10.2 — a wrong-scope route (personal content landing in a client-facing collection) is the single highest-severity failure mode this design point could introduce; keeping the read-only PROPOSE step (here) structurally separate from the WRITE step (cm-07, gated on confirmation) means no code path in this story can ever cause that outcome by construction, not merely by discipline."
+  - decision: "Scope match requires unambiguous cluster-level project-slug agreement — a mixed-slug cluster never produces a candidate."
+    rationale: "A confident-looking but wrong match on an ambiguous cluster would be worse than no match at all, given the residual-risk severity named in §10.2; erring toward null is the safe default."
 
 cross_cutting:
+  - concern: conversation-privacy-safety
+    action: "The scope-resolution sub-step (round 3, §10.2) is read-only against real, already-existing scope registries only, never creates a scope/collection, and never itself routes a write — it only ever proposes a candidate into the same human-review queue cm-01/cm-05 already produce, tagged review_reason: 'scope_route_candidate', requiring cm-07's own separate, explicit-confirmation gate before any non-meta write ever happens."
   - concern: existing-infrastructure
-    action: "Reuses the vector layer's existing embedder — no new embedding infrastructure, no new external API credential surface beyond what remember()'s vector layer already requires in production."
+    action: "Reuses the vector layer's existing embedder — no new embedding infrastructure, no new external API credential surface beyond what remember()'s vector layer already requires in production. Round 3: reuses VectorLayerAdapter's own existing 'swarm-memory config' shell-out for scope-table reads, and ro-04's orgTree.ts read path for org-tree.yaml — no new config-reading mechanism introduced."
   - concern: provenance-completeness
-    action: "Every cluster assignment carries the real project-slug facet(s) of its members, traceable back to cm-02's discovery manifest."
+    action: "Every cluster assignment carries the real project-slug facet(s) of its members, traceable back to cm-02's discovery manifest, plus (round 3) the resolved_scope_candidate (nullable) and which registry it matched against."
 
 risks:
   - severity: low
     description: "Embedding-based clustering could produce clusters that don't map to anything the operator recognizes (R10, docs/design-discussion.md §4 risk registry)."
     mitigation: "Project-slug facet anchors clusters to a real, recognizable signal alongside pure similarity; cm-09's deep-dive report explicitly surfaces cluster assignments for the pilot sample so the operator can judge real cluster quality before any scale-out."
+  - severity: high
+    description: "A project-slug match against a real, already-existing scope key (e.g. arizona) is a HEURISTIC, not a guarantee — a coincidental slug collision or a tangential mention could produce a resolved_scope_candidate for a cluster that doesn't actually belong to that scope (docs/design-discussion.md §10.2's own named residual risk)."
+    mitigation: "This story never acts on a candidate — it only proposes one into the human-review queue, requiring cm-07's own separate, explicit per-cluster operator confirmation before any non-meta write occurs (§10.2); the unambiguous-agreement requirement above (mixed-slug clusters produce no candidate) further narrows when a candidate is even proposed."
 
 references:
   - path: .pHive/epics/mnemosyne-conversation-memory/docs/design-discussion.md
-    relevant_excerpt: "§2.6 and `[grill 2.1]` — the full clustering design and the resolved keep/uncertain-only input-set decision."
+    relevant_excerpt: "§2.6 and `[grill 2.1]` — the full clustering design and the resolved keep/uncertain-only input-set decision. §10.2 (round 3) — the scope-resolution design, the swarm-memory [scopes]/arizona finding, and the named residual risk this story's own confirms-before-write handoff to cm-07 mitigates."
   - path: .pHive/epics/mnemosyne-conversation-memory/docs/structured-outline.md
     relevant_excerpt: "§4 risk registry R10 — clusters not mapping to operator-recognizable groupings, and its named mitigation."
+  - path: .pHive/epics/mnemosyne-repo-onboarding/stories/ro-06-collection-creation-and-scope-mapping.yaml
+    relevant_excerpt: "The 'additive-only, no delete/drop code path exists' discipline this story's own scope-resolution sub-step extends to 'no create path exists either' (round 3, §10.2)."
 
 metric:
   applies: true

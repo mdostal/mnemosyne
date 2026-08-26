@@ -33,6 +33,22 @@ description: |
   pass does not ingest, embed, or persist any real content; it plans the
   mechanism that will, later, under explicit operator confirmation.
 
+  **Round-3 note (2026-08-25, docs/design-discussion.md §10.2, docs/
+  grill-record.md round 3 finding 3) — a real, expected consequence of
+  running `cm-02` through `cm-07` in one synchronous pass, named
+  explicitly rather than left for an implementer to discover by
+  surprise:** `cm-06`/`cm-07` gained a read-only, human-confirmed scope-
+  routing extension after this story was originally planned. Because
+  this story's own pilot run computes any `resolved_scope_candidate`
+  and consumes it in the SAME pass, no candidate can have a pre-existing
+  operator confirmation yet — every entry from THIS story's own pilot
+  run will, in practice, land in `scope: 'meta'` (`cm-07`'s existing,
+  safe default), identical to this story's own pre-round-3 acceptance
+  criteria below. This story's own scope is unchanged by that extension;
+  genuine scope-routing (an entry landing anywhere other than `meta`)
+  is only ever exercised by a later, separate run against a candidate a
+  human has since reviewed — never within a single `cm-08` pilot pass.
+
 acceptance_criteria:
   - "Given cm-02's real discovery manifest, when the operator marks a small subset (a named small maximum, e.g. no more than 5 Claude Code sessions and no more than 5 ChatGPT conversations), then the CLI orchestrator accepts exactly that operator-marked subset as the pilot sample — never a larger, auto-expanded set"
   - "Given the operator-selected sample spans at least 2 distinct real project slugs (a real, verifiable condition given the operator's own '30 plus sessions... different overall mixes' framing), when the pilot runs, then cm-06's clustering step is genuinely exercised across those distinct slugs, not degenerate to a single-slug case"

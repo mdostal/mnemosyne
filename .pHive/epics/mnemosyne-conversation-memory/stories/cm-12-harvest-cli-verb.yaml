@@ -1,0 +1,145 @@
+id: cm-12-harvest-cli-verb
+epic: mnemosyne-conversation-memory
+title: "mnemosyne harvest CLI verb — generalized pipeline entry point"
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [cm-11-generalized-pipeline-orchestrator]
+
+description: |
+  Added alongside `cm-11` by the round-3 amendment (2026-08-25, docs/
+  design-discussion.md §10.3), mirroring `mnemosyne-repo-onboarding`'s own
+  real, shipped split exactly: `onboardRepo()` (`ro-02`, the shared
+  orchestrator) vs. `mnemosyne onboard` (`ro-05`/`ro-07`, the CLI-verb
+  wiring). This story is the CLI-verb half for `cm-11`'s own orchestrator.
+
+  New CLI verb, **`harvest`** — never `onboard`, decided explicitly, not
+  left arbitrary: `onboard` already means "bring a REPO online" (Layer-1
+  sync, persona seed, file index, base-level report, `bin/mnemosyne-
+  onboard.mjs`) — a structurally different real action against a
+  structurally different input than a conversation-history pipeline.
+  Reusing `onboard` here would conflate two unrelated real actions the
+  same way `[grill 2.1.1]` (round 2) named for the word "Gemini" —
+  disambiguated once, explicitly, the same discipline applied to a verb
+  name this time. Confirmed unused anywhere in this repo's own `bin/`
+  directory, `package.json`'s own `bin` map, or as a term elsewhere in
+  this codebase (grepped this pass) before selecting it.
+
+  Wired into `bin/mnemosyne`'s existing dispatch pattern exactly the way
+  `onboard` already is (the real, current `if [ "${1:-}" = "onboard" ];
+  then ... exec node "$HERE/node_modules/.bin/tsx" "$HERE/bin/mnemosyne-
+  onboard.mjs" "$@"` branch, confirmed by reading `bin/mnemosyne`'s own
+  source, not assumed): a new `if [ "${1:-}" = "harvest" ]` branch
+  dispatching to `bin/mnemosyne-harvest.mjs`, exposing `cm-11`'s
+  `harvestConversationHistory()` with operator-supplied path/source-list
+  flags plus `cm-08`'s own confirmation-gate discipline preserved as CLI
+  flags (no implicit default sample/source selection, ever — identical
+  posture to `cm-08`'s own CLI).
+
+acceptance_criteria:
+  - "Given `mnemosyne harvest --help`, when run, then it documents every supported flag (sessions-root override, repeatable named export entries, sample/source-selection confirmation flags) — discoverable without reading source, mirroring `mnemosyne onboard --help`'s own documented flag surface"
+  - "Given `mnemosyne harvest` invoked WITHOUT any explicit sample/source-selection confirmation flag, then it refuses to run — identical no-implicit-default discipline to cm-08's own CLI, and to cm-11's own orchestrator-level refusal (this story's CLI layer never bypasses that refusal, it surfaces it)"
+  - "Given `bin/mnemosyne harvest <flags>` is invoked, when the dispatcher runs, then it dispatches to bin/mnemosyne-harvest.mjs exactly the way the existing `onboard` branch dispatches to bin/mnemosyne-onboard.mjs — same pattern, confirmed by reading bin/mnemosyne's real current dispatch branches directly, not assumed from this story's own description"
+  - "Given a supplied --sessions-root and one or more repeatable --export <type>=<path> flags, when mnemosyne harvest runs, then it passes them through to cm-11's harvestConversationHistory() unchanged — verified by inspecting the actual call arguments, not merely that the CLI accepted the flags"
+  - "Given this story's own test suite, when reviewed, then it exercises argument parsing/flag validation and dispatch wiring only, against synthetic fixtures — never a live invocation against this operator's own real ~/.claude/projects/ tree or real export content in the automated suite"
+
+steps:
+  - id: research
+    description: |
+      Read bin/mnemosyne's real, current dispatch branches (onboard,
+      reindex, persona, agent) for the exact wiring shape this story's
+      new harvest branch must match. Confirm cm-11's own real, current
+      harvestConversationHistory() parameter shape (not assumed from
+      this story's own description alone) before designing the CLI's
+      flag surface.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests for bin/mnemosyne-harvest.mjs's own argument
+      parsing, flag validation, and the no-implicit-selection refusal,
+      against a stubbed harvestConversationHistory() — never a live
+      invocation against real content in the automated suite.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      Implement bin/mnemosyne-harvest.mjs (flag parsing, confirmation-
+      gate surfacing, calls cm-11's harvestConversationHistory()
+      unchanged) and add the new `if [ "${1:-}" = "harvest" ]` branch to
+      bin/mnemosyne's own dispatcher, matching the existing `onboard`
+      branch's exact shape.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: |
+      Independently re-verify the dispatcher branch matches the existing
+      `onboard` branch's shape exactly (read the diff); confirm every CLI
+      flag maps to a real cm-11 parameter (no drift between the CLI's own
+      description and the orchestrator's real signature); confirm no
+      implicit/default selection path exists anywhere in this story's own
+      code.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-conversation-memory.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: bin/mnemosyne
+      purpose: "The real, existing dispatch pattern (the `onboard` branch, and its own header comment documenting the verb) this story's new `harvest` branch must match exactly."
+    - path: bin/mnemosyne-onboard.mjs
+      purpose: "The real, shipped precedent for a dispatcher-routed CLI-verb script this story's own bin/mnemosyne-harvest.mjs structurally mirrors."
+    - path: lib/mnemosyne/conversation-memory/harvestConversationHistory.ts
+      purpose: "cm-11's own orchestrator this story's CLI wraps — this story never reimplements its logic, only exposes it via flags."
+
+files_to_modify:
+  - file: bin/mnemosyne-harvest.mjs
+    change: "New file: CLI argument parsing (sessions-root, repeatable export entries, confirmation flags), dispatch to cm-11's harvestConversationHistory()."
+  - file: bin/mnemosyne
+    change: "Add a new `if [ \"${1:-}\" = \"harvest\" ]` dispatch branch, matching the existing `onboard` branch's exact shape."
+  - file: bin/mnemosyne-harvest.test.mjs
+    change: "New file: tests against a stubbed harvestConversationHistory(), covering flag parsing and the no-implicit-selection refusal."
+
+design_decisions:
+  - decision: "New verb name `harvest`, never reusing `onboard`."
+    rationale: "docs/design-discussion.md §10.3 — `onboard` already means a structurally different real action (bring a REPO online); reusing it for a conversation-history pipeline would conflate two unrelated actions the same way `[grill 2.1.1]` (round 2) named for the word 'Gemini.' Confirmed unused elsewhere in this repo's own bin/ directory, package.json's bin map, and codebase-wide (grepped) before selecting it."
+  - decision: "Wired into bin/mnemosyne's existing dispatcher, never a new, separate top-level binary registered independently in package.json's own bin map."
+    rationale: "Mirrors the existing convention exactly (onboard/reindex/persona/agent all route through the same `if [ \"${1:-}\" = \"<verb>\" ]` dispatcher) — a new, separately-registered binary would be a real, unnecessary convention deviation for a verb that fits the existing pattern cleanly."
+
+cross_cutting:
+  - concern: existing-infrastructure
+    action: "Wires into bin/mnemosyne's existing dispatch convention exactly — no new dispatcher mechanism, no new CLI-wiring pattern introduced."
+  - concern: conversation-privacy-safety
+    action: "This story's own automated test suite never invokes cm-11's real orchestrator against real content — flag parsing and dispatch wiring only, against a stubbed orchestrator."
+  - concern: documentation
+    action: "`mnemosyne harvest --help`'s own flag documentation is this verb's real, discoverable entry point — mirrors `mnemosyne onboard --help`'s own established bar."
+
+risks:
+  - severity: low
+    description: "This story's own CLI flag surface could drift from cm-11's own actual orchestrator parameter shape over time (a flag added or renamed on one side, not the other)."
+    mitigation: "Reviewer step cross-checks flags against cm-11's real, current exported function signature directly, not against this story's own description alone."
+
+references:
+  - path: .pHive/epics/mnemosyne-conversation-memory/docs/design-discussion.md
+    relevant_excerpt: "§10.3 — the verb-naming decision and rationale, and the onboardRepo()/mnemosyne onboard precedent this story's own CLI wiring follows."
+  - path: .pHive/epics/mnemosyne-repo-onboarding/stories/ro-05-onboard-cli-verb-existing-collection.yaml
+    relevant_excerpt: "The real, shipped precedent for a CLI-verb story wired into bin/mnemosyne's existing dispatch pattern — the exact shape this story's own `harvest` branch mirrors."
+  - path: .pHive/epics/mnemosyne-conversation-memory/stories/cm-11-generalized-pipeline-orchestrator.yaml
+    relevant_excerpt: "The orchestrator this story's CLI wraps unchanged — cm-12 never reimplements cm-11's own sequencing/parameterization logic."
+
+metric:
+  applies: true
+  name: conversation_memory.harvest_cli_verb_dispatch_verified
+  direction: up
+  unit: count
+  baseline: 0
+  target: 1
+  window: first-run
+  source:
+    kind: manual
+    ref: "A real, passing test confirming `bin/mnemosyne harvest` dispatches to bin/mnemosyne-harvest.mjs exactly like the existing `onboard` branch does — the concrete, falsifiable proof the new verb is wired consistently with this repo's own established CLI convention."
+  verify_at: integrate
+  owner: researcher

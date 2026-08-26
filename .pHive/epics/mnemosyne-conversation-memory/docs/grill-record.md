@@ -230,3 +230,189 @@ established and this correction does not loosen.
 direct story-YAML fix (`cm-07`'s `depends_on`, mirrored in `epic.yaml`).
 No findings carried forward unresolved — `unresolved_count: 0`. Round 1's
 own 5 findings are untouched and remain resolved.
+
+---
+
+# Round 3 — Amendment (2026-08-25) — Takeout export, scope-routing, generalization
+
+round_number: 3
+unresolved_count: 0
+
+Adversarial pass against `design-discussion.md`'s new §10 (three real,
+confirmed-this-pass facts: a real small Gemini Takeout export now staged;
+a real, existing `swarm-memory` scope — `arizona` — surfacing a
+scope-routing gap in `cm-06`/`cm-07`; two new stories, `cm-11`/`cm-12`,
+generalizing this epic's own pipeline) — grounded in the real Portunus-
+free filesystem/config re-verification performed for this amendment
+(`unzip -l` file-listing-only inspection of the Takeout zip; a direct
+read of `~/.config/swarm-memory/config.toml` and confirmation that
+`~/.mnemosyne/org-tree.yaml` does not exist; a direct read of
+`VectorLayerAdapter.ts`'s real `cfg.scopes?.[scope]` resolution and
+`mnemosyne/onboarding.py`'s own research-spike docstring confirming that
+same file/table is the live registry `remember()` already resolves
+against), not a rewrite of rounds 1-2's own findings. Same five
+categories, same descriptive-finding-plus-question discipline. The task's
+own explicit instructions for this round were followed as the search
+brief: look for contradictions with existing tickets, hand-waved routing
+logic, any place a real personal-content leak could still occur, and
+whether the generalization ticket quietly implies testing against real
+content it should not have access to.
+
+## 1. Vocabulary mismatches
+
+**Finding 3.1 — "scope" collides between two real, distinct concepts this
+round's own design leans on, and the original draft of `cm-06`/`cm-07`
+used the word without a story-level pointer to the disambiguation.**
+Mnemosyne's own `Scope` TYPE (`interfaces.ts`, `'project'|'enterprise'|
+'meta'`) is the caller-facing enum `remember()` accepts; `swarm-memory`'s
+own `[scopes]` REGISTRY (`config.toml`, real keys like `arizona`) is the
+underlying table that TYPE's values resolve against at runtime. §10.2 of
+`design-discussion.md` disambiguates this correctly, but `cm-06`'s and
+`cm-07`'s own YAML text — the files an implementer actually opens to
+build this — used "scope" in both senses without a pointer, risking the
+same kind of conflation `[grill 2.1.1]` (round 2) already caught for the
+word "Gemini." Does a reader of `cm-06`/`cm-07` in isolation (without
+also opening `design-discussion.md`) end up confusing `scope: 'meta'`
+with the new `resolved_scope_candidate` concept?
+
+*Resolution:* Both `cm-06`'s and `cm-07`'s own description sections now
+open their round-3 addition with an explicit, one-paragraph
+disambiguation (TYPE vs. REGISTRY, which field name means which)
+pointing to `design-discussion.md` §10.2 for full detail — mirrors
+`[grill 2.1.1]`'s own resolution shape exactly, applied to a second real
+vocabulary collision this epic has now produced.
+
+## 2. Hidden assumptions
+
+**Finding 3.2 — the original draft of `cm-11` composed `cm-10` in its own
+description ("`cm-02` → `cm-03`/`cm-04`/`cm-10` → `cm-05`...") without
+ever naming WHY `cm-10` is treated differently from `cm-02` through
+`cm-07`.** `cm-10` may never be built at all (its own gating precondition
+could stay unmet indefinitely for the Share-link shape, per its own
+YAML) — a hidden asymmetry a future implementer could miss, either
+wrongly treating `cm-10` as a hard requirement for `cm-11` to function,
+or wrongly inferring by analogy that `cm-03`/`cm-04` are similarly
+optional (they are not — they are this pipeline's own unconditional core
+parsers).
+
+*Resolution:* `cm-11`'s own `design_decisions` now states this asymmetry
+explicitly: `cm-02` through `cm-07` are an unconditional, always-composed
+core sequence; `cm-10` is composed ONLY IF it exists and the caller's
+supplied source list actually contains a staged Gemini export — named
+directly so neither misreading is possible.
+
+## 3. Unresolved tensions
+
+**Finding 3.3 — `cm-08`'s own pilot runs `cm-02` through `cm-07`
+end-to-end in ONE synchronous pass (unchanged by this correction), but
+`cm-06`'s new `resolved_scope_candidate` requires a PRE-EXISTING
+operator confirmation before `cm-07` will ever route to it.** A candidate
+computed mid-pilot-run cannot possibly already have a confirmation from a
+review that hasn't happened yet. Does this mean `cm-08`'s own pilot can
+ever actually exercise real scope-routing at all, or will every pilot
+entry always land in `meta` regardless of whether a real match exists —
+and if so, was that consequence ever stated anywhere, or would an
+operator reading `cm-08`'s own results reasonably wonder why "scope-
+routing" produced zero routed entries?
+
+*Resolution:* Named explicitly, not silently left for an operator to
+puzzle out — `cm-07`'s own description now states this sequencing
+consequence directly (a `cm-08` pilot run will, in practice, always
+default every entry to `meta`; genuine routing only happens in a SECOND,
+later run against a candidate a human has since reviewed), and `cm-08`'s
+own description gained a matching round-3 note cross-referencing it —
+this is expected, intended behavior given the confirms-before-write
+discipline (§10.2), not a defect, and now legible as such from either
+story's own YAML.
+
+## 4. Convention violations
+
+**Finding 3.4 — the original draft of `cm-11`'s `depends_on` listed only
+`cm-09`, even though its own description composes `cm-02` through `cm-07`
+as real, imported runtime modules — every one of them true only by
+TRANSITIVE ACCIDENT through `cm-09`'s own dependency chain, not enforced
+by `cm-11`'s own graph.** `[grill 4.1]` (round 1) and `[grill 2.4.1]`
+(round 2) both already established this epic's own convention for
+exactly this shape of gap: a story that imports another story's real
+runtime module must list that story in its own `depends_on`, not rely on
+a transitive path being true by accident. Does this round's own new
+story violate a convention this epic already fixed twice for exactly
+this reason?
+
+*Resolution:* `cm-11`'s `depends_on` now explicitly enumerates every
+story whose real runtime module it composes unconditionally (`cm-02`,
+`cm-03`, `cm-04`, `cm-05`, `cm-06`, `cm-07`) alongside `cm-09` (the
+real-data-validation gate, a distinct kind of dependency, named as such
+in `cm-11`'s own `design_decisions`) — `epic.yaml`'s own `stories:` list
+entry for `cm-11` updated to match. `cm-10` is deliberately excluded, per
+finding 3.2's own resolution, since it is conditional/optional
+composition, not unconditional.
+
+## 5. Posture mismatches
+
+**Finding 3.5 — flipping `cm-10`'s own `parallel_allowed` from `false` to
+`true` is a strong structural signal ("this story is now like `cm-03`/
+`cm-04` — ready to build") that could overclaim readiness relative to
+what this round's own re-verification actually established.** The
+staged Takeout sample is real but TINY (2 conversations), this planning
+pass performed NO content-level inspection of it (its own hard privacy
+constraint), and the "Gemini in Workspace" vs. standalone-consumer-app
+schema question is genuinely unresolved. Round 1's own `[grill 5.1]` and
+round 2's own `[grill 2.5.1]` both already established this epic's
+posture discipline — "name what isn't fully solved, not claim full
+closure" — does the bare `parallel_allowed: true` flip, on its own,
+read as closer to "solved" than the real evidence supports?
+
+*Resolution:* `cm-10`'s own `parallel_rationale` now states explicitly,
+in its own dedicated paragraph, that "parallel-eligible" here means
+research/implementation can genuinely START against real data — NOT that
+the parser is proven trivial, low-risk, or de-risked. The 2-conversation
+sample size, the unconfirmed real schema, and the "Gemini in Workspace"
+open question are all named directly at the point the readiness signal
+is given, not left to a separate risk paragraph a reader could miss.
+
+## Real personal-content-leak check (task's own explicit ask, verified
+directly, not merely asserted)
+
+Every code path this round's own three changes introduce was checked
+against this epic's own no-leak posture:
+
+- **Takeout export (§10.1):** this pass read the zip's file listing only
+  (`unzip -l`) — confirmed by re-inspecting this round's own bash-tool
+  history, zero `unzip -p`/extraction/`cat` calls against any
+  `conversation_*.txt` entry anywhere in this pass's own work. `cm-02`'s
+  and `cm-10`'s own updated YAMLs both state this explicitly and defer
+  all content-level reading to `cm-10`'s own future build-time research
+  step — never claimed as already done here.
+- **Scope-routing (§10.2):** the entire mechanism is structurally
+  read-only-then-human-gated — `cm-06` never writes a scope value
+  anywhere, `cm-07` never routes to a non-`meta` scope without a real,
+  on-disk, per-`cluster_id` confirmation record, and the unconfirmed/
+  no-candidate/mismatched-confirmation cases (three of `cm-07`'s own new
+  acceptance criteria) all default to `meta` unconditionally — no code
+  path exists anywhere in this design that could route personal content
+  to a client-facing collection without an explicit human act in
+  between.
+- **Generalization (`cm-11`/`cm-12`, §10.3):** confirmed the task's own
+  named concern directly — does packaging this pipeline as a reusable
+  component quietly imply testing it against real content it shouldn't
+  have access to? No: `cm-11`'s own `design_decisions` states synthetic/
+  structural fixtures only, explicitly naming that no real second
+  operator's data exists or is available to this repo, and that using
+  anyone else's real content without their own explicit involvement
+  would violate this epic's own `conversation-privacy-safety` posture —
+  the same posture already governing why `cm-10`'s own fixtures may never
+  be the operator's real `moving-chaos` content, and why `cm-02`'s own
+  test suite never runs against this operator's real
+  `~/.claude/projects/` tree either.
+
+## Summary (round 3)
+
+5 findings, 5 resolved — one direct disambiguation addition each to
+`cm-06`/`cm-07` (finding 3.1), one `design_decisions` addition to `cm-11`
+(finding 3.2), one cross-referenced sequencing note added to both `cm-07`
+and `cm-08` (finding 3.3), one `depends_on` graph fix mirrored in
+`epic.yaml` (finding 3.4), and one posture-hedging addition to `cm-10`'s
+own `parallel_rationale` (finding 3.5). No findings carried forward
+unresolved — `unresolved_count: 0`. Rounds 1-2's own 10 findings are
+untouched and remain resolved.

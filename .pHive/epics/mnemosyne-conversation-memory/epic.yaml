@@ -53,6 +53,22 @@ description: |
   no full-account Takeout export exists yet — `cm-10` makes this a real,
   gated (not absent) part of this epic's own plan.
 
+  Round-3 amendment (2026-08-25, docs/design-discussion.md §10): a real
+  (if small, 2-conversation) Google Takeout Gemini export has since been
+  staged at `~/Downloads/Google Takeout Aug 26 2026.zip`, meeting `cm-10`'s
+  gating precondition for the Takeout path specifically — `cm-02`'s
+  manifest entry corrected from `gemini: not_staged` to `gemini: staged`.
+  A real, existing `swarm-memory` scope (`arizona`, backing a real project
+  at `~/Documents/work/personal/arizona-compound`) surfaced a real gap —
+  `cm-06`/`cm-07` gain a read-only, human-confirmed scope-routing design
+  so a cluster whose project-slug signal matches an existing named client
+  scope can route there instead of always landing in this epic's own
+  `meta` collection. Two new stories, `cm-11`/`cm-12`, generalize this
+  epic's own pipeline into a repeatable component any operator could run
+  against their own machine, following `mnemosyne-repo-onboarding`'s own
+  `onboardRepo()`/`mnemosyne onboard` precedent — proven via synthetic/
+  structural tests only, gated on `cm-09`'s own real-data validation.
+
   Built by composing the already-shipped `ingestDocument()`/`remember()`
   cascade (ro-10/ro-13, unchanged) with genuinely new pieces: a
   standalone secret/credential scanner (checked twice — parse-time and
@@ -153,6 +169,42 @@ notes: |
   into this epic without separate explicit opt-in); m-09's own note:
   field corrected to match.
 
+  Round-3 amendment (2026-08-25, docs/design-discussion.md §10, grill
+  round 3 in docs/grill-record.md -- 5 findings, all resolved). Three
+  new, real, confirmed-this-pass facts folded in:
+  (1) A real Google Takeout Gemini export now exists at
+  ~/Downloads/Google Takeout Aug 26 2026.zip (2,964 bytes; 2 real
+  conversations under "Gemini in Workspace", 4,300 + 1,083 bytes; the
+  plain "Gemini" category itself empty) -- confirmed via file-listing-only
+  inspection (unzip -l), no content read. cm-10's gating precondition is
+  now MET for the Takeout path specifically (the separate Share-link path
+  remains unstaged, unchanged); cm-02's gemini: not_staged manifest entry
+  corrected to gemini: staged (takeout, 2 conversations).
+  (2) A real, existing swarm-memory scope (arizona ->
+  clients_arizona_compound_memory, ~/.config/swarm-memory/config.toml,
+  backing a real project at ~/Documents/work/personal/arizona-compound)
+  surfaced a real design gap: cm-06/cm-07 only ever targeted this epic's
+  own meta collection. cm-06 gains a read-only scope-resolution sub-step
+  (checks swarm-memory's [scopes] table via the same shell-out
+  VectorLayerAdapter.remember() already performs, and ~/.mnemosyne/
+  org-tree.yaml if present -- confirmed absent on this machine today);
+  cm-07 only ever routes to a non-meta scope for a cluster the operator
+  has explicitly confirmed in the same human-review queue cm-01/cm-05
+  already produce, tagged distinctly (review_reason:
+  'scope_route_candidate') -- every unconfirmed cluster still writes
+  scope: 'meta', unchanged, no exceptions.
+  (3) Two new stories, cm-11-generalized-pipeline-orchestrator and
+  cm-12-harvest-cli-verb, package this epic's own discovery->scan->
+  triage->cluster->distill pipeline into a parameterized, repeatable
+  component + a new `mnemosyne harvest` CLI verb, mirroring
+  mnemosyne-repo-onboarding's own onboardRepo()/`mnemosyne onboard`
+  precedent exactly. Proven via synthetic/structural correctness tests
+  only -- no real second operator's data exists or is available to this
+  repo; cm-08's pilot and cm-09's deep-dive test remain the epic's only
+  real-data proof. cm-11 depends_on cm-09 explicitly (not built as
+  "ready to use" until the operator's own deep-dive has validated the
+  real pipeline).
+
 stories:
   - id: cm-01-secret-credential-scanner
     title: Standalone secret/credential scanning primitive
@@ -194,3 +246,11 @@ stories:
     title: Gemini conversation export (Share-link/Takeout) parser and normalizer — gated on operator staging a real export
     complexity: high
     depends_on: [cm-01-secret-credential-scanner, cm-02-conversation-source-discovery]
+  - id: cm-11-generalized-pipeline-orchestrator
+    title: Generalized, parameterized pipeline orchestrator — any operator, any machine
+    complexity: high
+    depends_on: [cm-02-conversation-source-discovery, cm-03-claude-code-session-parser, cm-04-chatgpt-export-parser, cm-05-usefulness-trash-triage, cm-06-cross-session-clustering, cm-07-distillation-and-persist, cm-09-deep-dive-validation-test]
+  - id: cm-12-harvest-cli-verb
+    title: "mnemosyne harvest CLI verb — generalized pipeline entry point"
+    complexity: medium
+    depends_on: [cm-11-generalized-pipeline-orchestrator]
