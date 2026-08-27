@@ -35,6 +35,15 @@ const ok = (c, m) => { console.log(`${c ? "  PASS" : "  FAIL"}  ${m}`); if (!c) 
   ok(/id="personas-status"/i.test(body), `GET /ui body has a personas-status element (pw-03)`);
   ok(/id="personas-table"/i.test(body), `GET /ui body has a personas-table (pw-03)`);
   ok(/id="personas-tbody"/i.test(body), `GET /ui body has a personas-tbody (pw-03)`);
+  // cm-15-discovery-and-pilot-trigger-ui: the Discovery & Pilot panel
+  // follows the exact same panel-status/jump-chip/aria-live convention as
+  // every other panel here.
+  ok(/id="discovery-pilot"/i.test(body), `GET /ui body has a discovery-pilot panel (cm-15)`);
+  ok(/id="discovery-status"/i.test(body), `GET /ui body has a discovery-status element (cm-15)`);
+  ok(/id="discovery-scan-btn"/i.test(body), `GET /ui body has a discovery-scan-btn (cm-15)`);
+  ok(/id="discovery-run-btn"/i.test(body), `GET /ui body has a discovery-run-btn (cm-15)`);
+  ok(/id="discovery-live-region"/i.test(body), `GET /ui body has a discovery-live-region (cm-15)`);
+  ok(/href="#discovery-pilot"/i.test(body), `GET /ui body has a #discovery-pilot jump-chip (cm-15)`);
 }
 
 // --- GET /ui/ (trailing slash) also serves the shell ------------------------

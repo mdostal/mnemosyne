@@ -42,18 +42,21 @@ async function waitForServer(url, timeoutMs = 8000) {
   return false;
 }
 
-// The 8 real top-level panels, in real document order (research-brief.md §1).
+// The 9 real top-level panels, in real document order (research-brief.md §1;
+// cm-15-discovery-and-pilot-trigger-ui adds discovery-pilot, the newest
+// panel, last).
 const REAL_PANELS = [
   "liveliness", "settings", "lanes", "search",
-  "graph", "operations", "personas", "memory-levels",
+  "graph", "operations", "personas", "memory-levels", "discovery-pilot",
 ];
 
 // Panels whose chip IS expected to be ring-eligible after a real refreshAll()
 // -- see ui/app.js's CHIP_STATUS_SOURCE comment for exactly why each of
 // these, and only these, qualifies (a real, unconditional, refresh-time
-// .panel-status element) and why search/operations are excluded.
+// .panel-status element) and why search/operations/discovery-pilot are
+// excluded.
 const EXPECTED_RING_ELIGIBLE = ["liveliness", "settings", "lanes", "graph", "personas", "memory-levels"];
-const EXPECTED_NEVER_RING = ["search", "operations"];
+const EXPECTED_NEVER_RING = ["search", "operations", "discovery-pilot"];
 
 const child = spawn(process.execPath, [SERVER_PATH], {
   env: { ...process.env, PORT: String(PORT) },
@@ -73,7 +76,7 @@ try {
   ok(indexRes.status === 200, `GET /ui -> 200 (got ${indexRes.status})`);
 
   // ======================================================================
-  // 1. #jump-chips exists, directly under <header>, with exactly 8 real
+  // 1. #jump-chips exists, directly under <header>, with exactly 9 real
   //    anchor links, one per real panel, in document order.
   // ======================================================================
   const navMatch = indexBody.match(/<nav id="jump-chips"[\s\S]*?<\/nav>/);
@@ -87,10 +90,10 @@ try {
   ok(mainOpenIdx > -1 && navIdx < mainOpenIdx, "#jump-chips comes before <main> (it's a nav bar, not inside the panel grid)");
 
   const chipMatches = [...navHtml.matchAll(/<a href="#([a-z-]+)">/g)].map((m) => m[1]);
-  ok(chipMatches.length === 8, `#jump-chips has exactly 8 <a href="#..."> chips (found ${chipMatches.length})`);
+  ok(chipMatches.length === 9, `#jump-chips has exactly 9 <a href="#..."> chips (found ${chipMatches.length})`);
   ok(
     JSON.stringify(chipMatches) === JSON.stringify(REAL_PANELS),
-    `#jump-chips chips are the 8 real panels in real document order (got ${JSON.stringify(chipMatches)})`,
+    `#jump-chips chips are the 9 real panels in real document order (got ${JSON.stringify(chipMatches)})`,
   );
 
   // Every chip's target id is a real <section id="..."> in the document.
@@ -121,7 +124,7 @@ try {
   const chipHrefsAfterStrip = [...chipsAfterStrip.matchAll(/<a href="#([a-z-]+)">/g)].map((m) => m[1]);
   ok(
     JSON.stringify(chipHrefsAfterStrip) === JSON.stringify(REAL_PANELS),
-    "with <script> stripped, all 8 chips are still plain, working #anchor links",
+    "with <script> stripped, all 9 chips are still plain, working #anchor links",
   );
   // None of the chips rely on an onclick/JS handler to function as a link.
   ok(!/onclick=/.test(navHtml), "chips have no onclick attribute -- navigation is plain <a href> only");
@@ -298,6 +301,8 @@ try {
     "search-status=pass exists in the real DOM but #search is not in CHIP_STATUS_SOURCE -> #search chip gets NEITHER class (never fabricated)");
   ok(!chipByHref.operations.classList.contains("chip-pass") && !chipByHref.operations.classList.contains("chip-fail"),
     "reindex-status=fail exists in the real DOM but #operations is not in CHIP_STATUS_SOURCE -> #operations chip gets NEITHER class (never fabricated)");
+  ok(!chipByHref["discovery-pilot"].classList.contains("chip-pass") && !chipByHref["discovery-pilot"].classList.contains("chip-fail"),
+    "discovery-status is only ever set by a user action (never refreshAll()) -> #discovery-pilot chip gets NEITHER class (never fabricated)");
 
   // --- propagation: a real status CHANGE (not just the initial state)
   // propagates to the chip on the next syncJumpChips() call -------------

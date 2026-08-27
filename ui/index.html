@@ -83,6 +83,7 @@
     <a href="#operations"><span class="chip-dot"></span>Operations<span class="sr-only" id="chip-status-operations"></span></a>
     <a href="#personas"><span class="chip-dot"></span>Personas<span class="sr-only" id="chip-status-personas"></span></a>
     <a href="#memory-levels"><span class="chip-dot"></span>Memory Levels<span class="sr-only" id="chip-status-memory-levels"></span></a>
+    <a href="#discovery-pilot"><span class="chip-dot"></span>Discovery &amp; Pilot<span class="sr-only" id="chip-status-discovery-pilot"></span></a>
   </nav>
 
   <main>
@@ -617,6 +618,111 @@
       <p class="panel-status" id="memory-levels-empty" hidden>No memory levels reported.</p>
     </section>
     <!-- ================== end ml-05-memory-levels-ui section ============= -->
+
+    <!-- ================================================================
+         cm-15-discovery-and-pilot-trigger-ui (epic: mnemosyne-conversation-
+         memory): "crawl and index the new incoming data and conversations"
+         (design-discussion.md §12.2). Matches the Personas panel's own
+         shell exactly (section -> h2 -> panel-status -> panel-hint ->
+         toolbar -> aria-live region), never a new visual idiom.
+
+         No-implicit-selection, enforced by three independent layers, none
+         trusted alone (design-discussion.md §12.2):
+           1. client-side (ui/app.js): "Run pilot on selected" has no
+              `disabled` attribute (same no-disabled convention as every
+              other panel here) but refuses inline, without firing a
+              fetch(), when zero checkboxes are marked.
+           2. server-side (src/discoveryPilotRoutes.mjs's runPilotRoute()):
+              THE REAL enforcement point -- rejects (400) an empty combined
+              selection before cm-08's orchestrator is ever invoked.
+           3. CLI-level (cm-08's own, unchanged): the route always passes
+              the marked subset as an explicit --sessions/--exports
+              argument to cm-08's real orchestrator, reaching its own
+              no-implicit-selection refusal (its own AC5) the same way a
+              human typing the flag would.
+         The operator's marks are never written back into cm-02's own
+         `~/.mnemosyne/conversation-sources.yaml` manifest file -- a later
+         re-scan starts fresh (cm-02's own AC7).
+
+         Real, as-built coordination-point resolution (not the story's own
+         illustrative sketch): cm-08's real, shipped CLI
+         (bin/mnemosyne-conversation-pilot.mjs) accepts Claude Code session
+         PATHS and ChatGPT conversation IDS -- it has no Gemini support at
+         all, and cm-02's discoverSources() manifest never enumerates
+         individual ChatGPT conversation ids (metadata-only, content never
+         read). So the ChatGPT export is shown as real, informational
+         status text (never a checkbox that would submit a meaningless
+         "chatgpt"/"gemini" literal as if it were a conversation id) plus a
+         plain text field for typing in known ChatGPT conversation id(s) --
+         the only selection shape cm-08's real --exports flag actually
+         accepts. -->
+    <section id="discovery-pilot" class="panel panel-wide">
+      <h2>Discovery &amp; Pilot</h2>
+      <p class="panel-status" id="discovery-status">no scan run yet this session</p>
+      <p class="panel-hint">
+        <strong>Scan for new sources</strong> re-runs cm-02's discovery fresh every
+        time (never a cached read) and writes <code>~/.mnemosyne/conversation-sources.yaml</code>.
+        Mark specific Claude Code sessions below, then <strong>Run pilot on
+        selected</strong> invokes cm-08's bounded, operator-confirmed pilot
+        orchestrator (live Gemini + live Qdrant Cloud, real persisted writes)
+        over EXACTLY that marked subset — never everything currently in the
+        manifest. cm-08's own cap (max 5 sessions, max 5 ChatGPT conversations)
+        is enforced by cm-08 itself, not re-capped here — an oversized
+        selection surfaces as a real, loud refusal from cm-08's own output.
+        Your marks are never written back into cm-02's own manifest file — a
+        later re-scan starts fresh. cm-08's real orchestrator has no Gemini
+        support yet and no way to enumerate individual ChatGPT conversations
+        from a scan (metadata-only, content never read) — type known ChatGPT
+        conversation id(s) below if you want to include any.
+      </p>
+
+      <button type="button" id="discovery-scan-btn">Scan for new sources</button>
+      <p class="panel-status" id="discovery-scan-status"></p>
+
+      <div id="discovery-sessions-block" hidden>
+        <h3>Claude Code sessions</h3>
+        <div id="discovery-sessions-checkboxes" role="group" aria-label="discovered Claude Code sessions"></div>
+        <p class="panel-status" id="discovery-sessions-empty" hidden>No Claude Code sessions found.</p>
+      </div>
+
+      <div id="discovery-excluded-block" hidden>
+        <h3>Excluded directories</h3>
+        <p class="panel-hint">Never silently dropped — every scratch-filter exclusion is named here.</p>
+        <ul id="discovery-excluded-list"></ul>
+      </div>
+
+      <div id="discovery-exports-block" hidden>
+        <h3>Exports</h3>
+        <dl id="discovery-exports-status" class="fields"></dl>
+        <div class="form-row">
+          <label for="discovery-chatgpt-ids">ChatGPT conversation id(s) to include (comma-separated, optional)</label>
+          <input
+            id="discovery-chatgpt-ids"
+            type="text"
+            autocomplete="off"
+            placeholder="e.g. 671f2a9c-..., 671f2b10-..."
+          />
+        </div>
+      </div>
+
+      <button type="button" id="discovery-run-btn">Run pilot on selected</button>
+      <p class="panel-status" id="discovery-run-status"></p>
+      <p id="discovery-live-region" class="sr-only" aria-live="polite"></p>
+
+      <table id="discovery-results-table" hidden>
+        <thead>
+          <tr>
+            <th>Source</th>
+            <th>Session</th>
+            <th>Stage</th>
+            <th>OK</th>
+            <th>Error</th>
+          </tr>
+        </thead>
+        <tbody id="discovery-results-tbody"></tbody>
+      </table>
+    </section>
+    <!-- ================== end cm-15-discovery-and-pilot-trigger-ui panel === -->
   </main>
 
   <footer>

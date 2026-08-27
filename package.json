@@ -65,7 +65,9 @@
     "test:onboard-cli": "tsx test/onboard-cli.mjs",
     "test:onboard-smoke-mode-a": "node test/onboard-smoke-mode-a.mjs",
     "test:onboard-smoke-mode-b": "node test/onboard-smoke-mode-b.mjs",
-    "test:conversation-pilot": "tsx --test bin/mnemosyne-conversation-pilot.test.mjs"
+    "test:conversation-pilot": "tsx --test bin/mnemosyne-conversation-pilot.test.mjs",
+    "test:conversation-discover-cli": "tsx --test bin/mnemosyne-conversation-discover.test.mjs",
+    "test:discovery-pilot-routes": "node test/discovery-pilot-routes.mjs"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",

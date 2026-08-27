@@ -43,6 +43,23 @@
 //                     .ts/.md/.yaml files and indexes each into `scope`'s
 //                     collection. Async — returns 202 immediately. Distinct from
 //                     POST /index above — see SERVICE.md's "Two reindex paths".
+//   POST /conversation-memory/sources/scan -> cm-15-discovery-and-pilot-trigger-ui:
+//                     the operator's own "crawl" button. execFile()s
+//                     bin/mnemosyne-conversation-discover.mjs (a tsx-launched CLI
+//                     wrapping cm-02's discoverSources({ write: true })) FRESH on
+//                     every call — never a cached read (cm-02's own AC7). Returns
+//                     the real manifest (sessions[]/excluded[]/exports).
+//   POST /conversation-memory/pilot/run {sessionPaths[], exportKeys[]} ->
+//                     cm-15-discovery-and-pilot-trigger-ui: invokes cm-08's real,
+//                     already-shipped bin/mnemosyne-conversation-pilot.mjs
+//                     (--sessions/--exports/--confirm/--json) over EXACTLY the
+//                     given marked subset — never a default/auto-selected set.
+//                     Refuses (400) an empty combined selection BEFORE cm-08's
+//                     orchestrator is ever invoked (see src/discoveryPilotRoutes.mjs)
+//                     — the real, server-side no-implicit-selection enforcement
+//                     point. cm-08's own small-sample cap (its own AC1) is never
+//                     re-capped here; an oversized selection surfaces as cm-08's
+//                     own real, loud refusal, verbatim, in the response body.
 //
 // GET / content negotiation: no consumer in this repo (hooks/lib/mnemo-client.mjs,
 // test/smoke.mjs, lib/mnemosyne/client.ts) depends on GET /'s bare path today, and
@@ -82,6 +99,7 @@ import {
   graphifyImpactAction,
   graphifyDepsAction,
 } from "../bin/graphify-bridge.mjs";
+import { scanSources, runPilotRoute } from "./discoveryPilotRoutes.mjs";
 
 const PORT = Number(process.env.PORT || 8477);
 const SERVICE = { god: "mnemosyne", role: "memory", version: "0.1.0" };
@@ -191,6 +209,10 @@ const server = http.createServer(async (req, res) => {
           "POST /index": "{collection, paths[]} -> TARGETED: swarm-memory index <collection> <paths...> (default pruning, never --no-prune), synchronous",
           "POST /cache/refresh": "clears ONLY the in-memory config cache (local, zero subprocesses, zero external state)",
           "POST /reindex": "{scope, directory?} -> BULK (re)index a directory; runs async, returns immediately",
+          "POST /conversation-memory/sources/scan":
+            "fresh cm-02 discoverSources({write:true}) scan (never cached) -> the real manifest",
+          "POST /conversation-memory/pilot/run":
+            "{sessionPaths[], exportKeys[]} -> cm-08's real pilot orchestrator over EXACTLY that marked subset (400 on empty selection)",
         },
       });
     }
@@ -359,6 +381,30 @@ const server = http.createServer(async (req, res) => {
       // Synchronous, local-only — never awaits anything, spawns nothing.
       const result = resetScopeMapCache();
       return send(res, 200, { ...SERVICE, ...result, took_ms: Date.now() - t0 });
+    }
+
+    // --- Discovery + pilot trigger (cm-15-discovery-and-pilot-trigger-ui) ---
+    // Two routes, both thin execFile() bridges (src/discoveryPilotRoutes.mjs)
+    // to tsx-launched CLIs — src/server.mjs itself never imports cm-02's
+    // discoverSources.ts or cm-08's orchestrator directly (plain `node`,
+    // see this file's own header comment / bin/mnemosyne's launch line).
+
+    if (route === "POST /conversation-memory/sources/scan") {
+      // Always a FRESH scan — never a stale cached manifest (cm-02's own
+      // AC7). No request body is read or required.
+      const manifest = await scanSources();
+      return send(res, 200, { ...manifest, took_ms: Date.now() - t0 });
+    }
+
+    if (route === "POST /conversation-memory/pilot/run") {
+      const b = await readJson(req);
+      // runPilotRoute() itself throws a 400-shaped error (caught by this
+      // handler's own try/catch below) on an empty combined selection,
+      // BEFORE cm-08's orchestrator is ever invoked — the real,
+      // server-side no-implicit-selection enforcement point (layer 2 of
+      // 3; see src/discoveryPilotRoutes.mjs's own header comment).
+      const result = await runPilotRoute(b);
+      return send(res, 200, { ...result, took_ms: Date.now() - t0 });
     }
 
     // --- Graph (s-04, extended by la-02-graphify-adapter, soft-defaulted by

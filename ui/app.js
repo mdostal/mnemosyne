@@ -2784,6 +2784,10 @@ function assembleSourceSummary(sourcesRead, sourcesMissing) {
 //     mapping either would fabricate a ring where no real, refresh-time
 //     status exists, so Search and Operations are left out on purpose --
 //     their chips get neither chip-pass nor chip-fail.
+//   - discovery-status (cm-15) is the SAME shape: only ever set by
+//     discoveryScanBtn's own click handler, never by refreshAll() (AC1: no
+//     automatic background scan fires on page load) -- left out for the
+//     identical reason.
 const CHIP_STATUS_SOURCE = {
   liveliness: "liveliness-status",
   settings: "settings-status",
@@ -2824,6 +2828,206 @@ function syncJumpChips() {
   });
 }
 // ==================== end ui-03-jump-chip-nav-and-status-wiring (part 1) ====================
+
+// ==================== cm-15-discovery-and-pilot-trigger-ui ====================
+// Discovery & Pilot panel: "Scan for new sources" (POST /conversation-memory/
+// sources/scan) renders cm-02's real manifest as checkbox rows; "Run pilot on
+// selected" (POST /conversation-memory/pilot/run) invokes cm-08's bounded
+// orchestrator over EXACTLY the marked subset. Never auto-fetched by
+// refreshAll() — AC1 requires no automatic background scan on page load, so
+// this panel is deliberately absent from refreshAll()'s Promise.all(...)
+// above, same as Search/Operations' own manual-trigger-only convention.
+const discoveryStatusEl = document.getElementById("discovery-status");
+const discoveryScanBtn = document.getElementById("discovery-scan-btn");
+const discoveryScanStatusEl = document.getElementById("discovery-scan-status");
+const discoverySessionsBlockEl = document.getElementById("discovery-sessions-block");
+const discoverySessionsChecklistEl = document.getElementById("discovery-sessions-checkboxes");
+const discoverySessionsEmptyEl = document.getElementById("discovery-sessions-empty");
+const discoveryExcludedBlockEl = document.getElementById("discovery-excluded-block");
+const discoveryExcludedListEl = document.getElementById("discovery-excluded-list");
+const discoveryExportsBlockEl = document.getElementById("discovery-exports-block");
+const discoveryExportsStatusEl = document.getElementById("discovery-exports-status");
+const discoveryChatgptIdsEl = document.getElementById("discovery-chatgpt-ids");
+const discoveryRunBtn = document.getElementById("discovery-run-btn");
+const discoveryRunStatusEl = document.getElementById("discovery-run-status");
+const discoveryLiveRegionEl = document.getElementById("discovery-live-region");
+const discoveryResultsTableEl = document.getElementById("discovery-results-table");
+const discoveryResultsTbodyEl = document.getElementById("discovery-results-tbody");
+
+// Session-scoped "which session paths are currently checked" state —
+// mirrors personasBatchSelected's own Set-of-keys convention. Rebuilt fresh
+// on every real scan (a re-scan is a genuinely new manifest, cm-02's own
+// AC7) rather than reconciled against the previous scan's marks.
+let discoveryLastManifest = null;
+const discoverySelectedSessionPaths = new Set();
+
+function discoveryResultCell(text) {
+  const td = document.createElement("td");
+  td.textContent = text;
+  return td;
+}
+
+function discoveryExportFieldRow(label, entry) {
+  const dt = document.createElement("dt");
+  dt.textContent = label;
+  const dd = document.createElement("dd");
+  dd.textContent = `${entry.status} (${entry.path})`;
+  return [dt, dd];
+}
+
+// Pure render from the real, already-fetched manifest — never fetches
+// itself, matching every other render function in this file (renderPersonas(),
+// renderBatchApproveStrip()).
+function renderDiscoveryManifest(manifest) {
+  discoverySelectedSessionPaths.clear();
+  discoverySessionsChecklistEl.textContent = "";
+  discoveryExcludedListEl.textContent = "";
+  discoveryExportsStatusEl.textContent = "";
+
+  const sessions = Array.isArray(manifest.sessions) ? manifest.sessions : [];
+  discoverySessionsBlockEl.hidden = false;
+  discoverySessionsEmptyEl.hidden = sessions.length !== 0;
+  for (const session of sessions) {
+    const label = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.value = session.path;
+    cb.addEventListener("change", () => {
+      if (cb.checked) discoverySelectedSessionPaths.add(session.path);
+      else discoverySelectedSessionPaths.delete(session.path);
+    });
+    label.appendChild(cb);
+    label.appendChild(
+      document.createTextNode(
+        ` ${session.path} (${session.sizeBytes ?? "?"} bytes, ${session.scratchConfidence || "unknown"})`,
+      ),
+    );
+    discoverySessionsChecklistEl.appendChild(label);
+  }
+
+  const excluded = Array.isArray(manifest.excluded) ? manifest.excluded : [];
+  discoveryExcludedBlockEl.hidden = excluded.length === 0;
+  for (const entry of excluded) {
+    const li = document.createElement("li");
+    li.textContent = `${entry.dir} — ${entry.reason}`;
+    discoveryExcludedListEl.appendChild(li);
+  }
+
+  const exports = manifest.exports || {};
+  discoveryExportsBlockEl.hidden = false;
+  if (exports.chatgpt) {
+    const [dt, dd] = discoveryExportFieldRow("ChatGPT export", exports.chatgpt);
+    discoveryExportsStatusEl.appendChild(dt);
+    discoveryExportsStatusEl.appendChild(dd);
+  }
+  if (exports.gemini) {
+    const [dt, dd] = discoveryExportFieldRow("Gemini export (no pilot support yet)", exports.gemini);
+    discoveryExportsStatusEl.appendChild(dt);
+    discoveryExportsStatusEl.appendChild(dd);
+  }
+}
+
+discoveryScanBtn.addEventListener("click", async () => {
+  setStatus(discoveryScanStatusEl, "loading", "scanning for new sources…");
+  discoveryScanBtn.disabled = true;
+  try {
+    const res = await fetch("/conversation-memory/sources/scan", { method: "POST" });
+    const body = await res.json();
+    if (!res.ok) {
+      setStatus(discoveryScanStatusEl, "fail", `FAIL — ${body.error || `HTTP ${res.status}`}`);
+      return;
+    }
+    discoveryLastManifest = body;
+    renderDiscoveryManifest(body);
+    const sessionCount = Array.isArray(body.sessions) ? body.sessions.length : 0;
+    setStatus(discoveryScanStatusEl, "pass", `scanned — ${sessionCount} session(s) found (generated ${body.generatedAt || "?"})`);
+    setStatus(discoveryStatusEl, "pass", `last scan: ${sessionCount} session(s) found`);
+  } catch (err) {
+    setStatus(discoveryScanStatusEl, "fail", `FAIL — ${err && err.message ? err.message : err}`);
+  } finally {
+    discoveryScanBtn.disabled = false;
+  }
+});
+
+// [Run pilot on selected] — layer 1 of the three no-implicit-selection
+// layers (design-discussion.md §12.2): the button is always reachable (no
+// `disabled` attribute in the static markup, mirroring the established
+// Personas/Operations convention) but clicking with zero marked entries
+// refuses inline and NEVER fires a fetch() — mirrors #reindex-paths's own
+// identical empty-input refusal (ui/app.js's reindexForm handler, above).
+discoveryRunBtn.addEventListener("click", async () => {
+  const sessionPaths = Array.from(discoverySelectedSessionPaths);
+  const exportKeys = String(discoveryChatgptIdsEl.value || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  if (sessionPaths.length === 0 && exportKeys.length === 0) {
+    setStatus(discoveryRunStatusEl, "fail", "select at least one source before running the pilot");
+    return;
+  }
+
+  const confirmed = window.confirm(
+    `Run cm-08's pilot over ${sessionPaths.length} session(s) and ${exportKeys.length} ChatGPT conversation(s)?\n\n` +
+      "This shells out against LIVE Gemini + LIVE Qdrant Cloud, writes real, persisted " +
+      "data, and can take real time. cm-08's own cap (max 5 per source) is enforced by " +
+      "cm-08 itself, not here.",
+  );
+  if (!confirmed) {
+    setStatus(discoveryRunStatusEl, "", "cancelled");
+    return;
+  }
+
+  discoveryResultsTableEl.hidden = true;
+  discoveryResultsTbodyEl.textContent = "";
+  setStatus(discoveryRunStatusEl, "loading", "running pilot… (this can take a while against live Gemini + Qdrant Cloud)");
+  discoveryRunBtn.disabled = true;
+  try {
+    const res = await fetch("/conversation-memory/pilot/run", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionPaths, exportKeys }),
+    });
+    const body = await res.json();
+    if (!res.ok) {
+      setStatus(discoveryRunStatusEl, "fail", `FAIL — ${body.error || `HTTP ${res.status}`}`);
+      discoveryLiveRegionEl.textContent = `Pilot run refused: ${body.error || `HTTP ${res.status}`}`;
+      return;
+    }
+    if (body.refused) {
+      // cm-08's own refusal (e.g. its small-sample cap exceeded), surfaced
+      // verbatim — never re-worded, never re-capped by this panel.
+      setStatus(discoveryRunStatusEl, "fail", `FAIL — cm-08 refused: ${body.reason || "unknown reason"}`);
+      discoveryLiveRegionEl.textContent = `Pilot run refused by cm-08: ${body.reason || "unknown reason"}`;
+      return;
+    }
+
+    const results = Array.isArray(body.results) ? body.results : [];
+    for (const r of results) {
+      const tr = document.createElement("tr");
+      tr.appendChild(discoveryResultCell(r.sourceType));
+      tr.appendChild(discoveryResultCell(r.sessionId));
+      tr.appendChild(discoveryResultCell(r.stage));
+      tr.appendChild(discoveryResultCell(r.ok ? "ok" : "FAILED"));
+      tr.appendChild(discoveryResultCell(r.error || ""));
+      discoveryResultsTbodyEl.appendChild(tr);
+    }
+    discoveryResultsTableEl.hidden = results.length === 0;
+
+    setStatus(
+      discoveryRunStatusEl,
+      body.failureCount ? "fail" : "pass",
+      `done — ${body.sessionCount ?? results.length} session(s), ${body.clusterCount ?? "?"} cluster(s), ` +
+        `${body.failureCount ?? 0} stage failure(s)`,
+    );
+    discoveryLiveRegionEl.textContent = `Pilot run complete: ${body.sessionCount ?? results.length} session(s), ${body.failureCount ?? 0} stage failure(s).`;
+  } catch (err) {
+    setStatus(discoveryRunStatusEl, "fail", `FAIL — ${err && err.message ? err.message : err}`);
+  } finally {
+    discoveryRunBtn.disabled = false;
+  }
+});
+// ==================== end cm-15-discovery-and-pilot-trigger-ui ====================
 
 async function refreshAll() {
   refreshBtn.disabled = true;
