@@ -60,6 +60,23 @@
 //                     point. cm-08's own small-sample cap (its own AC1) is never
 //                     re-capped here; an oversized selection surfaces as cm-08's
 //                     own real, loud refusal, verbatim, in the response body.
+//   GET  /conversation-memory/triage-queue -> cm-16-triage-review-and-confirm-ui:
+//                     reads + classifies the shared on-disk triage-queue JSONL
+//                     (quarantine hits + existing scope-route confirmation
+//                     records) -- a missing file returns empty arrays, 200.
+//   GET  /conversation-memory/intake-candidates -> cm-16: scrolls the real
+//                     `conversation_memory_intake` Qdrant collection (via a new
+//                     read-only Python CLI verb) and tags every real candidate
+//                     with a computed status (no_candidate/candidate_unconfirmed/
+//                     candidate_confirmed_pending_distribution/distributed),
+//                     reusing cm-13's own distributeIntakeEntries.ts partitioning.
+//   POST /conversation-memory/scope-route/confirm {cluster_id, scope_key} ->
+//                     cm-16: the ONE real filesystem write in this story's route
+//                     surface -- one fs.appendFileSync() of a real
+//                     ScopeRouteConfirmationEntry line, refused (400) unless the
+//                     named pair matches a currently-known candidate_unconfirmed
+//                     row (a duplicate confirm of an already-confirmed pair
+//                     succeeds, never refused -- see src/triageReviewRoutes.mjs).
 //
 // GET / content negotiation: no consumer in this repo (hooks/lib/mnemo-client.mjs,
 // test/smoke.mjs, lib/mnemosyne/client.ts) depends on GET /'s bare path today, and
@@ -100,6 +117,7 @@ import {
   graphifyDepsAction,
 } from "../bin/graphify-bridge.mjs";
 import { scanSources, runPilotRoute } from "./discoveryPilotRoutes.mjs";
+import { readTriageQueue, readIntakeCandidates, confirmScopeRoute } from "./triageReviewRoutes.mjs";
 
 const PORT = Number(process.env.PORT || 8477);
 const SERVICE = { god: "mnemosyne", role: "memory", version: "0.1.0" };
@@ -213,6 +231,12 @@ const server = http.createServer(async (req, res) => {
             "fresh cm-02 discoverSources({write:true}) scan (never cached) -> the real manifest",
           "POST /conversation-memory/pilot/run":
             "{sessionPaths[], exportKeys[]} -> cm-08's real pilot orchestrator over EXACTLY that marked subset (400 on empty selection)",
+          "GET /conversation-memory/triage-queue":
+            "reads + classifies the shared triage-queue JSONL (quarantine hits + scope-route confirmations); missing file -> empty arrays, 200",
+          "GET /conversation-memory/intake-candidates":
+            "scrolls the real intake collection, tags every candidate with a computed status (no_candidate/candidate_unconfirmed/candidate_confirmed_pending_distribution/distributed)",
+          "POST /conversation-memory/scope-route/confirm":
+            "{cluster_id, scope_key} -> the ONE real fs write in this route surface (append-only); 400 unless the pair matches a currently-known candidate_unconfirmed row",
         },
       });
     }
@@ -404,6 +428,31 @@ const server = http.createServer(async (req, res) => {
       // server-side no-implicit-selection enforcement point (layer 2 of
       // 3; see src/discoveryPilotRoutes.mjs's own header comment).
       const result = await runPilotRoute(b);
+      return send(res, 200, { ...result, took_ms: Date.now() - t0 });
+    }
+
+    // --- Triage review + scope-route confirm (cm-16-triage-review-and-
+    // confirm-ui) --- Three routes, all thin bridges (src/triageReviewRoutes.mjs)
+    // to the new tsx-launched bin/mnemosyne-conversation-triage-review.mjs --
+    // src/server.mjs itself never imports distributeIntakeEntries.ts or any
+    // other .ts module directly (plain `node`, see this file's own header
+    // comment). Of these three routes, ONLY the confirm route ever performs a
+    // filesystem write (one fs.appendFileSync, inside the tsx-launched CLI) --
+    // the other two are pure reads.
+
+    if (route === "GET /conversation-memory/triage-queue") {
+      const result = await readTriageQueue();
+      return send(res, 200, { ...result, took_ms: Date.now() - t0 });
+    }
+
+    if (route === "GET /conversation-memory/intake-candidates") {
+      const result = await readIntakeCandidates();
+      return send(res, 200, { ...result, took_ms: Date.now() - t0 });
+    }
+
+    if (route === "POST /conversation-memory/scope-route/confirm") {
+      const b = await readJson(req);
+      const result = await confirmScopeRoute(b);
       return send(res, 200, { ...result, took_ms: Date.now() - t0 });
     }
 

@@ -44,6 +44,15 @@ const ok = (c, m) => { console.log(`${c ? "  PASS" : "  FAIL"}  ${m}`); if (!c) 
   ok(/id="discovery-run-btn"/i.test(body), `GET /ui body has a discovery-run-btn (cm-15)`);
   ok(/id="discovery-live-region"/i.test(body), `GET /ui body has a discovery-live-region (cm-15)`);
   ok(/href="#discovery-pilot"/i.test(body), `GET /ui body has a #discovery-pilot jump-chip (cm-15)`);
+  // cm-16-triage-review-and-confirm-ui: the Triage Review panel follows the
+  // exact same panel-status/jump-chip/aria-live convention as every other
+  // panel here.
+  ok(/id="triage-review"/i.test(body), `GET /ui body has a triage-review panel (cm-16)`);
+  ok(/id="triage-candidates-status"/i.test(body), `GET /ui body has a triage-candidates-status element (cm-16)`);
+  ok(/id="triage-queue-status"/i.test(body), `GET /ui body has a triage-queue-status element (cm-16)`);
+  ok(/id="triage-confirm-btn"/i.test(body), `GET /ui body has a triage-confirm-btn (cm-16)`);
+  ok(/id="triage-review-live-region"/i.test(body), `GET /ui body has a triage-review-live-region (cm-16)`);
+  ok(/href="#triage-review"/i.test(body), `GET /ui body has a #triage-review jump-chip (cm-16)`);
 }
 
 // --- GET /ui/ (trailing slash) also serves the shell ------------------------

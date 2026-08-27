@@ -2788,6 +2788,13 @@ function assembleSourceSummary(sourcesRead, sourcesMissing) {
 //     discoveryScanBtn's own click handler, never by refreshAll() (AC1: no
 //     automatic background scan fires on page load) -- left out for the
 //     identical reason.
+//   - triage-review (cm-16) maps to triage-candidates-status -- unlike
+//     Discovery & Pilot, BOTH of this panel's own fetches (candidates +
+//     queue) ARE driven by refreshAll() (they're pure reads, no write side
+//     effect), so a real status exists here on every refresh; only one of
+//     the two panel-status elements is picked for the chip, matching
+//     Personas' own single-chip-from-personas-status precedent (not
+//     personas-drafts-status).
 const CHIP_STATUS_SOURCE = {
   liveliness: "liveliness-status",
   settings: "settings-status",
@@ -2795,6 +2802,7 @@ const CHIP_STATUS_SOURCE = {
   graph: "graph-status",
   personas: "personas-status",
   "memory-levels": "memory-levels-status",
+  "triage-review": "triage-candidates-status",
 };
 
 function syncJumpChips() {
@@ -3029,6 +3037,221 @@ discoveryRunBtn.addEventListener("click", async () => {
 });
 // ==================== end cm-15-discovery-and-pilot-trigger-ui ====================
 
+// ==================== cm-16-triage-review-and-confirm-ui ====================
+// Triage Review panel: GET /conversation-memory/intake-candidates (real
+// candidate status per intake entry) + GET /conversation-memory/triage-queue
+// (quarantine hits + existing scope-route confirmations) are both pure
+// reads, so — unlike Discovery & Pilot's deliberate manual-trigger-only
+// exclusion (that panel's own "scan" IS a real write) — both are included in
+// refreshAll() below, matching Personas'/Memory Levels' own auto-load
+// convention. POST /conversation-memory/scope-route/confirm is the ONE real
+// write action here, reached only via the batch confirm strip below —
+// exactly Personas' own puf-02-batch-approve-strip idiom (checkboxes + one
+// button, no `disabled` attribute).
+const triageCandidatesStatusEl = document.getElementById("triage-candidates-status");
+const triageQueueStatusEl = document.getElementById("triage-queue-status");
+const triageLiveRegionEl = document.getElementById("triage-review-live-region");
+const triageConfirmStripEl = document.getElementById("triage-confirm-strip");
+const triageConfirmStatusEl = document.getElementById("triage-confirm-status");
+const triageConfirmCheckboxesEl = document.getElementById("triage-confirm-checkboxes");
+const triageConfirmBtn = document.getElementById("triage-confirm-btn");
+const triageCandidatesTbodyEl = document.getElementById("triage-candidates-tbody");
+const triageCandidatesEmptyEl = document.getElementById("triage-candidates-empty");
+const triageQuarantineTbodyEl = document.getElementById("triage-quarantine-tbody");
+const triageQuarantineEmptyEl = document.getElementById("triage-quarantine-empty");
+const triageConfirmationsTbodyEl = document.getElementById("triage-confirmations-tbody");
+const triageConfirmationsEmptyEl = document.getElementById("triage-confirmations-empty");
+
+// Confirm targets a (cluster_id, scope_key) PAIR, not an individual intake
+// entry — multiple candidate rows can share the same pair (every entry in
+// the same cluster carries the same resolved_scope_candidate), and
+// confirming once resolves all of them. Keyed "clusterId scopeKey",
+// mirroring distributeIntakeEntries.ts's own confirmationKey() null-byte
+// join (never collides with a real-world field value).
+const triageSelectedPairs = new Set();
+
+function triageCell(text) {
+  const td = document.createElement("td");
+  td.textContent = text;
+  return td;
+}
+
+function triagePairKey(clusterId, scopeKey) {
+  return `${clusterId} ${scopeKey}`;
+}
+
+// Pure render from the real, already-fetched candidates array — never
+// fetches itself (mirrors renderDiscoveryManifest()/renderPersonas()).
+function renderTriageCandidates(candidates) {
+  triageCandidatesTbodyEl.textContent = "";
+  triageSelectedPairs.clear();
+
+  const list = Array.isArray(candidates) ? candidates : [];
+  triageCandidatesEmptyEl.hidden = list.length !== 0;
+  if (list.length === 0) triageCandidatesEmptyEl.textContent = "No intake entries found.";
+
+  for (const c of list) {
+    const tr = document.createElement("tr");
+    tr.appendChild(triageCell(c.entryId));
+    tr.appendChild(triageCell(c.clusterId ?? "—"));
+    tr.appendChild(triageCell(c.scopeKey ?? "—"));
+    tr.appendChild(triageCell(c.status));
+    tr.appendChild(triageCell(c.distributedToScope ?? "—"));
+    triageCandidatesTbodyEl.appendChild(tr);
+  }
+
+  // Batch confirm strip: one checkbox per DISTINCT (cluster_id, scope_key)
+  // pair among candidate_unconfirmed rows — never one per raw candidate row,
+  // since confirming is a cluster-level action (POST .../confirm resolves
+  // EVERY intake entry sharing that pair, not just one).
+  const unconfirmedPairs = new Map();
+  for (const c of list) {
+    if (c.status !== "candidate_unconfirmed" || !c.clusterId || !c.scopeKey) continue;
+    const key = triagePairKey(c.clusterId, c.scopeKey);
+    const existing = unconfirmedPairs.get(key);
+    if (existing) existing.count += 1;
+    else unconfirmedPairs.set(key, { clusterId: c.clusterId, scopeKey: c.scopeKey, count: 1 });
+  }
+
+  triageConfirmCheckboxesEl.textContent = "";
+  triageConfirmStripEl.hidden = unconfirmedPairs.size === 0;
+  for (const [key, pair] of unconfirmedPairs) {
+    const label = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.value = key;
+    cb.addEventListener("change", () => {
+      if (cb.checked) triageSelectedPairs.add(key);
+      else triageSelectedPairs.delete(key);
+    });
+    label.appendChild(cb);
+    label.appendChild(
+      document.createTextNode(` cluster ${pair.clusterId} → scope "${pair.scopeKey}" (${pair.count} entr${pair.count === 1 ? "y" : "ies"})`),
+    );
+    triageConfirmCheckboxesEl.appendChild(label);
+  }
+}
+
+// Read-only render — quarantine rows get ZERO action controls of any kind
+// (this story's own explicit instruction; cm-01's own quarantine-retention-
+// policy question stays open, not resolved here) and existing confirmations
+// render for visibility only (no revoke/undo control exists anywhere).
+function renderTriageQueue({ quarantine, confirmations }) {
+  triageQuarantineTbodyEl.textContent = "";
+  const qList = Array.isArray(quarantine) ? quarantine : [];
+  triageQuarantineEmptyEl.hidden = qList.length !== 0;
+  if (qList.length === 0) triageQuarantineEmptyEl.textContent = "No quarantine hits.";
+  for (const q of qList) {
+    const tr = document.createElement("tr");
+    tr.appendChild(triageCell(q.entry_id));
+    tr.appendChild(triageCell(q.chat_source));
+    tr.appendChild(triageCell(q.cluster_id ?? "—"));
+    const matches = Array.isArray(q.secretMatches) ? q.secretMatches : [];
+    tr.appendChild(triageCell(matches.map((m) => `${m.category}/${m.pattern} (line ${m.line})`).join(", ") || "—"));
+    triageQuarantineTbodyEl.appendChild(tr);
+  }
+
+  triageConfirmationsTbodyEl.textContent = "";
+  const cList = Array.isArray(confirmations) ? confirmations : [];
+  triageConfirmationsEmptyEl.hidden = cList.length !== 0;
+  if (cList.length === 0) triageConfirmationsEmptyEl.textContent = "No confirmed scope routes yet.";
+  for (const c of cList) {
+    const tr = document.createElement("tr");
+    tr.appendChild(triageCell(c.recordedAt));
+    tr.appendChild(triageCell(c.cluster_id));
+    tr.appendChild(triageCell(c.scope_key));
+    triageConfirmationsTbodyEl.appendChild(tr);
+  }
+}
+
+async function loadTriageCandidates() {
+  setStatus(triageCandidatesStatusEl, "loading", "loading intake candidates…");
+  try {
+    const res = await fetch("/conversation-memory/intake-candidates");
+    const body = await res.json();
+    if (!res.ok) {
+      setStatus(triageCandidatesStatusEl, "fail", `FAIL — ${body.error || `HTTP ${res.status}`}`);
+      return;
+    }
+    renderTriageCandidates(body.candidates);
+    setStatus(triageCandidatesStatusEl, "pass", `${Array.isArray(body.candidates) ? body.candidates.length : 0} intake candidate(s)`);
+  } catch (err) {
+    setStatus(triageCandidatesStatusEl, "fail", `FAIL — ${err && err.message ? err.message : err}`);
+  }
+}
+
+async function loadTriageQueue() {
+  setStatus(triageQueueStatusEl, "loading", "loading triage queue…");
+  try {
+    const res = await fetch("/conversation-memory/triage-queue");
+    const body = await res.json();
+    if (!res.ok) {
+      setStatus(triageQueueStatusEl, "fail", `FAIL — ${body.error || `HTTP ${res.status}`}`);
+      return;
+    }
+    renderTriageQueue(body);
+    setStatus(
+      triageQueueStatusEl,
+      "pass",
+      `${(body.quarantine || []).length} quarantine hit(s), ${(body.confirmations || []).length} confirmation(s)`,
+    );
+  } catch (err) {
+    setStatus(triageQueueStatusEl, "fail", `FAIL — ${err && err.message ? err.message : err}`);
+  }
+}
+
+triageConfirmBtn.addEventListener("click", async () => {
+  const pairs = Array.from(triageSelectedPairs).map((key) => {
+    const [clusterId, scopeKey] = key.split(" ");
+    return { clusterId, scopeKey };
+  });
+
+  if (pairs.length === 0) {
+    setStatus(triageConfirmStatusEl, "fail", "select at least one candidate before confirming");
+    return;
+  }
+
+  triageConfirmBtn.disabled = true;
+  setStatus(triageConfirmStatusEl, "loading", `confirming ${pairs.length} pair(s)…`);
+  let okCount = 0;
+  let failCount = 0;
+  const failures = [];
+  for (const { clusterId, scopeKey } of pairs) {
+    try {
+      const res = await fetch("/conversation-memory/scope-route/confirm", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cluster_id: clusterId, scope_key: scopeKey }),
+      });
+      const body = await res.json();
+      if (!res.ok || !body.ok) {
+        failCount += 1;
+        failures.push(`${clusterId}/${scopeKey}: ${body.error || `HTTP ${res.status}`}`);
+      } else {
+        okCount += 1;
+      }
+    } catch (err) {
+      failCount += 1;
+      failures.push(`${clusterId}/${scopeKey}: ${err && err.message ? err.message : err}`);
+    }
+  }
+
+  if (failCount === 0) {
+    setStatus(triageConfirmStatusEl, "pass", `confirmed ${okCount} pair(s)`);
+    triageLiveRegionEl.textContent = `Confirmed ${okCount} scope-route pair(s).`;
+  } else {
+    setStatus(triageConfirmStatusEl, "fail", `confirmed ${okCount}, FAILED ${failCount}: ${failures.join("; ")}`);
+    triageLiveRegionEl.textContent = `Confirmed ${okCount} pair(s), ${failCount} failed.`;
+  }
+
+  // Real, current state after any real writes — never left showing a stale
+  // pre-confirm snapshot (mirrors approveDraft()'s own reload-after-write
+  // convention, ui/app.js).
+  await Promise.all([loadTriageCandidates(), loadTriageQueue()]);
+  triageConfirmBtn.disabled = false;
+});
+// ==================== end cm-16-triage-review-and-confirm-ui ====================
+
 async function refreshAll() {
   refreshBtn.disabled = true;
   try {
@@ -3043,6 +3266,8 @@ async function refreshAll() {
       loadDrafts(),
       loadPersonaLayerStack(),
       loadMemoryLevels(),
+      loadTriageCandidates(),
+      loadTriageQueue(),
     ]);
     syncJumpChips();
     lastRefreshedEl.textContent = `last refreshed ${new Date().toLocaleTimeString()}`;

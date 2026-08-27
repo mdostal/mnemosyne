@@ -264,7 +264,15 @@ export interface ScopeRouteConfirmationEntry {
   scope_key: string;
 }
 
-function isScopeRouteConfirmationEntry(value: unknown): value is ScopeRouteConfirmationEntry {
+/**
+ * Exported (cm-16-triage-review-and-confirm-ui, additive, no behavior
+ * change) so cm-16's own confirm-route pre-write validation reuses this
+ * SAME shape check `readScopeRouteConfirmations()` below already trusts,
+ * rather than a second, independently-maintained copy drifting apart from
+ * this one (docs/design-discussion.md §12.4, `[grill 4.4]` round 4's own
+ * named convention against exactly that risk).
+ */
+export function isScopeRouteConfirmationEntry(value: unknown): value is ScopeRouteConfirmationEntry {
   if (!value || typeof value !== 'object') {
     return false;
   }
@@ -371,9 +379,23 @@ function extractPointText(point: ScrolledPoint): string | null {
  * unrelated to this story's own convention) is defensively skipped, never
  * thrown on.
  */
-function partitionPoints(points: ScrolledPoint[]): { candidates: ParsedCandidate[]; markedEntryIds: Set<string> } {
+function partitionPoints(points: ScrolledPoint[]): {
+  candidates: ParsedCandidate[];
+  markedEntryIds: Set<string>;
+  /**
+   * `marks_entry_id -> full marker metadata` — additive alongside
+   * `markedEntryIds` above (cm-16-triage-review-and-confirm-ui, no behavior
+   * change to this function's existing callers, which only ever
+   * destructured `{ candidates, markedEntryIds }`). Gives
+   * `computeIntakeCandidateStatuses()` below the marker's own real
+   * `distributed_to_scope` value without re-scrolling/re-parsing points a
+   * second time.
+   */
+  markersByEntryId: Map<string, DistributionMarkerMetadata>;
+} {
   const candidates: ParsedCandidate[] = [];
   const markedEntryIds = new Set<string>();
+  const markersByEntryId = new Map<string, DistributionMarkerMetadata>();
 
   for (const point of points) {
     const text = extractPointText(point);
@@ -387,12 +409,98 @@ function partitionPoints(points: ScrolledPoint[]): { candidates: ParsedCandidate
     if ((parsed as unknown as { entry_type: string }).entry_type === 'distribution_marker') {
       const marker = parsed as unknown as DistributionMarkerMetadata;
       markedEntryIds.add(marker.marks_entry_id);
+      markersByEntryId.set(marker.marks_entry_id, marker);
     } else {
       candidates.push({ pointId: point.id, text, metadata: parsed });
     }
   }
 
-  return { candidates, markedEntryIds };
+  return { candidates, markedEntryIds, markersByEntryId };
+}
+
+// ---------------------------------------------------------------------------
+// cm-16-triage-review-and-confirm-ui — READ-ONLY candidate-status
+// computation for `GET /conversation-memory/intake-candidates` (and for the
+// confirm route's own defense-in-depth pre-check, which calls this SAME
+// function again rather than a second, independently-derived read).
+// Reuses `scrollPoints` -> `partitionPoints()` -> `readScopeRouteConfirmations()`
+// verbatim — this story's own hard constraint: never a re-derived,
+// independently-implemented enumeration. Performs ZERO writes anywhere:
+// `scrollPoints` is the SAME injectable, read-only primitive
+// `distributeIntakeEntries()` below uses (never a default production
+// implementation constructed here either), and `readScopeRouteConfirmations()`
+// only ever reads the confirmation queue file.
+// ---------------------------------------------------------------------------
+
+export type IntakeCandidateStatus =
+  | 'no_candidate'
+  | 'candidate_unconfirmed'
+  | 'candidate_confirmed_pending_distribution'
+  | 'distributed';
+
+export interface IntakeCandidateSummary {
+  entryId: string;
+  clusterId: string | null;
+  /** The candidate's own `resolved_scope_candidate.scope_key` — `null` when this entry carries no candidate at all (`status: 'no_candidate'`). */
+  scopeKey: string | null;
+  status: IntakeCandidateStatus;
+  /** Only ever set when `status === 'distributed'` — the real marker's own `distributed_to_scope` value. */
+  distributedToScope: string | null;
+}
+
+/**
+ * Tags every real intake entry (every non-marker point `partitionPoints()`
+ * returns — including entries with NO `resolved_scope_candidate`, which
+ * still flow through `cm-13`'s own distribution pass to `meta`) with
+ * exactly one status:
+ *
+ *  - `distributed` — a real `distribution_marker` already references this
+ *    `entry_id` (checked FIRST, regardless of whether a candidate exists —
+ *    an entry with no candidate is still eligible to have already been
+ *    distributed to `meta`).
+ *  - `no_candidate` — no marker yet, and this entry carries no
+ *    `resolved_scope_candidate` (or no `cluster_id`) at all.
+ *  - `candidate_confirmed_pending_distribution` — no marker yet, a real
+ *    candidate exists, and a real, on-disk confirmation names BOTH this
+ *    entry's exact `cluster_id` AND the candidate's exact `scope_key`
+ *    (`resolveDestinationScope()`'s own exact match discipline, reused
+ *    verbatim via `readScopeRouteConfirmations()` + `confirmationKey()`).
+ *  - `candidate_unconfirmed` — no marker yet, a real candidate exists, no
+ *    matching confirmation yet. The ONLY status the confirm route
+ *    (`POST /conversation-memory/scope-route/confirm`) ever accepts.
+ */
+export async function computeIntakeCandidateStatuses(
+  scrollPoints: ScrollPointsFn,
+  confirmationQueuePath: string = DEFAULT_TRIAGE_QUEUE_PATH,
+): Promise<IntakeCandidateSummary[]> {
+  const points = await scrollPoints(INTAKE_COLLECTION_NAME);
+  const { candidates, markersByEntryId } = partitionPoints(points);
+  const confirmed = readScopeRouteConfirmations(confirmationQueuePath);
+
+  return candidates.map((candidate): IntakeCandidateSummary => {
+    const entryId = candidate.metadata.entry_id;
+    const clusterId = candidate.metadata.cluster_id;
+    const resolvedCandidate = candidate.metadata.resolved_scope_candidate;
+    const scopeKey = resolvedCandidate?.scope_key ?? null;
+
+    const marker = markersByEntryId.get(entryId);
+    if (marker !== undefined) {
+      return { entryId, clusterId, scopeKey, status: 'distributed', distributedToScope: marker.distributed_to_scope };
+    }
+
+    if (resolvedCandidate === null || clusterId === null) {
+      return { entryId, clusterId, scopeKey: null, status: 'no_candidate', distributedToScope: null };
+    }
+
+    const isConfirmed = confirmed.has(confirmationKey(clusterId, resolvedCandidate.scope_key));
+    return {
+      entryId,
+      clusterId,
+      scopeKey,
+      status: isConfirmed ? 'candidate_confirmed_pending_distribution' : 'candidate_unconfirmed',
+      distributedToScope: null,
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -49,7 +49,9 @@ import { buildProvenanceHeader, type EntryProvenanceMetadata } from './distillAn
 import {
   INTAKE_COLLECTION_NAME,
   buildDistributionMarkerHeader,
+  computeIntakeCandidateStatuses,
   distributeIntakeEntries,
+  isScopeRouteConfirmationEntry,
   readScopeRouteConfirmations,
   resolveDestinationScope,
   type DistributionMarkerMetadata,
@@ -547,5 +549,194 @@ describe('distributeIntakeEntries() -- ingestDocument() called unchanged (real m
     expect(vi.mocked(ingestDocument)).toHaveBeenCalledTimes(2);
     const firstCallResult: IngestDocumentResult = await vi.mocked(ingestDocument).mock.results[0]!.value;
     expect(firstCallResult.ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cm-16-triage-review-and-confirm-ui: isScopeRouteConfirmationEntry() is now
+// exported -- reused directly by cm-16's own confirm-route pre-write
+// validation (bin/mnemosyne-conversation-triage-review.mjs), never a
+// locally re-implemented shape check.
+// ---------------------------------------------------------------------------
+
+describe('isScopeRouteConfirmationEntry() -- exported for cm-16 reuse', () => {
+  it('is a real, callable export from this module', () => {
+    expect(typeof isScopeRouteConfirmationEntry).toBe('function');
+  });
+
+  it('accepts a real, well-shaped confirmation entry', () => {
+    expect(
+      isScopeRouteConfirmationEntry({
+        recordedAt: '2026-08-27T00:00:00.000Z',
+        confirmation_reason: 'scope_route_confirmed',
+        cluster_id: 'cluster-1',
+        scope_key: 'arizona',
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects a value missing cluster_id/scope_key, or with the wrong discriminator', () => {
+    expect(isScopeRouteConfirmationEntry({ confirmation_reason: 'scope_route_confirmed', cluster_id: 'c', scope_key: '' })).toBe(
+      false,
+    );
+    expect(isScopeRouteConfirmationEntry({ confirmation_reason: 'something_else', cluster_id: 'c', scope_key: 's' })).toBe(false);
+    expect(isScopeRouteConfirmationEntry(null)).toBe(false);
+    expect(isScopeRouteConfirmationEntry('not an object')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cm-16-triage-review-and-confirm-ui: computeIntakeCandidateStatuses() --
+// the SAME scroll_points()-based enumeration + partitioning
+// (partitionPoints()) and confirmation read (readScopeRouteConfirmations())
+// this file's own distributeIntakeEntries() already uses, reused verbatim
+// (never re-derived independently) for cm-16's own READ-ONLY status
+// computation. Zero writes anywhere -- no IngestClient involved at all.
+// ---------------------------------------------------------------------------
+
+describe('computeIntakeCandidateStatuses() -- cm-16 status computation, reusing partitionPoints()/readScopeRouteConfirmations() verbatim', () => {
+  it('an entry with no resolved_scope_candidate -> no_candidate, scopeKey null', async () => {
+    const metadata = makeEntryMetadata({ cluster_id: null, resolved_scope_candidate: null });
+    const point = makeCandidatePoint(metadata);
+    const { scrollPoints } = makeScrollPointsStub([point]);
+    writeConfirmations([]);
+
+    const result = await computeIntakeCandidateStatuses(scrollPoints, confirmationQueuePath);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual({
+      entryId: metadata.entry_id,
+      clusterId: null,
+      scopeKey: null,
+      status: 'no_candidate',
+      distributedToScope: null,
+    });
+  });
+
+  it('a real candidate with no matching confirmation on disk -> candidate_unconfirmed', async () => {
+    const metadata = makeEntryMetadata({
+      cluster_id: 'cluster-1',
+      resolved_scope_candidate: makeResolvedScopeCandidate({ scope_key: 'arizona' }),
+    });
+    const point = makeCandidatePoint(metadata);
+    const { scrollPoints } = makeScrollPointsStub([point]);
+    writeConfirmations([]);
+
+    const result = await computeIntakeCandidateStatuses(scrollPoints, confirmationQueuePath);
+
+    expect(result[0]).toEqual({
+      entryId: metadata.entry_id,
+      clusterId: 'cluster-1',
+      scopeKey: 'arizona',
+      status: 'candidate_unconfirmed',
+      distributedToScope: null,
+    });
+  });
+
+  it('a real candidate with a matching (cluster_id, scope_key) confirmation on disk -> candidate_confirmed_pending_distribution', async () => {
+    const metadata = makeEntryMetadata({
+      cluster_id: 'cluster-1',
+      resolved_scope_candidate: makeResolvedScopeCandidate({ scope_key: 'arizona' }),
+    });
+    const point = makeCandidatePoint(metadata);
+    const { scrollPoints } = makeScrollPointsStub([point]);
+    writeConfirmations([{ cluster_id: 'cluster-1', scope_key: 'arizona' }]);
+
+    const result = await computeIntakeCandidateStatuses(scrollPoints, confirmationQueuePath);
+
+    expect(result[0]!.status).toBe('candidate_confirmed_pending_distribution');
+  });
+
+  it('a confirmation naming the SAME cluster_id but a DIFFERENT scope_key never matches -> stays candidate_unconfirmed', async () => {
+    const metadata = makeEntryMetadata({
+      cluster_id: 'cluster-1',
+      resolved_scope_candidate: makeResolvedScopeCandidate({ scope_key: 'arizona' }),
+    });
+    const point = makeCandidatePoint(metadata);
+    const { scrollPoints } = makeScrollPointsStub([point]);
+    writeConfirmations([{ cluster_id: 'cluster-1', scope_key: 'some-other-scope' }]);
+
+    const result = await computeIntakeCandidateStatuses(scrollPoints, confirmationQueuePath);
+
+    expect(result[0]!.status).toBe('candidate_unconfirmed');
+  });
+
+  it('an entry with a real distribution_marker -> distributed, distributedToScope from the real marker, regardless of confirmation state', async () => {
+    const metadata = makeEntryMetadata({
+      cluster_id: 'cluster-1',
+      resolved_scope_candidate: makeResolvedScopeCandidate({ scope_key: 'arizona' }),
+    });
+    const candidatePoint = makeCandidatePoint(metadata);
+    const markerPoint = makeMarkerPoint({
+      entry_id: 'marker-1',
+      entry_type: 'distribution_marker',
+      marks_entry_id: metadata.entry_id,
+      distributed_to_scope: 'arizona',
+      distributed_at: '2026-08-27T00:00:00.000Z',
+    });
+    const { scrollPoints } = makeScrollPointsStub([candidatePoint, markerPoint]);
+    writeConfirmations([]); // never confirmed on disk -- marker still wins
+
+    const result = await computeIntakeCandidateStatuses(scrollPoints, confirmationQueuePath);
+
+    expect(result[0]).toEqual({
+      entryId: metadata.entry_id,
+      clusterId: 'cluster-1',
+      scopeKey: 'arizona',
+      status: 'distributed',
+      distributedToScope: 'arizona',
+    });
+  });
+
+  it('a marker also wins over a no-candidate entry (an entry with no resolved_scope_candidate that was still distributed, to meta)', async () => {
+    const metadata = makeEntryMetadata({ resolved_scope_candidate: null });
+    const candidatePoint = makeCandidatePoint(metadata);
+    const markerPoint = makeMarkerPoint({
+      entry_id: 'marker-1',
+      entry_type: 'distribution_marker',
+      marks_entry_id: metadata.entry_id,
+      distributed_to_scope: 'meta',
+      distributed_at: '2026-08-27T00:00:00.000Z',
+    });
+    const { scrollPoints } = makeScrollPointsStub([candidatePoint, markerPoint]);
+    writeConfirmations([]);
+
+    const result = await computeIntakeCandidateStatuses(scrollPoints, confirmationQueuePath);
+
+    expect(result[0]!.status).toBe('distributed');
+    expect(result[0]!.distributedToScope).toBe('meta');
+  });
+
+  it('calls scrollPoints() exactly once, against INTAKE_COLLECTION_NAME, never any other collection', async () => {
+    const { scrollPoints, calls } = makeScrollPointsStub([]);
+    writeConfirmations([]);
+
+    await computeIntakeCandidateStatuses(scrollPoints, confirmationQueuePath);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.collectionName).toBe(INTAKE_COLLECTION_NAME);
+  });
+
+  it('performs zero writes -- pure read, multiple real candidates classified independently in one pass', async () => {
+    const unconfirmed = makeEntryMetadata({
+      cluster_id: 'cluster-1',
+      resolved_scope_candidate: makeResolvedScopeCandidate({ scope_key: 'arizona' }),
+    });
+    const confirmed = makeEntryMetadata({
+      cluster_id: 'cluster-2',
+      resolved_scope_candidate: makeResolvedScopeCandidate({ scope_key: 'texas' }),
+    });
+    const noCandidate = makeEntryMetadata({ cluster_id: null, resolved_scope_candidate: null });
+    const points = [makeCandidatePoint(unconfirmed), makeCandidatePoint(confirmed), makeCandidatePoint(noCandidate)];
+    const { scrollPoints } = makeScrollPointsStub(points);
+    writeConfirmations([{ cluster_id: 'cluster-2', scope_key: 'texas' }]);
+
+    const result = await computeIntakeCandidateStatuses(scrollPoints, confirmationQueuePath);
+
+    expect(result).toHaveLength(3);
+    const byEntryId = new Map(result.map((r) => [r.entryId, r]));
+    expect(byEntryId.get(unconfirmed.entry_id)!.status).toBe('candidate_unconfirmed');
+    expect(byEntryId.get(confirmed.entry_id)!.status).toBe('candidate_confirmed_pending_distribution');
+    expect(byEntryId.get(noCandidate.entry_id)!.status).toBe('no_candidate');
   });
 });

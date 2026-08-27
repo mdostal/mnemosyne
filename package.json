@@ -67,7 +67,10 @@
     "test:onboard-smoke-mode-b": "node test/onboard-smoke-mode-b.mjs",
     "test:conversation-pilot": "tsx --test bin/mnemosyne-conversation-pilot.test.mjs",
     "test:conversation-discover-cli": "tsx --test bin/mnemosyne-conversation-discover.test.mjs",
-    "test:discovery-pilot-routes": "node test/discovery-pilot-routes.mjs"
+    "test:discovery-pilot-routes": "node test/discovery-pilot-routes.mjs",
+    "test:conversation-triage-review-cli": "tsx --test bin/mnemosyne-conversation-triage-review.test.mjs",
+    "test:triage-review-routes": "node test/triage-review-routes.mjs",
+    "test:triage-review-panel": "node test/triage-review-panel.mjs"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import io
+import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,12 +15,18 @@ import yaml
 
 import mnemosyne.inventory.qdrant_inventory as qdrant_inventory_module
 from mnemosyne.inventory.qdrant_inventory import (
+    INTAKE_COLLECTION_NAME,
+    INTAKE_PROVENANCE_MARKER,
     CollectionInventory,
     HttpQdrantClient,
     QdrantInventoryError,
+    collect_intake_candidates,
+    extract_intake_provenance,
     inventory_collections,
     load_qdrant_url,
+    main,
     read_qdrant_key,
+    run_intake_candidates,
     write_inventory_manifest,
 )
 
@@ -278,6 +287,12 @@ class ScrollPointsTests(unittest.TestCase):
         self.assertNotIn("PUT", methods_used)
         self.assertNotIn("DELETE", methods_used)
 
+    def test_intake_collection_name_matches_ts_side_exactly(self):
+        """distributeIntakeEntries.ts's own INTAKE_COLLECTION_NAME constant
+        value, byte-for-byte -- confirmed by direct read of that file this
+        story's own research step."""
+        self.assertEqual(INTAKE_COLLECTION_NAME, "conversation_memory_intake")
+
     def test_module_docstring_no_delete_drop_contract_unchanged(self):
         """cm-13's addition is read-only; create_collection()'s own
         one-deliberate-write-exception status, and the module's own "no
@@ -303,6 +318,199 @@ class ScrollPointsTests(unittest.TestCase):
         self.assertNotIn("drop_collection", public_methods)
         self.assertFalse(any("delete" in name.lower() for name in public_methods))
         self.assertFalse(any("drop" in name.lower() for name in public_methods))
+
+
+def _provenance_header(metadata: dict[str, Any]) -> str:
+    """Builds a real provenance-header comment block in the EXACT format
+    distillAndRemember.ts's buildProvenanceHeader() produces -- used here
+    only to construct realistic test fixtures, never imported from TS (no
+    such bridge exists)."""
+    return f"<!-- {INTAKE_PROVENANCE_MARKER}\n{json.dumps(metadata)}\n-->"
+
+
+class ExtractIntakeProvenanceTests(unittest.TestCase):
+    """cm-16-triage-review-and-confirm-ui: extract_intake_provenance() --
+    the small, deliberate, second implementation of distillAndRemember.ts's
+    own buildProvenanceHeader()/parseProvenanceHeader() comment-marker
+    format (docs/design-discussion.md §12.3)."""
+
+    def test_marker_literal_matches_ts_side_exactly(self):
+        """distillAndRemember.ts's own private PROVENANCE_HEADER_MARKER
+        constant value, byte-for-byte -- confirmed by direct read of that
+        file this story's own research step. If this literal ever drifts
+        from the TS side, EVERY real intake point becomes unparseable here
+        -- this test exists specifically to catch that class of regression."""
+        self.assertEqual(INTAKE_PROVENANCE_MARKER, "mnemosyne-intake-provenance")
+
+    def test_extracts_a_real_well_formed_header(self):
+        metadata = {"entry_id": "abc-123", "entry_type": "decision", "cluster_id": "cluster-1"}
+        text = _provenance_header(metadata) + "\n\nSome real distilled body text."
+
+        self.assertEqual(extract_intake_provenance(text), metadata)
+
+    def test_returns_none_for_text_with_no_header_at_all(self):
+        self.assertIsNone(extract_intake_provenance("just some unrelated plain text"))
+
+    def test_returns_none_for_a_malformed_json_blob_inside_the_marker(self):
+        text = f"<!-- {INTAKE_PROVENANCE_MARKER}\nnot valid json\n-->"
+        self.assertIsNone(extract_intake_provenance(text))
+
+    def test_returns_none_when_the_json_blob_is_not_an_object(self):
+        text = f"<!-- {INTAKE_PROVENANCE_MARKER}\n[1, 2, 3]\n-->"
+        self.assertIsNone(extract_intake_provenance(text))
+
+    def test_never_raises_on_arbitrary_garbage_input(self):
+        for garbage in ["", "\n", "<!-- something-else\n{}\n-->", "<!--" * 50]:
+            self.assertIsNone(extract_intake_provenance(garbage))
+
+
+class CollectIntakeCandidatesTests(unittest.TestCase):
+    """cm-16: collect_intake_candidates() -- read-only, calls
+    scroll_points(INTAKE_COLLECTION_NAME) exactly, returns the RAW points
+    list unchanged (cm-16's own TS side re-parses/classifies this SAME raw
+    list via distributeIntakeEntries.ts's own real, unchanged
+    partitionPoints() -- never re-derived here); candidate_count/
+    marker_count are a small, purely informational summary only."""
+
+    def test_returns_raw_points_unchanged_and_scrolls_the_intake_collection_only(self):
+        points = [{"id": "a", "payload": {"text": "irrelevant"}}]
+        calls: list[str] = []
+
+        class FakeClient:
+            def scroll_points(self, name: str) -> list[dict[str, Any]]:
+                calls.append(name)
+                return points
+
+        result = collect_intake_candidates(FakeClient())
+
+        self.assertEqual(calls, [INTAKE_COLLECTION_NAME])
+        self.assertIs(result["points"], points)
+
+    def test_counts_candidates_and_markers_separately_via_the_real_extraction_helper(self):
+        candidate_point = {
+            "id": "p1",
+            "payload": {"text": _provenance_header({"entry_id": "e1", "entry_type": "decision"})},
+        }
+        marker_point = {
+            "id": "p2",
+            "payload": {
+                "text": _provenance_header(
+                    {"entry_id": "m1", "entry_type": "distribution_marker", "marks_entry_id": "e1"}
+                )
+            },
+        }
+        malformed_point = {"id": "p3", "payload": {"text": "no header here"}}
+        no_text_point = {"id": "p4", "payload": {}}
+
+        class FakeClient:
+            def scroll_points(self, name: str) -> list[dict[str, Any]]:
+                return [candidate_point, marker_point, malformed_point, no_text_point]
+
+        result = collect_intake_candidates(FakeClient())
+
+        self.assertEqual(result["candidate_count"], 1)
+        self.assertEqual(result["marker_count"], 1)
+        self.assertEqual(len(result["points"]), 4)
+
+    def test_empty_collection_returns_zero_counts_and_an_empty_points_list(self):
+        class FakeClient:
+            def scroll_points(self, name: str) -> list[dict[str, Any]]:
+                return []
+
+        result = collect_intake_candidates(FakeClient())
+        self.assertEqual(result, {"points": [], "candidate_count": 0, "marker_count": 0})
+
+
+class RunIntakeCandidatesTests(unittest.TestCase):
+    """cm-16: run_intake_candidates() -- mirrors run_inventory()'s own
+    credential/URL-resolution + client-build sequence; build_qdrant_client()
+    is patched so no real Qdrant is ever contacted."""
+
+    def test_wires_real_credential_resolution_into_collect_intake_candidates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            key_path = Path(tmp) / "qdrant.key"
+            key_path.write_text("fake-key\n", encoding="utf-8")
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text('[qdrant]\nurl = "https://example.qdrant.local:6333"\n', encoding="utf-8")
+
+            fake_client = FakeQdrantClient()
+            fake_client.scroll_points = lambda name: [{"id": "x", "payload": {"text": "irrelevant"}}]
+
+            with patch.object(qdrant_inventory_module, "build_qdrant_client", return_value=fake_client) as build_mock:
+                result = run_intake_candidates(key_path=key_path, config_path=config_path, environ={})
+
+            build_mock.assert_called_once_with("https://example.qdrant.local:6333", "fake-key")
+            self.assertEqual(result["points"], [{"id": "x", "payload": {"text": "irrelevant"}}])
+
+    def test_missing_key_fails_loudly_never_silently_returns_empty(self):
+        with self.assertRaises(QdrantInventoryError):
+            run_intake_candidates(key_path="/tmp/does-not-exist/qdrant.key", environ={})
+
+
+class MainIntakeCandidatesCliTests(unittest.TestCase):
+    """cm-16: main()'s new `intake-candidates` argparse subcommand --
+    additive to the existing surface; the pre-existing no-subcommand default
+    path (tested below) is verified UNCHANGED."""
+
+    def test_intake_candidates_subcommand_prints_ok_true_json_and_returns_zero(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            key_path = Path(tmp) / "qdrant.key"
+            key_path.write_text("fake-key\n", encoding="utf-8")
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text('[qdrant]\nurl = "https://example.qdrant.local:6333"\n', encoding="utf-8")
+
+            fake_client = FakeQdrantClient()
+            fake_client.scroll_points = lambda name: []
+
+            buf = io.StringIO()
+            with patch.object(qdrant_inventory_module, "build_qdrant_client", return_value=fake_client):
+                with redirect_stdout(buf):
+                    exit_code = main(["--key-path", str(key_path), "--config-path", str(config_path), "intake-candidates"])
+
+            self.assertEqual(exit_code, 0)
+            printed = json.loads(buf.getvalue())
+            self.assertEqual(printed, {"ok": True, "points": [], "candidate_count": 0, "marker_count": 0})
+
+    def test_intake_candidates_subcommand_reports_ok_false_on_a_real_qdrant_error_never_raises_uncaught(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            exit_code = main(
+                ["--key-path", "/tmp/does-not-exist/qdrant.key", "intake-candidates"]
+            )
+
+        self.assertEqual(exit_code, 1)
+        printed = json.loads(buf.getvalue())
+        self.assertEqual(printed["ok"], False)
+        self.assertIn("missing", printed["error"])
+
+    def test_no_subcommand_default_path_is_byte_for_byte_unchanged(self):
+        """Additive-only requirement: main() with no subcommand at all still
+        runs the ORIGINAL inventory path exactly as before this story."""
+        with tempfile.TemporaryDirectory() as tmp:
+            key_path = Path(tmp) / "qdrant.key"
+            key_path.write_text("fake-key\n", encoding="utf-8")
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text('[qdrant]\nurl = "https://example.qdrant.local:6333"\n', encoding="utf-8")
+            manifest_path = Path(tmp) / "inventory" / "qdrant-collections.yaml"
+
+            with patch.object(qdrant_inventory_module, "build_qdrant_client", return_value=FakeQdrantClient()):
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    exit_code = main(
+                        [
+                            "--key-path",
+                            str(key_path),
+                            "--config-path",
+                            str(config_path),
+                            "--manifest-path",
+                            str(manifest_path),
+                        ]
+                    )
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue(manifest_path.is_file())
+            self.assertIn("wrote", buf.getvalue())
+            self.assertNotIn("intake", buf.getvalue())
 
 
 if __name__ == "__main__":

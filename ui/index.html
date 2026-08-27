@@ -84,6 +84,7 @@
     <a href="#personas"><span class="chip-dot"></span>Personas<span class="sr-only" id="chip-status-personas"></span></a>
     <a href="#memory-levels"><span class="chip-dot"></span>Memory Levels<span class="sr-only" id="chip-status-memory-levels"></span></a>
     <a href="#discovery-pilot"><span class="chip-dot"></span>Discovery &amp; Pilot<span class="sr-only" id="chip-status-discovery-pilot"></span></a>
+    <a href="#triage-review"><span class="chip-dot"></span>Triage Review<span class="sr-only" id="chip-status-triage-review"></span></a>
   </nav>
 
   <main>
@@ -723,6 +724,109 @@
       </table>
     </section>
     <!-- ================== end cm-15-discovery-and-pilot-trigger-ui panel === -->
+
+    <!-- ================== cm-16-triage-review-and-confirm-ui panel ========= -->
+    <!-- Matches the Personas panel's own shell exactly (design-discussion.md
+         §12.1/§12.3): section -> h2 -> panel-status (one per independent
+         fetch: triage-candidates-status for GET /conversation-memory/
+         intake-candidates, triage-queue-status for GET /conversation-memory/
+         triage-queue) -> panel-hint -> optional glossary <details> ->
+         panel-scoped aria-live region -> table(s). The confirm action reuses
+         Personas' own puf-02-batch-approve-strip idiom EXACTLY: a
+         role="group" of checkboxes + one real <button type="button"> (no
+         `disabled` attribute anywhere), never a per-row confirm button and
+         never a new visual idiom. Quarantine rows below render with ZERO
+         action controls of any kind -- visibility only (this story's own
+         explicit instruction; cm-01's own quarantine-retention-policy open
+         question is left open, not resolved here). -->
+    <section id="triage-review" class="panel panel-wide">
+      <h2>Triage Review</h2>
+      <p class="panel-status" id="triage-candidates-status">loading…</p>
+      <p class="panel-status" id="triage-queue-status">loading…</p>
+      <p class="panel-hint">
+        Two real, distinct sources (design-discussion.md §12.3): the
+        <strong>Intake candidates</strong> table reads the live
+        <code>conversation_memory_intake</code> Qdrant collection (cm-13's
+        own scroll-based enumeration) and shows every entry's real
+        scope-route status. <strong>Confirming</strong> a
+        <code>candidate_unconfirmed</code> row appends ONE real
+        <code>ScopeRouteConfirmationEntry</code> line to the shared
+        triage-queue file — the ONLY filesystem write this panel ever
+        performs — so a later <code>cm-13</code> run routes that entry's
+        content to the confirmed real scope instead of the safe
+        <code>meta</code> default. Confirming an already-confirmed pair
+        again is harmless (a duplicate line, never refused).
+        <strong>Quarantine hits</strong> (secret-scan matches) are shown
+        below for visibility only — no confirm/dismiss/delete/re-triage
+        control exists for them anywhere in this panel; disposition remains
+        a separate, not-yet-designed future decision.
+      </p>
+
+      <details id="triage-review-glossary">
+        <summary>What do these statuses mean?</summary>
+        <dl class="fields">
+          <dt>no_candidate</dt>
+          <dd>This intake entry carries no scope-route candidate at all — it routes to <code>meta</code>.</dd>
+          <dt>candidate_unconfirmed</dt>
+          <dd>A real scope-route candidate exists but has not been confirmed yet — the only status this panel's Confirm action ever accepts.</dd>
+          <dt>candidate_confirmed_pending_distribution</dt>
+          <dd>A real, on-disk confirmation exists, but <code>cm-13</code> has not run since — not yet distributed.</dd>
+          <dt>distributed</dt>
+          <dd>A real distribution marker already references this entry — its content has already been routed.</dd>
+        </dl>
+      </details>
+
+      <p id="triage-review-live-region" class="sr-only" aria-live="polite"></p>
+
+      <h3>Intake candidates</h3>
+      <div id="triage-confirm-strip" class="persona-toolbar" hidden>
+        <p class="panel-status" id="triage-confirm-status"></p>
+        <div id="triage-confirm-checkboxes" role="group" aria-label="unconfirmed scope-route candidates"></div>
+        <button type="button" id="triage-confirm-btn" class="persona-action-btn">Confirm selected</button>
+      </div>
+      <table id="triage-candidates-table">
+        <thead>
+          <tr>
+            <th>Entry</th>
+            <th>Cluster</th>
+            <th>Scope key</th>
+            <th>Status</th>
+            <th>Distributed to</th>
+          </tr>
+        </thead>
+        <tbody id="triage-candidates-tbody"></tbody>
+      </table>
+      <p class="panel-status" id="triage-candidates-empty" hidden></p>
+
+      <h3>Quarantine (visibility only)</h3>
+      <p class="panel-hint">Secret-scan hits, redaction-safe (never a raw matched value) — shown for review only. No action control of any kind renders for any row below.</p>
+      <table id="triage-quarantine-table">
+        <thead>
+          <tr>
+            <th>Entry</th>
+            <th>Source</th>
+            <th>Cluster</th>
+            <th>Matches</th>
+          </tr>
+        </thead>
+        <tbody id="triage-quarantine-tbody"></tbody>
+      </table>
+      <p class="panel-status" id="triage-quarantine-empty" hidden></p>
+
+      <h3>Confirmed scope routes</h3>
+      <table id="triage-confirmations-table">
+        <thead>
+          <tr>
+            <th>Recorded</th>
+            <th>Cluster</th>
+            <th>Scope key</th>
+          </tr>
+        </thead>
+        <tbody id="triage-confirmations-tbody"></tbody>
+      </table>
+      <p class="panel-status" id="triage-confirmations-empty" hidden></p>
+    </section>
+    <!-- ================== end cm-16-triage-review-and-confirm-ui panel ====== -->
   </main>
 
   <footer>

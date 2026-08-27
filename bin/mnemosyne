@@ -14,6 +14,9 @@
 #        bin/mnemosyne conversation-pilot --selection-file <path> [--json]
 #        bin/mnemosyne conversation-pilot --sessions <path,...> --exports <id,...> --confirm [--json]
 #        bin/mnemosyne conversation-discover [--json] [--no-write]
+#        bin/mnemosyne conversation-triage-review read-triage-queue [--json]
+#        bin/mnemosyne conversation-triage-review intake-candidates [--json]
+#        bin/mnemosyne conversation-triage-review confirm --cluster-id <id> --scope-key <key> [--json]
 set -euo pipefail
 export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"
 
@@ -108,6 +111,17 @@ if [ "${1:-}" = "conversation-discover" ]; then
   # persona.mjs/agent.mjs/onboard.mjs/conversation-pilot.mjs -- noEmit:true
   # means there is no build step to import a .ts module any other way.
   exec node "$HERE/node_modules/.bin/tsx" "$HERE/bin/mnemosyne-conversation-discover.mjs" "$@"
+fi
+
+if [ "${1:-}" = "conversation-triage-review" ]; then
+  shift
+  # cm-16-triage-review-and-confirm-ui (epic: mnemosyne-conversation-memory):
+  # mnemosyne-conversation-triage-review.mjs imports lib/mnemosyne/conversation-
+  # memory/{triageSession,distributeIntakeEntries}.ts directly, so this is
+  # tsx-launched like persona.mjs/agent.mjs/onboard.mjs/conversation-pilot.mjs/
+  # conversation-discover.mjs -- noEmit:true means there is no build step to
+  # import a .ts module any other way.
+  exec node "$HERE/node_modules/.bin/tsx" "$HERE/bin/mnemosyne-conversation-triage-review.mjs" "$@"
 fi
 
 # --version/--help must be handled BEFORE the catch-all server exec below --

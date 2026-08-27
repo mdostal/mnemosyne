@@ -42,20 +42,23 @@ async function waitForServer(url, timeoutMs = 8000) {
   return false;
 }
 
-// The 9 real top-level panels, in real document order (research-brief.md §1;
-// cm-15-discovery-and-pilot-trigger-ui adds discovery-pilot, the newest
-// panel, last).
+// The 10 real top-level panels, in real document order (research-brief.md
+// §1; cm-15-discovery-and-pilot-trigger-ui added discovery-pilot;
+// cm-16-triage-review-and-confirm-ui adds triage-review, the newest panel,
+// last).
 const REAL_PANELS = [
   "liveliness", "settings", "lanes", "search",
-  "graph", "operations", "personas", "memory-levels", "discovery-pilot",
+  "graph", "operations", "personas", "memory-levels", "discovery-pilot", "triage-review",
 ];
 
 // Panels whose chip IS expected to be ring-eligible after a real refreshAll()
 // -- see ui/app.js's CHIP_STATUS_SOURCE comment for exactly why each of
 // these, and only these, qualifies (a real, unconditional, refresh-time
 // .panel-status element) and why search/operations/discovery-pilot are
-// excluded.
-const EXPECTED_RING_ELIGIBLE = ["liveliness", "settings", "lanes", "graph", "personas", "memory-levels"];
+// excluded. triage-review (cm-16) IS ring-eligible -- both of its own
+// fetches are pure reads with no write side effect, so (unlike
+// discovery-pilot) it IS driven by refreshAll().
+const EXPECTED_RING_ELIGIBLE = ["liveliness", "settings", "lanes", "graph", "personas", "memory-levels", "triage-review"];
 const EXPECTED_NEVER_RING = ["search", "operations", "discovery-pilot"];
 
 const child = spawn(process.execPath, [SERVER_PATH], {
@@ -76,7 +79,7 @@ try {
   ok(indexRes.status === 200, `GET /ui -> 200 (got ${indexRes.status})`);
 
   // ======================================================================
-  // 1. #jump-chips exists, directly under <header>, with exactly 9 real
+  // 1. #jump-chips exists, directly under <header>, with exactly 10 real
   //    anchor links, one per real panel, in document order.
   // ======================================================================
   const navMatch = indexBody.match(/<nav id="jump-chips"[\s\S]*?<\/nav>/);
@@ -90,10 +93,10 @@ try {
   ok(mainOpenIdx > -1 && navIdx < mainOpenIdx, "#jump-chips comes before <main> (it's a nav bar, not inside the panel grid)");
 
   const chipMatches = [...navHtml.matchAll(/<a href="#([a-z-]+)">/g)].map((m) => m[1]);
-  ok(chipMatches.length === 9, `#jump-chips has exactly 9 <a href="#..."> chips (found ${chipMatches.length})`);
+  ok(chipMatches.length === 10, `#jump-chips has exactly 10 <a href="#..."> chips (found ${chipMatches.length})`);
   ok(
     JSON.stringify(chipMatches) === JSON.stringify(REAL_PANELS),
-    `#jump-chips chips are the 9 real panels in real document order (got ${JSON.stringify(chipMatches)})`,
+    `#jump-chips chips are the 10 real panels in real document order (got ${JSON.stringify(chipMatches)})`,
   );
 
   // Every chip's target id is a real <section id="..."> in the document.
@@ -124,7 +127,7 @@ try {
   const chipHrefsAfterStrip = [...chipsAfterStrip.matchAll(/<a href="#([a-z-]+)">/g)].map((m) => m[1]);
   ok(
     JSON.stringify(chipHrefsAfterStrip) === JSON.stringify(REAL_PANELS),
-    "with <script> stripped, all 9 chips are still plain, working #anchor links",
+    "with <script> stripped, all 10 chips are still plain, working #anchor links",
   );
   // None of the chips rely on an onclick/JS handler to function as a link.
   ok(!/onclick=/.test(navHtml), "chips have no onclick attribute -- navigation is plain <a href> only");
@@ -149,15 +152,21 @@ try {
   const indexHtmlOnDisk = await readFile(path.join(__dirname, "..", "ui", "index.html"), "utf8");
   ok(indexHtmlOnDisk.includes(navHtml), "served #jump-chips markup matches the on-disk ui/index.html source");
 
-  // CHIP_STATUS_SOURCE exists exactly once, and maps exactly the 6 panels
+  // CHIP_STATUS_SOURCE exists exactly once, and maps exactly the 7 panels
   // with a real, refresh-time .panel-status -- never Search or Operations.
   const mapDefCount = (appJs.match(/const CHIP_STATUS_SOURCE = \{/g) || []).length;
   ok(mapDefCount === 1, `exactly one CHIP_STATUS_SOURCE definition (found ${mapDefCount})`);
   const mapMatch = appJs.match(/const CHIP_STATUS_SOURCE = \{([\s\S]*?)\};/);
   const mapBody = mapMatch ? mapMatch[1] : "";
+  // Every ring-eligible panel maps to `${panelId}-status` EXCEPT
+  // triage-review (cm-16), which maps to one of its own TWO independent
+  // panel-status elements (triage-candidates-status) -- mirrors Personas'
+  // own personas-status/personas-drafts-status split.
+  const EXPECTED_STATUS_ID_BY_PANEL = { "triage-review": "triage-candidates-status" };
   for (const panelId of EXPECTED_RING_ELIGIBLE) {
-    ok(new RegExp(`["']?${panelId}["']?:\\s*"${panelId}-status"`).test(mapBody),
-      `CHIP_STATUS_SOURCE maps ${panelId} -> ${panelId}-status`);
+    const expectedStatusId = EXPECTED_STATUS_ID_BY_PANEL[panelId] || `${panelId}-status`;
+    ok(new RegExp(`["']?${panelId}["']?:\\s*"${expectedStatusId}"`).test(mapBody),
+      `CHIP_STATUS_SOURCE maps ${panelId} -> ${expectedStatusId}`);
   }
   for (const panelId of EXPECTED_NEVER_RING) {
     ok(!new RegExp(`["']?${panelId}["']?:`).test(mapBody),
@@ -228,11 +237,19 @@ try {
     getAttribute(name) { return name === "href" ? this._href : null; }
   }
 
+  // Real status-element id per ring-eligible panel -- read from the REAL
+  // extracted CHIP_STATUS_SOURCE map itself rather than assumed from the
+  // `${panelId}-status` naming convention every panel EXCEPT triage-review
+  // (cm-16) happens to follow: that panel maps to triage-candidates-status
+  // (one of its own TWO independent panel-status elements), exactly
+  // mirroring Personas' own personas-status/personas-drafts-status split.
+  const realChipMap = new Function(`${chipMapSrc}\nreturn CHIP_STATUS_SOURCE;`)();
+
   const statusEls = {};
   for (const panelId of EXPECTED_RING_ELIGIBLE) {
     const el = new FakeStatusEl();
     el.className = "panel-status"; // fresh/never-loaded state to start
-    statusEls[`${panelId}-status`] = el;
+    statusEls[realChipMap[panelId]] = el;
   }
   // Real elements that exist in the real DOM but are deliberately NOT in
   // CHIP_STATUS_SOURCE -- included here specifically to prove they're
@@ -262,8 +279,10 @@ try {
     "real setStatus() and syncJumpChips() were extracted and are callable");
   ok(
     JSON.stringify(Object.keys(extractedMap).sort()) === JSON.stringify([...EXPECTED_RING_ELIGIBLE].sort()),
-    `extracted CHIP_STATUS_SOURCE has exactly the expected 6 keys (got ${JSON.stringify(Object.keys(extractedMap))})`,
+    `extracted CHIP_STATUS_SOURCE has exactly the expected 7 keys (got ${JSON.stringify(Object.keys(extractedMap))})`,
   );
+  ok(extractedMap["triage-review"] === "triage-candidates-status",
+    `triage-review (cm-16) maps to triage-candidates-status, not a generic triage-review-status (got ${extractedMap["triage-review"]})`);
 
   // --- drive it like a real refreshAll() would: liveliness/settings/lanes
   // pass, graph fails, personas/memory-levels stay mid-"loading" -----------
@@ -273,6 +292,7 @@ try {
   fakeSetStatus(statusEls["graph-status"], "fail", "FAIL — could not reach GET /graph/stats");
   fakeSetStatus(statusEls["personas-status"], "loading", "loading…");
   fakeSetStatus(statusEls["memory-levels-status"], "fail", "FAIL — 1 store degraded");
+  fakeSetStatus(statusEls["triage-candidates-status"], "pass", "3 intake candidate(s)");
   // Search/Operations sub-statuses ARE populated here (as they would be if
   // a user had already run a search / reindex earlier in the session) --
   // this is the crux of the never-fabricate proof: chip wiring must ignore
@@ -293,6 +313,8 @@ try {
   ok(!chipByHref.personas.classList.contains("chip-pass") && !chipByHref.personas.classList.contains("chip-fail"),
     "personas-status still \"loading\" (neither pass nor fail class) -> #personas chip gets NEITHER class -- never fabricated");
   ok(chipByHref["memory-levels"].classList.contains("chip-fail"), "memory-levels-status=fail -> #memory-levels chip gets chip-fail");
+  ok(chipByHref["triage-review"].classList.contains("chip-pass") && !chipByHref["triage-review"].classList.contains("chip-fail"),
+    "triage-candidates-status=pass -> #triage-review chip gets chip-pass (cm-16, unlike discovery-pilot, IS driven by refreshAll())");
 
   // --- the never-fabricate rule, under direct pressure: Search/Operations
   // stay classless even though their OWN sub-status elements are populated,

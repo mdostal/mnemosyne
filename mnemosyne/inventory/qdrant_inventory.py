@@ -15,6 +15,7 @@ import argparse
 import configparser
 import json
 import os
+import re
 import ssl
 import sys
 import urllib.error
@@ -25,6 +26,23 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 import yaml
+
+# cm-16-triage-review-and-confirm-ui (epic: mnemosyne-conversation-memory):
+# the intake collection's own real, fixed name (matches
+# distributeIntakeEntries.ts's own INTAKE_COLLECTION_NAME constant
+# byte-for-byte) -- used at exactly one call site (collect_intake_candidates()
+# below), never caller-parameterized.
+INTAKE_COLLECTION_NAME = "conversation_memory_intake"
+
+# Mirrors distillAndRemember.ts's own private PROVENANCE_HEADER_MARKER
+# constant value EXACTLY (same literal string) -- see
+# extract_intake_provenance() below for why this is a deliberate, small,
+# separate re-implementation rather than an import (no Python/TS bridge
+# exists for this).
+INTAKE_PROVENANCE_MARKER = "mnemosyne-intake-provenance"
+_INTAKE_PROVENANCE_RE = re.compile(
+    r"<!-- " + re.escape(INTAKE_PROVENANCE_MARKER) + r"\n(.*?)\n-->", re.DOTALL
+)
 
 DEFAULT_KEY_PATH = Path("~/.config/swarm-memory/qdrant.key").expanduser()
 DEFAULT_CONFIG_PATH = Path("~/.config/swarm-memory/config.toml").expanduser()
@@ -171,6 +189,69 @@ class HttpQdrantClient:
         )
 
 
+def extract_intake_provenance(text: str) -> dict[str, Any] | None:
+    """Re-implements distillAndRemember.ts's own buildProvenanceHeader()/
+    parseProvenanceHeader() comment-marker extraction locally (~10 lines) --
+    a deliberate, small, separate SECOND implementation of the SAME format
+    (a JSON blob inside a fixed HTML-comment marker), mirroring
+    bin/graphify-bridge.mjs's own already-accepted precedent for exactly
+    this kind of low-risk cross-language duplication (docs/design-
+    discussion.md §12.3, cm-16-triage-review-and-confirm-ui). Returns
+    ``None`` (never raises) when `text` carries no, or a malformed,
+    provenance header -- mirrors parseProvenanceHeader()'s own identical
+    "never throws" contract.
+    """
+    match = _INTAKE_PROVENANCE_RE.search(text)
+    if not match:
+        return None
+    try:
+        parsed = json.loads(match.group(1))
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def collect_intake_candidates(client: Any) -> dict[str, Any]:
+    """Read-only: ``scroll_points(INTAKE_COLLECTION_NAME)`` -- the exact,
+    fixed collection name, never caller-parameterized (mirrors
+    distributeIntakeEntries.ts's own identical hard constraint: no code path
+    here can ever scroll any other collection).
+
+    Returns the RAW points list (``points``, each ``{"id", "payload"}``) --
+    cm-16's own TS side (bin/mnemosyne-conversation-triage-review.mjs ->
+    lib/mnemosyne/conversation-memory/distributeIntakeEntries.ts's
+    ``computeIntakeCandidateStatuses()``) re-parses this SAME raw list via
+    that file's own real, UNCHANGED ``partitionPoints()``/
+    ``readScopeRouteConfirmations()`` -- the actual candidate/marker
+    classification AND the confirmed-vs-unconfirmed status decision is never
+    made here, never re-derived independently (this story's own hard
+    constraint). ``candidate_count``/``marker_count`` below are a small,
+    PURELY INFORMATIONAL summary (computed via extract_intake_provenance()
+    above) -- never consumed by, and never a substitute for, the TS side's
+    own real partitioning.
+    """
+    points = client.scroll_points(INTAKE_COLLECTION_NAME)
+    candidate_count = 0
+    marker_count = 0
+    for point in points:
+        payload = point.get("payload") or {}
+        text = payload.get("text")
+        if not isinstance(text, str):
+            continue
+        metadata = extract_intake_provenance(text)
+        if metadata is None:
+            continue
+        if metadata.get("entry_type") == "distribution_marker":
+            marker_count += 1
+        else:
+            candidate_count += 1
+    return {
+        "points": points,
+        "candidate_count": candidate_count,
+        "marker_count": marker_count,
+    }
+
+
 def read_qdrant_key(path: str | Path = DEFAULT_KEY_PATH) -> str:
     key_path = Path(path).expanduser()
     try:
@@ -305,6 +386,23 @@ def run_inventory(
     return write_inventory_manifest(collections, manifest_path, qdrant_url=url)
 
 
+def run_intake_candidates(
+    *,
+    key_path: str | Path = DEFAULT_KEY_PATH,
+    config_path: str | Path = DEFAULT_CONFIG_PATH,
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """cm-16-triage-review-and-confirm-ui's own read-only entry point --
+    mirrors run_inventory()'s own credential/URL-resolution + client-build
+    sequence exactly, then delegates to collect_intake_candidates() (never a
+    write of any kind, never a manifest file written to disk -- this verb's
+    whole result is printed to stdout by main(), below)."""
+    api_key = read_qdrant_key(key_path)
+    url = load_qdrant_url(config_path, environ)
+    client = build_qdrant_client(url, api_key)
+    return collect_intake_candidates(client)
+
+
 def _collection_info(client: Any, name: str) -> Any:
     if hasattr(client, "get_collection"):
         return client.get_collection(collection_name=name)
@@ -329,10 +427,46 @@ def _first_present(value: Any, *keys: str, default: Any = None) -> Any:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    # Top-level args -- UNCHANGED, byte-for-byte, from before this story:
+    # every existing caller of `main()`/this CLI with no subcommand keeps
+    # working exactly as it did (this story's own "additive to its own
+    # existing argparse surface" requirement).
     parser.add_argument("--key-path", default=str(DEFAULT_KEY_PATH))
     parser.add_argument("--config-path", default=str(DEFAULT_CONFIG_PATH))
     parser.add_argument("--manifest-path", default=str(DEFAULT_MANIFEST_PATH))
+
+    # cm-16-triage-review-and-confirm-ui: ONE new, additive, READ-ONLY
+    # subcommand -- `command` is `None` when omitted entirely, so the
+    # default (no-subcommand) path below is completely unaffected.
+    subparsers = parser.add_subparsers(dest="command")
+    intake_parser = subparsers.add_parser(
+        "intake-candidates",
+        help=(
+            "Read-only: scroll_points('conversation_memory_intake') and print "
+            "the raw points + a small candidate/marker count summary as JSON "
+            "(cm-16-triage-review-and-confirm-ui). No delete/write capability "
+            "of any kind."
+        ),
+    )
+    # --key-path/--config-path are deliberately NOT redefined here -- they
+    # live on the top-level parser only (above), so a value given with
+    # `--key-path X intake-candidates` is never silently overwritten by a
+    # second Action for the same dest re-applying its own default when the
+    # subcommand itself doesn't repeat the flag.
+    intake_parser.add_argument(
+        "--json", action="store_true", help="accepted for CLI-convention consistency; output is always JSON"
+    )
+
     args = parser.parse_args(argv)
+
+    if args.command == "intake-candidates":
+        try:
+            result = run_intake_candidates(key_path=args.key_path, config_path=args.config_path)
+        except QdrantInventoryError as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}))
+            return 1
+        print(json.dumps({"ok": True, **result}))
+        return 0
 
     try:
         manifest = run_inventory(
