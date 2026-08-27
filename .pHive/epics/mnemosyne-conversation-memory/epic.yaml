@@ -271,6 +271,46 @@ notes: |
   built or run this pass or as part of cm-08's pilot -- gated behind its
   own future, separate operator go-ahead. Story count: 14 (cm-01..cm-14).
 
+  Round-5 amendment (2026-08-27, docs/design-discussion.md §12, grill
+  round 5 in docs/grill-record.md -- 5 findings plus the task's own three
+  named leak/safety questions, all resolved). Operator's own dogfooding
+  framing this pass, verbatim: "we need a ui button that allows us to
+  crawl and index the new incoming data and conversations and then a way
+  to help us see and parse it apart to the areas, so we should build
+  that, then dogfood it." Two new stories add a real UI trigger and a
+  real UI review surface to the existing dashboard (ui/index.html/
+  ui/app.js, served from src/server.mjs, port 8477 by default -- this
+  pass corrected a stale "port 8578" assumption via direct read of both
+  servers' own route tables). cm-15-discovery-and-pilot-trigger-ui adds a
+  "crawl" (re-run cm-02's discovery scan) button, real operator-marked
+  checkboxes over the resulting manifest, and a "run pilot" trigger that
+  invokes cm-08's bounded pilot orchestrator over exactly the marked
+  subset -- resolved explicitly against cm-08's own no-implicit-selection
+  design (its own AC5): the UI flow is a real, HTTP-delivered instance of
+  cm-08's own already-named "CLI confirm step" mechanic, never its
+  "edited manifest file" mechanic, enforced by three independent layers
+  (client-side inline refusal, a real server-side 400 on an empty
+  selection, and cm-08's own unchanged CLI-level refusal), never a single
+  "crawl everything" button with no per-item confirmation. cm-16-triage-
+  review-and-confirm-ui adds a panel reading the real, current triage
+  queue (quarantine hits, visibility only, no action -- cm-01's own
+  quarantine-retention-policy question, open question #4, is explicitly
+  left open, not silently resolved) and the real intake collection's own
+  scope-route candidates/distribution markers (via cm-13's own
+  scroll_points() primitive, reused not reimplemented), plus a new,
+  append-only confirm action writing cm-13's own exact, already-real
+  ScopeRouteConfirmationEntry shape via a single fs.appendFileSync call --
+  the SAME append-only convention cm-01/cm-05/cm-07/cm-13 already use,
+  never a delete/edit of an existing queue line. Both stories avoid
+  changing how src/server.mjs itself is launched (confirmed it currently
+  cannot import .ts modules directly, per bin/mnemosyne's own plain-node
+  launch line and bin/graphify-bridge.mjs's own doc comment naming the
+  identical constraint) by following bin/mnemosyne-onboard.mjs's own
+  established "small, tsx-launched CLI wrapper, shelled out to via
+  execFile()" precedent instead -- the SAME "thin HTTP wrapper shells out
+  to a CLI" architecture engine.mjs already uses for every existing route
+  in this file. Story count: 16 (cm-01..cm-16).
+
 stories:
   - id: cm-01-secret-credential-scanner
     title: Standalone secret/credential scanning primitive
@@ -328,3 +368,11 @@ stories:
     title: Intake decommission — the epic's ONE deliberate, narrowly-scoped exception to "no delete path exists," removing an already-distributed intake entry only
     complexity: high
     depends_on: [cm-13-intake-distribution]
+  - id: cm-15-discovery-and-pilot-trigger-ui
+    title: Discovery + pilot trigger UI — crawl for new sources, operator-marked selection, pipeline invocation
+    complexity: high
+    depends_on: [cm-08-bounded-operator-pilot, cm-02-conversation-source-discovery]
+  - id: cm-16-triage-review-and-confirm-ui
+    title: Triage review + scope-route confirmation UI — see queue/intake state, confirm a candidate into its real area
+    complexity: high
+    depends_on: [cm-06-cross-session-clustering, cm-13-intake-distribution]

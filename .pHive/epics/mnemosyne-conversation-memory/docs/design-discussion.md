@@ -1624,3 +1624,454 @@ decommissioning scale/timing instead of ingestion scale.
 
 Grilled at the same rigor as rounds 1-3, plus a dedicated leak/safety
 check — see `docs/grill-record.md` round 4.
+
+## 12. Amendment (2026-08-27) — round 5: an operator-facing UI trigger and review surface (dogfood pass)
+
+Real design change, planning-only (no application code touched —
+`.pHive/epics/mnemosyne-conversation-memory/**` only), additive to §§1-11
+exactly as rounds 2-4 were: nothing above is rewritten or deleted.
+
+**Operator's own words, verbatim:** "we need a ui button that allows us to
+crawl and index the new incoming data and conversations and then a way to
+help us see and parse it apart to the areas, so we should build that,
+then dogfood it."
+
+Two real, distinct asks, mapped to two real, distinct new stories —
+`cm-15` (a trigger surface: crawl for new sources, mark a subset, run the
+pipeline) and `cm-16` (a review surface: see queue/intake state, confirm a
+scope-route candidate into a real area) — not one story doing both,
+mirroring round 4's own "three real, distinct pieces, not one story doing
+all three" precedent. §12.1 grounds the design in this pass's own real
+code re-verification; §12.2-§12.3 cover each piece; §12.4 names shared
+coordination points between the two; §12.5 names what's still genuinely
+open.
+
+### 12.1 Real code re-verification this pass (grounding, mirrors §11.1's own discipline — nothing below assumed from memory or from the task brief's own framing alone)
+
+- **The hosting server, confirmed by reading BOTH servers' own real route
+  tables directly, not assumed from the task brief's own "port 8578 by
+  convention" framing — which is WRONG and corrected here:** `src/
+  server.mjs` is the memory god's HTTP surface, and its real, current
+  default port is **8477** (`const PORT = Number(process.env.PORT ||
+  8477);`, `src/server.mjs:86`; confirmed independently by `SERVICE.md:95`
+  — `PORT=8477 bin/mnemosyne`; a full-repo grep for `8578` returns ZERO
+  matches anywhere in this codebase). It already serves `GET /ui`/`GET
+  /ui/*` (a static file server rooted at `ui/`, `src/server.mjs:105-123`)
+  and hosts every existing UI-facing route (`/search`, `/graph/*`,
+  `/index`, `/reindex`, `/cache/refresh`). `lib/mnemosyne/server.ts`, by
+  contrast, is a SEPARATE service on port **3141** (`MNEMOSYNE_PORT`,
+  `lib/mnemosyne/server.ts:167`) — its own module doc comment states
+  plainly it "does not share routes or process" with `src/server.mjs`, and
+  its real route table (`/health`, `/layers`, `/memory-levels`,
+  `/persona*`) serves ZERO UI assets and has no `/ui` handler anywhere.
+  `src/server.mjs` (8477) is confirmed the right, and only sensible, host
+  for both new pieces below — the task brief's own "8578" framing was a
+  stale/incorrect assumption this pass corrects rather than propagates.
+- **`cm-02` and `cm-08` are both still `status: pending` — checked for
+  real, not assumed from the task brief's own "cm-08 may or may not have
+  landed" hedge:** `bin/mnemosyne-conversation-pilot.mjs` does not exist
+  on disk (confirmed by `ls`); `~/.mnemosyne/conversation-sources.yaml`
+  (cm-02's own manifest) is not yet a real, generated artifact of any
+  shipped code. Both new stories below are therefore designed against
+  cm-02's/cm-08's own already-written story YAML contracts (real,
+  reviewed, unchanged by this pass), not against running code — the same
+  "plan the mechanism, apply for real at build time" posture this epic has
+  used for every not-yet-built dependency since round 1.
+- **The existing panel/jump-chip/status convention, read directly from
+  `ui/index.html`/`ui/app.js` as the concrete pattern to match, per the
+  task's own instruction — the Personas panel (`ui/index.html:268-268+`)
+  is the closest, most-recently-built precedent:** every panel is a
+  `<section id="..." class="panel">` (or `panel-wide` for a data-dense
+  one), immediately followed by an `<h2>`, one or more `<p class=
+  "panel-status">` elements (one per independent fetch, e.g. Personas' own
+  `personas-status`/`personas-drafts-status` split), a `<p class=
+  "panel-hint">` explaining real behavior/boundaries in plain language, an
+  optional `<details>` glossary, a toolbar (`role="radiogroup"` for a
+  mode-toggle, a native `<select>` for a status filter — never a novel
+  widget where these two idioms already agree), a `<p ... aria-live=
+  "polite">` scoped per-panel (Personas' own `personas-live-region`, never
+  shared across panels) for announcing action outcomes, and a matching
+  `<a href="#panel-id">` jump-chip near the top of the file
+  (`#jump-chips`, `ui/index.html:77-85`). Batch/gated actions (Personas'
+  own `puf-02-batch-approve-strip`) use a real `<div role="group">` of
+  checkboxes plus one real `<button type="button">` — and its own comment
+  states the established convention explicitly: "no `disabled` attribute
+  anywhere," native keyboard operability instead. Both new panels below
+  follow this exact shell, never inventing a new visual idiom.
+- **No polling/SSE/streaming precedent exists anywhere in this codebase —
+  checked directly (`grep -in "poll|interval|EventSource" ui/app.js`
+  returns zero matches), not assumed absent:** the one and only existing
+  UI-triggered, live-Qdrant-writing, genuinely-long-running action is the
+  Operations panel's targeted reindex (`#reindex-form` → `POST /index`,
+  `ui/app.js:1195-1224`) — a plain synchronous `fetch()`, gated by a
+  `window.confirm()` naming exactly what will happen ("This shells out to
+  swarm-memory against the LIVE Qdrant Cloud store and can take real
+  time..."), a single `setStatus(..., "loading", "reindexing… (this can
+  take a while against the live store)")` while in flight, and the full
+  result rendered from the response body once it resolves. `POST
+  /reindex` (the OTHER, bulk/async/202 reindex path) has no UI wiring at
+  all — it is reachable only by direct API call, never from a button. This
+  is the real, concrete precedent §12.2's own progress-reporting decision
+  follows, rather than inventing SSE/WebSocket infrastructure with zero
+  prior art in this repo.
+- **`src/server.mjs` cannot import a `.ts` module directly today —
+  confirmed twice, independently, not assumed:** `bin/mnemosyne`'s own
+  dispatcher launches it as plain `exec node "$HERE/src/server.mjs"` (no
+  `tsx`), and `bin/graphify-bridge.mjs`'s own module doc comment states
+  the identical constraint explicitly for its sibling zero-dep bin,
+  `mnemosyne-mcp.mjs`: "a plain `node bin/mnemosyne-mcp.mjs` process
+  cannot import a `.ts` module directly — no build step/loader is
+  configured for this bin, see `tsconfig.json`'s `noEmit: true`." Three
+  OTHER bins (`mnemosyne-persona.mjs`, `mnemosyne-agent.mjs`,
+  `mnemosyne-onboard.mjs`) DO import `.ts` modules directly, and are each
+  individually `tsx`-launched in `bin/mnemosyne`'s own dispatcher for
+  exactly that reason (`exec node "$HERE/node_modules/.bin/tsx" ...`) —
+  the real, established pattern for "this specific script needs real TS
+  logic" is a new, small, `tsx`-launched entry point, never relaunching
+  the whole HTTP service under `tsx`. §12.2/§12.3 below apply this exact
+  pattern rather than proposing to change how `src/server.mjs` itself is
+  started (named as a real design win in §12.4).
+- **`distributeIntakeEntries.ts`'s real, exact `ScopeRouteConfirmationEntry`
+  shape, read directly, not invented fresh (per the task's own explicit
+  instruction):**
+  ```
+  export interface ScopeRouteConfirmationEntry {
+    recordedAt: string;
+    confirmation_reason: 'scope_route_confirmed';
+    cluster_id: string;
+    scope_key: string;
+  }
+  ```
+  appended as one JSON line via the SAME `fs.appendFileSync` convention
+  `triageSession.ts`'s `appendQueueEntry()`/`distillAndRemember.ts`'s
+  `appendIntakeQuarantineEntry()` already establish, to the SAME shared
+  queue file, `DEFAULT_TRIAGE_QUEUE_PATH`
+  (`~/.mnemosyne/conversation-triage-queue.jsonl`). `cm-13`'s own
+  `readScopeRouteConfirmations()` only ever READS this shape today — the
+  task's own research finding ("no existing write mechanism for it
+  anywhere in the codebase") is confirmed correct by this pass's own
+  direct read of every file in `lib/mnemosyne/conversation-memory/`.
+- **The real secret-redaction-safety contract, re-verified end-to-end
+  through JSON serialization to the browser, not merely assumed to
+  survive unchanged (per the task's own explicit instruction):**
+  `scanForSecrets.ts`'s `SecretMatch` shape (`category`, `pattern`,
+  `line`, `index`, `length`, `preview`) is confirmed, by direct read of
+  its own module doc comment and pattern-building code, to carry zero raw
+  matched characters in ANY field — `preview` is built from static
+  strings/counts only, and for the one category that reproduces part of
+  the real input (`connection-string`), the credential portion is always
+  replaced with the fixed literal `[REDACTED]`. `distillAndRemember.ts`'s
+  `IntakeQuarantineQueueEntry` (the real, on-disk quarantine record) wraps
+  this in `secretMatches: SecretMatch[]` alongside `recordedAt`,
+  `quarantine_reason`, `entry_id`, `entry_type`, `session_id`,
+  `chat_source`, `project_slug`, `cluster_id` — every other field is an
+  identifier or fixed literal, never free-text content. A plain
+  `JSON.stringify()`/`JSON.parse()` round-trip (exactly what `GET
+  /conversation-memory/triage-queue`, §12.3, does) changes none of this —
+  confirmed by reading the real interface, not merely asserted safe
+  because the on-disk write side was already reviewed once for a
+  different purpose (cm-01's own persist-time gate).
+
+### 12.2 Piece 1 — `cm-15` (new): discovery + pilot trigger UI
+
+**The central question, resolved explicitly, not hand-waved (the task's
+own framing):** does a UI trigger button conflict with `cm-08`'s own
+explicit-confirmation-gate design ("no auto-select," AC5 — "invoked
+WITHOUT an explicit operator confirmation step... refuses to run")? **No —
+by construction, not merely by intent**, verified against `cm-08`'s own
+already-written story text: `cm-08`'s own description names TWO valid
+selection mechanics explicitly, "a CLI confirm step OR an edited manifest
+file." The UI's checkbox-and-submit flow is a real, HTTP-delivered
+instance of the FIRST mechanic (a one-shot, explicit, non-persisted
+confirmation of a specific subset), never the second — the operator's
+marks are never written back into `cm-02`'s own manifest file
+(`~/.mnemosyne/conversation-sources.yaml`), which would silently conflict
+with `cm-02`'s own AC7 ("idempotent and re-computable from scratch — a
+fresh manifest always reflects real, current filesystem state, never a
+stale cache silently trusted"): a later re-scan would blow away any marks
+persisted there. Instead, the UI's submit action passes the marked subset
+as an explicit argument to the SAME confirmation-gated invocation `cm-08`'s
+own CLI already requires — reached by a browser click instead of a typed
+flag, never bypassing or duplicating the gate itself. Three independent,
+real layers enforce this (no single layer is trusted alone, mirroring
+this epic's own "structural, not merely conventional" discipline,
+`§11.4`'s five-guarantee precedent):
+
+1. **Client-side:** the "Run pilot on selected" button is always
+   reachable (no `disabled` attribute, per the established Personas
+   convention, §12.1) but clicking with zero checked boxes shows an
+   inline `setStatus(..., "fail", "select at least one source before
+   running the pilot")` and never fires a request — mirrors `#reindex-
+   paths`'s own identical empty-input refusal (`ui/app.js:1180`).
+2. **Server-side, the real enforcement point (never trust client-side
+   alone):** the new `POST /conversation-memory/pilot/run` route rejects
+   (400) any body whose combined `sessionPaths`/`exportKeys` arrays are
+   empty — mirrors `POST /reindex`'s own existing `if (!b.scope...) throw
+   400` pattern (`src/server.mjs:336-340`) exactly.
+3. **CLI-level (cm-08's own, unchanged):** the route never invokes `cm-08`'s
+   own orchestrator bare — it always passes the operator-marked subset as
+   an explicit argument. `cm-08`'s own no-implicit-selection refusal logic
+   (its own AC5) is the SAME code path whether a human types the flag by
+   hand or the server passes it programmatically after an HTTP request —
+   reached, never bypassed or reimplemented, by either caller.
+
+**A real, additive requirement this places on `cm-08`'s own future
+implementation, named explicitly as a coordination point (not a change
+this pass makes to `cm-08`'s own already-reviewed YAML):** for
+`bin/mnemosyne-conversation-pilot.mjs` to be invocable both interactively
+AND from this route, its own implementation step should expose a
+machine-readable invocation mode (e.g. `--sessions <path,path,...>
+--exports <key,key,...> --json`) alongside whatever interactive/manifest-
+edit mechanic it builds — the SAME confirmation-gate logic, a second real
+entry point into it, not a fork. `cm-08`'s own story is left byte-for-byte
+unchanged by this pass (mirrors round 4's own restraint toward `cm-08`'s
+YAML, §11.5's third bullet) — this requirement lives in `cm-15`'s own
+story text (below) as the dependency it genuinely is.
+
+**Routes (hosted on `src/server.mjs`, port 8477):**
+- `POST /conversation-memory/sources/scan` — runs `cm-02`'s
+  `discoverSources({ write: true })` fresh (never a stale cached read —
+  mirrors cm-02's own AC7) and returns the manifest
+  (`sessions[]`/`excluded[]`/`exports`). This IS the operator's own "crawl"
+  button.
+- `POST /conversation-memory/pilot/run` — body `{ sessionPaths: string[],
+  exportKeys: string[] }` (the operator's exact marked subset, keyed by
+  `DiscoveredSession.path` and by the fixed `chatgpt`/`gemini` export
+  keys). Refuses (400) an empty combined selection (layer 2 above).
+  Invokes `cm-08`'s own orchestrator over exactly that subset (never a
+  larger, auto-expanded set — `cm-08`'s own AC1 wording, now also true of
+  this route's own contract). `cm-08`'s own small-sample cap (its own
+  AC1, "no more than 5... no more than 5") is enforced by `cm-08`'s own
+  orchestrator, never re-implemented or re-capped client-side — a
+  selection exceeding the cap is a real, loud, per-stage failure surfaced
+  in the response, never a silent client-side truncation.
+
+**Progress-reporting mechanism, resolved by direct research (§12.1), not
+invented fresh:** a plain synchronous `POST`, gated by the SAME
+`window.confirm()` pattern `#reindex-form` already uses (naming that this
+shells out against live Gemini + live Qdrant Cloud and can take real
+time), a single loading-status message while in flight, and the full
+per-stage result array (`cm-08`'s own AC6, "reports real per-stage
+results") rendered as a table from the response body once it resolves —
+matching the ONE real precedent this codebase has for a comparable
+operation, rather than adding polling/SSE machinery with zero prior art
+here. Named honestly as a real, accepted residual risk in §12.5: the HTTP
+connection stays open for the full run (potentially minutes against a
+5+5-session real sample) — bounded by `cm-08`'s own small-sample cap, not
+solved structurally.
+
+**Cross-language bridging, resolved by direct research (§12.1), not
+invented fresh:** `src/server.mjs` cannot import `cm-02`'s
+`discoverSources.ts` (or `cm-08`'s future orchestrator) directly under its
+current plain-`node` launch. Rather than relaunching the whole HTTP
+service under `tsx` (a broader, riskier surface change than this UI
+feature needs), this story follows `bin/mnemosyne-onboard.mjs`'s own
+established precedent exactly: a new, small, `tsx`-launched CLI entry
+point (`bin/mnemosyne-conversation-discover.mjs`, wrapping
+`discoverSources()` with a `--json` output flag; and, once built,
+`cm-08`'s own `bin/mnemosyne-conversation-pilot.mjs` with its own
+`--json`/`--sessions`/`--exports` mode above), added to `bin/mnemosyne`'s
+own dispatcher with the SAME three-line `tsx`-launch pattern already used
+for `mnemosyne-persona.mjs`/`mnemosyne-agent.mjs`/`mnemosyne-onboard.mjs`.
+`src/server.mjs`'s two new routes `execFile()` these CLIs and shape their
+JSON stdout into the HTTP response — the SAME "thin HTTP wrapper shells
+out to a CLI" architecture `engine.mjs` already uses for every existing
+route in this file (its own header comment: "delegates every memory op to
+engine.mjs, which wraps the swarm-memory CLI"), extended to two new CLIs
+rather than a new architectural pattern.
+
+`depends_on: [cm-08-bounded-operator-pilot, cm-02-conversation-source-discovery]`.
+
+### 12.3 Piece 2 — `cm-16` (new): triage review + scope-route confirmation UI
+
+**The operator's own words, mapped directly:** "a way to help us see and
+parse it apart to the areas" = a panel showing the real, current review
+queue AND intake state, plus the one real write action `cm-13`'s own
+already-shipped read side already expects to exist — confirming a
+scope-route candidate into its real destination area (`meta`, or a
+confirmed client scope).
+
+**Two real, distinct data sources, named explicitly rather than
+conflated (a real finding of this pass's own research, §12.1's leak-check
+groundwork):** scope-route CANDIDATES (`cm-06`'s own
+`ResolvedScopeCandidate`, `cluster_id` + `scope_key`) are NOT written to
+the on-disk triage queue file anywhere in this epic's real, shipped
+code — `clusterConversations.ts`'s own module doc comment states this
+plainly ("this module returns the candidate as in-memory cluster metadata
+only"). They ride forward embedded in each intake entry's own persisted
+provenance header (`cm-07`'s `EntryProvenanceMetadata.resolved_scope_
+candidate`, `distributeIntakeEntries.ts`'s `parseProvenanceHeader()`
+already reads it back out). So this panel reads from BOTH real sources,
+never assuming one covers the other:
+- **The triage queue JSONL** (`DEFAULT_TRIAGE_QUEUE_PATH`) — quarantine
+  hits (`quarantine_reason: 'secret_detected'`) and existing scope-route
+  confirmation records (`confirmation_reason: 'scope_route_confirmed'`),
+  classified by their own real discriminator field (neither `TriageQueueEntry`
+  nor these two other kinds share a common tag today — a real, honestly-
+  named implementation nuance for `cm-16`'s own research step, not
+  papered over here).
+- **The `intake` Qdrant collection itself** (`INTAKE_COLLECTION_NAME =
+  'conversation_memory_intake'`, `cm-13`'s own scroll-based enumeration)
+  — every candidate's `entry_id`/`cluster_id`/`resolved_scope_candidate`,
+  and every existing `distribution_marker` (so an already-distributed
+  entry shows as distributed, per the task's own explicit ask), computed
+  the SAME way `cm-13`'s own `partitionPoints()` already does.
+
+**Routes (hosted on `src/server.mjs`, port 8477, same as `cm-15`):**
+- `GET /conversation-memory/triage-queue` — reads and classifies every
+  line of the shared JSONL queue file; a missing file returns empty
+  arrays with `200`, never `404`/`500` (mirrors `readScopeRouteConfirmations()`'s
+  own established "missing file is not an error" contract).
+- `GET /conversation-memory/intake-candidates` — scrolls the real intake
+  collection (below) and returns each candidate tagged with a computed
+  status: `no_candidate` / `candidate_unconfirmed` /
+  `candidate_confirmed_pending_distribution` (a real, on-disk confirmation
+  exists but no `distribution_marker` yet — `cm-13` hasn't run since) /
+  `distributed` (a real `distribution_marker` references this `entry_id`,
+  `distributed_to_scope` shown). The confirm action (below) is only ever
+  offered for `candidate_unconfirmed` rows.
+- `POST /conversation-memory/scope-route/confirm` — body `{ cluster_id,
+  scope_key }`. **The ONLY filesystem write this story's entire route
+  surface performs, anywhere:** one `fs.appendFileSync()` call writing
+  exactly one `ScopeRouteConfirmationEntry` line (§12.1's exact shape,
+  `recordedAt` generated server-side) to `DEFAULT_TRIAGE_QUEUE_PATH` —
+  the SAME queue file, the SAME append convention, never a
+  read-modify-rewrite, matching `cm-01`/`cm-05`/`cm-07`/`cm-13`'s own
+  identical discipline exactly, per the task's own explicit instruction.
+  **Defense in depth, layered on top of `cm-13`'s own independent
+  re-validation at distribution time (never a replacement for it):**
+  before appending, the route re-reads the real intake candidates (the
+  SAME read path `GET /conversation-memory/intake-candidates` uses) and
+  refuses (400) unless `cluster_id` genuinely names a currently-known
+  `candidate_unconfirmed` row AND `scope_key` matches THAT candidate's own
+  exact `scope_key` — mirroring `resolveDestinationScope()`'s own "a
+  confirmation naming the right cluster but the WRONG scope key is also
+  never trusted" discipline, applied one step earlier, at write time, not
+  only at `cm-13`'s own read time. A duplicate confirm of an
+  already-confirmed `(cluster_id, scope_key)` pair is allowed, not
+  refused — harmless by construction (`readScopeRouteConfirmations()`
+  reads into a `Set`, naturally deduplicating), mirroring
+  `distributeIntakeEntries.ts`'s own explicitly-accepted "tolerates a
+  duplicate write (it is never destructive)" posture verbatim.
+
+**Never a delete or edit of an existing line — verified structurally, not
+merely by convention (per the task's own explicit instruction):** two of
+this story's three routes are pure reads (no `fs` write call anywhere in
+either handler); the third performs exactly one `appendFileSync()` call
+and nothing else. No route in this story's own surface ever opens the
+queue file for writing in any mode other than append, and no route ever
+issues a Qdrant delete/update call of any kind (`GET /conversation-memory/
+intake-candidates`'s own Qdrant access is the SAME read-only `scroll_points()`
+primitive `cm-13` already uses, never a write-capable one).
+
+**Quarantine entries — visibility only, no action, named explicitly
+rather than silently decided (per the task's own explicit instruction):**
+this panel renders quarantine hits (`IntakeQuarantineQueueEntry`, real
+fields confirmed redaction-safe end-to-end in §12.1) for the operator to
+SEE, and offers no action of any kind against them — no confirm, no
+dismiss, no delete, no re-triage trigger. `cm-01`'s own quarantine-
+retention-policy question remains listed as open question #4 in this
+document (§5) — this pass does not silently resolve it as a side effect
+of making quarantine entries visible in a UI; a future story, not this
+one, would need to design any actual disposition action.
+
+**`cm-05`'s own keep/trash/uncertain triage verdicts are explicitly OUT of
+this panel's scope**, named here so the boundary isn't discovered by
+surprise: the task's own brief names exactly three real surfaces for this
+panel (quarantine, scope-route candidates, confirmation/distribution
+markers) — triage verdicts are a real, different record kind in the SAME
+queue file, but reviewing/acting on THEM is a genuinely separate future
+scope this pass does not expand into.
+
+**Cross-language bridging, resolved by direct research (§12.1), not
+invented fresh — the harder-to-get-right half is reused, not
+duplicated:** the choice is between reusing the ALREADY-REAL, ALREADY-
+LIVE-CONFIRMED Qdrant scroll HTTP client (`HttpQdrantClient.scroll_points()`,
+Python, `cm-13`'s own shipped code) and re-implementing only the small,
+stable, well-documented provenance-header comment-marker JSON extraction
+(`<!-- mnemosyne-intake-provenance ... -->`) a second time in Python —
+versus writing a brand-new, untested, production Qdrant-scroll HTTP
+client directly in this Node service (`cm-13`'s own module doc comment
+names this as explicitly out of ITS OWN scope, required-but-uninstantiated
+by design). This story reuses the harder, riskier-to-get-wrong piece: a
+new, small, read-only CLI verb on `mnemosyne/inventory/qdrant_inventory.py`
+(additive to its own existing `argparse` surface, alongside — never
+replacing — its existing inventory verbs) calls `scroll_points('conversation_
+memory_intake')` directly, re-implements the small comment-marker
+extraction locally (~10 lines, low risk, mirrors `bin/graphify-bridge.mjs`'s
+own already-accepted "small, deliberately separate implementation of the
+same shape" precedent for a genuinely low-risk piece), and prints
+structured JSON to stdout. `src/server.mjs`'s new route `execFile()`s this
+verb — the SAME "thin HTTP wrapper shells out to a CLI" pattern `cm-15`
+uses and `engine.mjs` already establishes throughout this file, never a
+third architectural pattern. `HttpQdrantClient`'s own "no delete/drop
+method exists anywhere in this module" contract (§11.1/§11.4) is
+untouched — this is a second READ-only method, the same risk category as
+`scroll_points()` itself and `list_collections()`/`collection_info()`
+before it, never the same category as `create_collection()`'s one write
+exception.
+
+`depends_on: [cm-06-cross-session-clustering, cm-13-intake-distribution]`.
+
+### 12.4 Shared coordination points between `cm-15` and `cm-16`
+
+- **Neither new story requires changing how `src/server.mjs` itself is
+  launched** — a real, named design win: both route sets shell out to
+  small, targeted, `tsx`-launched or Python CLI helpers via the SAME
+  `execFile()` pattern `engine.mjs` already established for every
+  existing route, rather than relaunching the whole HTTP service under
+  `tsx` (§12.1's own "cannot import `.ts` directly" finding is resolved
+  the same way in both stories, independently, never by touching
+  `src/server.mjs`'s own launch mechanism).
+- **`distributeIntakeEntries.ts`'s currently-private `isScopeRouteConfirmationEntry()`
+  should be exported** (a small, additive, no-behavior-change export) so
+  `cm-16`'s own write-side pre-validation (§12.3) reuses the SAME shape
+  check `cm-13`'s own read side already trusts, rather than risking two
+  independently-maintained copies drifting apart — the exact shape of
+  gap `[grill 4.4]` (round 4) already named this epic's own convention
+  against, applied here to a new story pair instead of `cm-13`/`cm-14`.
+  Named as a real `files_to_modify` entry on `cm-16` below (§12.3's own
+  concrete requirement), not applied by this planning-only pass.
+- **Landing order is genuinely independent, named explicitly so a future
+  scheduler doesn't invent a false dependency between them:** `cm-15`
+  depends on `cm-08`/`cm-02`; `cm-16` depends on `cm-06`/`cm-13`; neither
+  depends on the other, and both can land in either order or in parallel.
+- **Both panels share the same `ui/index.html`/`ui/app.js` files** (a
+  real, structural fact of this repo's single-file-per-concern UI, not a
+  coordination risk unique to this pass) — implemented as two separate,
+  independently addable `<section>`/jump-chip pairs, following the exact
+  same pattern every prior panel addition to this file has already used
+  (Search, Graph, Operations, Personas, Memory Levels each landed this
+  way, independently, over this codebase's own real history).
+
+### 12.5 Residual, honestly-named open items (not claimed solved by this amendment)
+
+- **The pilot-run HTTP connection stays open for the full run's real
+  wall-clock duration** (§12.2) — bounded by `cm-08`'s own small-sample
+  cap, not solved structurally; a future iteration could revisit
+  polling/SSE if sample sizes ever grow beyond what a synchronous request
+  comfortably tolerates, but no such need exists at this epic's own
+  pilot scale, and inventing that infrastructure now would be building
+  ahead of a real need this codebase has never yet had.
+- **The exact real Qdrant scroll-endpoint request/response shape for the
+  new Python CLI verb** (`cm-16`, §12.3) is named as reusing `cm-13`'s
+  own already-live-confirmed `scroll_points()` method directly — genuinely
+  lower-risk than `cm-14`'s still-open delete-shape question (§11.5), but
+  the new CLI verb's own JSON stdout contract (field names, error
+  reporting on a scroll failure) is not pinned to an exact shape here,
+  left to `cm-16`'s own research step.
+- **Whether `cm-15`'s discovery-scan route should also expose the
+  weak-scratch-confidence flag (`cm-02`'s own AC3) to the operator as a
+  visibly distinct marking state** (e.g. a dimmed/warned checkbox row) is
+  a real UX-polish question this pass names but does not resolve — the
+  route's own contract (§12.2) passes the manifest's real fields through
+  unchanged either way, so this is purely a rendering decision deferred
+  to `cm-15`'s own implementation step.
+- **`cm-08`'s own `--json`/`--sessions`/`--exports` machine-readable
+  invocation mode** (§12.2's own real, additive requirement on `cm-08`'s
+  future implementation) is named as a coordination point, not applied to
+  `cm-08`'s own YAML by this pass — mirroring round 4's own restraint
+  toward `cm-08` (§11.5's third bullet) exactly.
+
+Grilled at the same rigor as rounds 1-4, plus the task's own three named
+leak/safety questions — see `docs/grill-record.md` round 5.

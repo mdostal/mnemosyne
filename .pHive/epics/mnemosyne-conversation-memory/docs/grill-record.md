@@ -620,3 +620,206 @@ leak/safety check (delete-path reachability, scope-routing discipline
 parity, audit-trail preservation), all three verified with no path found.
 No findings carried forward unresolved — `unresolved_count: 0`. Rounds
 1-3's own 15 findings are untouched and remain resolved.
+
+# Round 5 — Amendment (2026-08-27) — UI trigger + review surfaces (dogfood pass)
+
+round_number: 5
+unresolved_count: 0
+
+Adversarial pass against `design-discussion.md`'s new §12 (the operator's
+own "a ui button that allows us to crawl and index... and then a way to
+help us see and parse it apart to the areas" framing, split into two real
+pieces: new `cm-15`, a discovery + pilot trigger UI; new `cm-16`, a triage
+review + scope-route confirmation UI) — grounded in this round's own real
+re-reads of `src/server.mjs`/`lib/mnemosyne/server.ts` (route tables,
+ports), `bin/mnemosyne`/`bin/graphify-bridge.mjs` (the plain-`node`-cannot-
+import-`.ts` constraint), `ui/app.js` (zero polling/SSE precedent
+anywhere), `distributeIntakeEntries.ts` (the real confirmation-record
+shape and its private validator), and `scanForSecrets.ts`/`distillAndRemember.ts`
+(the redaction-safety contract, re-verified through JSON serialization).
+Same five categories, same descriptive-finding-plus-question discipline
+as rounds 1-4, plus the task's own three explicitly-named leak/safety
+questions in place of a freeform leak check. Rounds 1-4's own 20 findings
+are untouched and remain resolved.
+
+## 1. Vocabulary mismatches
+
+**Finding 5.1 — "the operator marks entries in the UI" reads, on a first
+pass, like the SAME mechanic as `cm-08`'s own "an edited manifest file"
+option — but the real design §12.2 lands on is the OTHER of `cm-08`'s two
+named mechanics (a one-shot confirm step), and an early draft of this
+section didn't say so explicitly at the point a reader would first form
+the wrong impression.** If the UI's marking is read as "editing the
+manifest," a reader could reasonably expect the operator's checked boxes
+to persist into `~/.mnemosyne/conversation-sources.yaml` — which would
+silently conflict with `cm-02`'s own AC7 idempotent-recompute-from-scratch
+guarantee (a later re-scan would erase the marks). Does the design leave
+this genuinely ambiguous?
+
+*Resolution:* §12.2's own opening paragraph now states explicitly, before
+describing the mechanism, that the UI flow is "a real, HTTP-delivered
+instance of the FIRST mechanic... never the second — the operator's marks
+are never written back into `cm-02`'s own manifest file," and names the
+concrete AC7 conflict this avoids by design, not merely by accident.
+
+## 2. Hidden assumptions
+
+**Finding 5.2 — an early draft of this section assumed `src/server.mjs`
+could import `cm-02`'s/`cm-08`'s TypeScript modules directly (the way a
+casual reading of `engine.mjs`'s "delegates every memory op" framing might
+suggest), without checking how `src/server.mjs` is actually launched.**
+`bin/mnemosyne`'s own dispatcher launches it as plain `exec node
+"$HERE/src/server.mjs"`, with no `tsx` — a real, structural constraint
+that would have made both new stories' own route implementations
+non-functional as originally sketched if left unchecked. Was this
+verified directly, or assumed from this repo's general "TS is available
+everywhere" impression?
+
+*Resolution:* §12.1 now names the real, direct verification (`bin/
+mnemosyne`'s own launch line, cross-confirmed by `bin/graphify-bridge.mjs`'s
+own explicit doc-comment statement of the identical constraint for a
+sibling bin) and §12.2/§12.3 both resolve it the same way: a new, small,
+`tsx`-launched CLI entry point per need (mirroring `bin/mnemosyne-onboard.mjs`'s
+own precedent), shelled out to via `execFile()` — never a change to how
+`src/server.mjs` itself is started.
+
+## 3. Unresolved tensions
+
+**Finding 5.3 — the task's own central question: does a UI trigger button
+for `cm-08`'s pilot recreate the no-implicit-selection violation `cm-08`'s
+own design exists to prevent?** A button that fires the pipeline against
+whatever the server happens to consider "current" (rather than exactly
+what the operator explicitly marked in that same request) would be a
+UI-specific reintroduction of the exact risk `cm-08`'s own AC5 was written
+to close — just reached through a browser instead of a bare CLI
+invocation.
+
+*Resolution:* §12.2 answers this directly, not by assertion: `cm-08`'s
+own story text already names "a CLI confirm step OR an edited manifest
+file" as its two valid mechanics, and the UI flow is a real instance of
+the first, never a third, ungated mechanic. Three independent, named
+layers enforce this — client-side empty-selection refusal, a server-side
+400 on an empty combined selection (the real enforcement point), and
+`cm-08`'s own unchanged no-implicit-selection refusal logic, reached via
+an explicit argument regardless of caller. No code path in the design
+fires the orchestrator without an explicit, non-empty, request-scoped
+selection.
+
+## 4. Convention violations
+
+**Finding 5.4 — an early draft of `cm-16`'s confirm route validated the
+incoming `{cluster_id, scope_key}` body with its own, locally-written
+shape check, rather than reusing `cm-13`'s own already-shipped
+`isScopeRouteConfirmationEntry()` — the exact shape of gap `[grill 4.4]`
+(round 4) already named this epic's own convention against ("one shared
+primitive, reused, never reimplemented"), risking two independently-
+maintained copies of the same validation logic drifting apart over
+time.** Does `cm-16` risk writing a confirmation record whose shape
+`cm-13`'s own reader silently fails to recognize after a future,
+uncoordinated change to either copy?
+
+*Resolution:* §12.3/§12.4 now state explicitly that `distributeIntakeEntries.ts`'s
+currently-private `isScopeRouteConfirmationEntry()` should be exported (a
+small, additive, no-behavior-change export, named as a real
+`files_to_modify` entry on `cm-16`) so the confirm route's own
+pre-validation reuses the SAME function `cm-13`'s own read side already
+trusts — never a second, independently-maintained copy.
+
+## 5. Posture mismatches
+
+**Finding 5.5 — an earlier framing of §12.3 risked reading as "this panel
+resolves cm-01's open quarantine-retention-policy question," when the
+real, honest posture (matching `[grill 5.1]`/round 4's finding 4.5's own
+"name what isn't fully solved" discipline) is that making quarantine
+entries VISIBLE is not the same as deciding what should happen to
+them.** Does displaying quarantine entries in a review panel read as a
+silent resolution of open question #4 (still listed, unresolved, in §5 of
+this document)?
+
+*Resolution:* §12.3's own "Quarantine entries — visibility only" paragraph
+now states this directly: the panel offers no action of any kind against
+a quarantine entry (no confirm/dismiss/delete/re-triage), and open
+question #4 remains explicitly listed as open in §5, unchanged by this
+pass — a future, separate story would need to design any actual
+disposition action, not this one.
+
+## Real leak/safety check (the task's own three explicitly-named questions, each verified directly, not merely asserted)
+
+- **Does the trigger surface (`cm-15`) have any path that could invoke the
+  pipeline against an operator-unmarked entry — a UI-specific
+  re-creation of the no-implicit-selection risk `cm-08`'s own design
+  prevents?** No. Checked directly against §12.2's own three named
+  layers: (1) the client-side submit handler never fires a request on an
+  empty checked set; (2) `POST /conversation-memory/pilot/run`'s own
+  server-side handler is designed to reject (400) any body whose combined
+  `sessionPaths`/`exportKeys` are empty — the real enforcement point,
+  never trusting layer (1) alone; (3) the route never invokes `cm-08`'s
+  own orchestrator without passing the operator-marked subset as an
+  explicit argument — `cm-08`'s own AC5 refusal logic is reached exactly
+  as it would be from a bare CLI invocation, never bypassed, forked, or
+  weakened for the HTTP-triggered case. No default/"select the first N
+  sessions"/"select everything new" code path exists anywhere in this
+  design.
+- **Does the review surface (`cm-16`) have any path that could write
+  anything OTHER than an append-only confirmation line — could it
+  accidentally support delete/edit of an existing queue entry, or write a
+  malformed confirmation that doesn't match `cm-13`'s own real read-side
+  schema?** No, on both counts. Delete/edit: checked directly against all
+  three of `cm-16`'s own routes — two (`GET /conversation-memory/triage-
+  queue`, `GET /conversation-memory/intake-candidates`) are pure reads
+  with no `fs` write call anywhere in either handler; the third (`POST
+  /conversation-memory/scope-route/confirm`) performs exactly one
+  `fs.appendFileSync()` call and no other filesystem operation of any
+  kind — no route in this story's surface ever opens the queue file in
+  any write mode other than append, and no route issues a Qdrant
+  delete/update call (the intake-read route's own Qdrant access is the
+  SAME read-only `scroll_points()` primitive `cm-13` already uses).
+  Malformed-schema risk: closed by finding 5.4's own resolution above —
+  the confirm route's write body is built from the SAME, reused
+  `ScopeRouteConfirmationEntry` shape (`recordedAt`/`confirmation_reason`/
+  `cluster_id`/`scope_key`) `cm-13`'s own reader already validates via the
+  now-exported `isScopeRouteConfirmationEntry()`, plus a real,
+  defense-in-depth pre-check (the named `cluster_id`/`scope_key` pair must
+  match a currently-known `candidate_unconfirmed` row before the append
+  is even attempted) — never a hand-rolled, locally-invented shape.
+- **Is there any real secret-value exposure risk in displaying quarantine
+  entries in the browser — does `cm-01`'s own already-redaction-safe match
+  objects genuinely survive unchanged all the way through serialization
+  and rendering, not merely assumed?** No exposure risk found, checked
+  directly rather than assumed carried over from `cm-01`'s own original
+  review. `scanForSecrets.ts`'s own `SecretMatch` shape (`category`,
+  `pattern`, `line`, `index`, `length`, `preview`) was re-read directly
+  this round: `preview` is built from static strings/counts only for
+  every category except `connection-string`, where the credential portion
+  is always replaced with the fixed literal `[REDACTED]` — zero raw
+  matched characters in any field, in any category. `IntakeQuarantineQueueEntry`
+  (the real, on-disk record `GET /conversation-memory/triage-queue`
+  serves unchanged) wraps this in `secretMatches: SecretMatch[]` alongside
+  seven other fields, every one of which is an identifier or fixed
+  literal (`recordedAt`, `quarantine_reason`, `entry_id`, `entry_type`,
+  `session_id`, `chat_source`, `project_slug`, `cluster_id`) — none carry
+  free-text content. A plain `JSON.stringify()`/`JSON.parse()` round-trip
+  (exactly what this route does) is a structural no-op on this shape —
+  verified against the real interface definitions this round, not
+  inherited unchecked from `cm-01`'s own original, differently-scoped
+  review.
+
+## Summary (round 5)
+
+5 findings, 5 resolved — one clarifying addition to §12.2 naming the UI's
+marking mechanic as `cm-08`'s own "CLI confirm step" option up front, not
+its "edited manifest file" option (finding 5.1); one concrete
+cross-language-bridging resolution replacing an unchecked "TS is
+importable everywhere" assumption (finding 5.2); one direct, three-layer
+answer to the task's own central no-implicit-selection question,
+cross-referenced to `cm-08`'s own already-written two-mechanic framing
+(finding 5.3); one `files_to_modify`-enforced reuse of `cm-13`'s own
+`isScopeRouteConfirmationEntry()` instead of a second, drifting
+implementation (finding 5.4); and one posture-hedging clarification that
+quarantine visibility is not a silent resolution of open question #4
+(finding 5.5) — plus the task's own three explicitly-named leak/safety
+questions (unmarked-entry invocation, non-append-only writes, and
+quarantine secret exposure through serialization), all three verified
+directly with no path found. No findings carried forward unresolved —
+`unresolved_count: 0`. Rounds 1-4's own 20 findings are untouched and
+remain resolved.

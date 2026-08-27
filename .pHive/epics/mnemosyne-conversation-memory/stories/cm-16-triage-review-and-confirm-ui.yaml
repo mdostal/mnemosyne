@@ -1,0 +1,259 @@
+id: cm-16-triage-review-and-confirm-ui
+epic: mnemosyne-conversation-memory
+title: Triage review + scope-route confirmation UI — see queue/intake state, confirm a candidate into its real area
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [cm-06-cross-session-clustering, cm-13-intake-distribution]
+
+description: |
+  New story (round 5, 2026-08-27, docs/design-discussion.md §12.3), the
+  second of two real pieces the operator's own dogfooding framing this
+  pass asked for — "a way to help us see and parse it apart to the
+  areas." Adds a new panel to the existing UI shell (`ui/index.html`/
+  `ui/app.js`, served from `src/server.mjs`, port 8477) that reads and
+  displays the real, current human-review queue AND real intake-collection
+  state, and lets the operator take the ONE real write action `cm-13`'s
+  own already-shipped read side already expects to exist — confirming a
+  scope-route candidate into its real destination area (`meta` by default,
+  or a confirmed client scope).
+
+  **Two real, distinct data sources, named explicitly rather than
+  conflated (a real finding of this pass's own research):** scope-route
+  CANDIDATES (`cm-06`'s own `ResolvedScopeCandidate`) are NOT written to
+  the on-disk triage queue anywhere in this epic's real, shipped code —
+  `clusterConversations.ts`'s own module doc comment states this
+  plainly. They ride forward embedded in each intake entry's own persisted
+  provenance header, read back out via `cm-13`'s own imported
+  `parseProvenanceHeader()`. This story therefore reads BOTH real sources:
+  the shared triage-queue JSONL (`DEFAULT_TRIAGE_QUEUE_PATH`) for
+  quarantine hits and existing scope-route confirmation records, AND the
+  real `intake` Qdrant collection itself (`conversation_memory_intake`,
+  via `cm-13`'s own read-only `scroll_points()` primitive) for candidates
+  and existing distribution markers.
+
+  **The confirm action — append-only, the SAME real, exact schema `cm-13`'s
+  own read side already validates, read directly rather than invented
+  fresh:**
+  ```
+  export interface ScopeRouteConfirmationEntry {
+    recordedAt: string;
+    confirmation_reason: 'scope_route_confirmed';
+    cluster_id: string;
+    scope_key: string;
+  }
+  ```
+  Written via a single `fs.appendFileSync()` call to the SAME shared queue
+  file — the ONLY filesystem write this story's entire route surface
+  performs, anywhere. Never a delete or edit of an existing line: two of
+  this story's three routes are pure reads with no `fs` write call in
+  either handler; the third performs exactly one append and nothing else.
+  A real, defense-in-depth pre-check (layered on top of, never a
+  replacement for, `cm-13`'s own independent re-validation at distribution
+  time) refuses (400) unless the named `(cluster_id, scope_key)` pair
+  matches a currently-known, currently-unconfirmed real candidate.
+
+  **`distributeIntakeEntries.ts`'s currently-private
+  `isScopeRouteConfirmationEntry()` should be exported** (small, additive,
+  no behavior change) so this story's own write-side pre-validation reuses
+  the SAME shape check `cm-13`'s own read side already trusts, rather than
+  risking two independently-maintained copies drifting apart — the exact
+  shape of gap `[grill 4.4]` (round 4) already named this epic's own
+  convention against.
+
+  **Quarantine entries — visibility only, no action, named explicitly
+  rather than silently decided:** this panel renders quarantine hits
+  (`IntakeQuarantineQueueEntry`) for the operator to SEE — its own real
+  `secretMatches: SecretMatch[]` field confirmed redaction-safe end-to-end
+  through JSON serialization this round (§12.1) — and offers no action of
+  any kind against them: no confirm, no dismiss, no delete, no re-triage
+  trigger. `cm-01`'s own quarantine-retention-policy question remains open
+  question #4 (docs/design-discussion.md §5) — this story does not
+  silently resolve it as a side effect of making quarantine entries
+  visible.
+
+  **`cm-05`'s own keep/trash/uncertain triage verdicts are explicitly OUT
+  of this panel's scope**, named so the boundary isn't discovered by
+  surprise — a real, different record kind in the SAME queue file, but
+  reviewing/acting on THEM is a genuinely separate future scope this story
+  does not expand into.
+
+  **Cross-language bridging, resolved by direct research, not invented
+  fresh — the harder-to-get-right half is reused, not duplicated:** rather
+  than writing a brand-new, untested, production Qdrant-scroll HTTP client
+  directly in this Node service (explicitly out of `cm-13`'s own scope,
+  required-but-uninstantiated by design), this story adds a new, small,
+  read-only CLI verb to `mnemosyne/inventory/qdrant_inventory.py`
+  (additive to its own existing `argparse` surface) that calls `cm-13`'s
+  own already-live-confirmed `scroll_points('conversation_memory_intake')`
+  directly and re-implements only the small, stable, well-documented
+  provenance-header comment-marker JSON extraction locally (~10 lines, low
+  risk, mirrors `bin/graphify-bridge.mjs`'s own already-accepted "small,
+  deliberately separate implementation of the same shape" precedent).
+  `src/server.mjs`'s new intake-read route `execFile()`s this verb — the
+  SAME "thin HTTP wrapper shells out to a CLI" pattern `cm-15` uses and
+  `engine.mjs` already establishes throughout this file. `HttpQdrantClient`'s
+  own "no delete/drop method exists anywhere in this module" contract
+  (§11.1/§11.4) is untouched — a second READ-only method, the same risk
+  category as `scroll_points()` itself, never `create_collection()`'s one
+  write exception.
+
+acceptance_criteria:
+  - "Given the real, current triage queue file (or its real absence), when GET /conversation-memory/triage-queue runs, then it returns quarantine hits and existing scope-route confirmation records, correctly classified by their own real discriminator field (quarantine_reason / confirmation_reason) — a missing file returns empty arrays with HTTP 200, never 404/500"
+  - "Given the real, current intake collection, when GET /conversation-memory/intake-candidates runs, then every real candidate is returned tagged with exactly one computed status (no_candidate / candidate_unconfirmed / candidate_confirmed_pending_distribution / distributed), using the SAME scroll_points()-based enumeration and partitioning cm-13's own distributeIntakeEntries() already performs — never a re-derived, independently-implemented enumeration"
+  - "Given the operator confirms a real candidate currently in candidate_unconfirmed status, when POST /conversation-memory/scope-route/confirm is called with that exact {cluster_id, scope_key}, then exactly one new JSON line matching ScopeRouteConfirmationEntry's real shape is appended to DEFAULT_TRIAGE_QUEUE_PATH via fs.appendFileSync — verified by inspecting the real file write call, asserting it is an append (not a read-modify-rewrite) and that no other entry in the file is touched"
+  - "Given a {cluster_id, scope_key} pair that does NOT match any currently-known candidate_unconfirmed row (a stale, mismatched, or fabricated pair), when POST /conversation-memory/scope-route/confirm is called, then it refuses with HTTP 400 and appends nothing — verified by asserting zero appendFileSync calls occur for this case"
+  - "Given a {cluster_id, scope_key} pair that has already been confirmed (a duplicate confirm), when POST /conversation-memory/scope-route/confirm is called again, then it succeeds (appends a second, harmless line) rather than refusing — mirrors distributeIntakeEntries.ts's own explicitly-accepted 'tolerates a duplicate write, never destructive' posture, verified by a test asserting no error is thrown and readScopeRouteConfirmations()'s own Set-based dedup still resolves correctly afterward"
+  - "Given a quarantine entry rendered in the panel, when the UI is inspected, then no confirm/dismiss/delete/re-triage control is rendered anywhere for it — visibility only, verified by a test asserting the rendered row contains no actionable control element"
+  - "Given this story's own three routes, when reviewed, then exactly one (POST /conversation-memory/scope-route/confirm) ever calls fs.appendFileSync, and zero routes ever call an fs write function in any other mode (write/truncate/unlink) or a Qdrant delete/update HTTP verb — verified by a test spying on node:fs's write-capable functions and asserting only the one expected append call occurs across all three routes"
+  - "Given the confirm route's own pre-write validation, when reviewed, then it imports and reuses distributeIntakeEntries.ts's own (now-exported) isScopeRouteConfirmationEntry() rather than a locally re-implemented shape check — verified by confirming the import is the real, shared function"
+
+steps:
+  - id: research
+    description: |
+      Confirm the real, current Qdrant scroll-endpoint request/response
+      shape for the new Python CLI verb (reusing cm-13's own
+      scroll_points() directly — its own real shape already confirmed by
+      cm-13's own research step; re-verify it still holds live). Design
+      the new CLI verb's own concrete JSON stdout contract (field names,
+      error reporting on a scroll failure). Confirm the real, exact
+      provenance-header comment-marker format
+      (mnemosyne-intake-provenance) to re-implement in the small Python
+      extraction helper, cross-checked against distillAndRemember.ts's own
+      buildProvenanceHeader()/PROVENANCE_HEADER_MARKER. Confirm the real
+      classification/discriminator-field approach for the mixed-kind
+      triage-queue JSONL (verdict / quarantine_reason /
+      confirmation_reason).
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests for: (1) triage-queue read + classification
+      against a fixture JSONL file (missing-file empty-array case
+      included); (2) intake-candidates read against a stubbed CLI-output
+      boundary (never a real subprocess/live Qdrant in the automated
+      suite); (3) the confirm route's append-only write, its
+      defense-in-depth pre-check refusal, and its duplicate-confirm
+      tolerance; (4) an fs-write-function spy asserting only the one
+      expected appendFileSync call occurs across all three routes; (5) the
+      UI renders no action control for a quarantine row.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      Export isScopeRouteConfirmationEntry from distributeIntakeEntries.ts
+      (additive, no behavior change). Add the new read-only CLI verb to
+      mnemosyne/inventory/qdrant_inventory.py (scroll_points() +
+      comment-marker extraction, JSON stdout). Implement src/server.mjs's
+      three new routes (GET /conversation-memory/triage-queue, GET
+      /conversation-memory/intake-candidates, POST /conversation-memory/
+      scope-route/confirm) and the new ui/index.html panel + ui/app.js
+      wiring (queue/candidate table rendering, status badges, confirm
+      button only for candidate_unconfirmed rows, quarantine rows
+      rendered read-only).
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: |
+      Independently re-verify: the confirm route performs exactly one
+      appendFileSync call and no other filesystem write anywhere in this
+      story's own route surface; the pre-write validation genuinely
+      reuses cm-13's own exported isScopeRouteConfirmationEntry(), never a
+      local re-implementation; no quarantine-entry action control exists
+      anywhere in the rendered UI; HttpQdrantClient's own
+      no-delete/drop-method contract is genuinely untouched by the new CLI
+      verb's addition.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-conversation-memory.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: lib/mnemosyne/conversation-memory/distributeIntakeEntries.ts
+      purpose: "The real, exact ScopeRouteConfirmationEntry shape and isScopeRouteConfirmationEntry() validator this story reads/reuses directly — the validator needs a small, additive export (files_to_modify below). Also the real partitionPoints()/scroll_points()-based intake-enumeration pattern this story's own intake-candidates route mirrors."
+    - path: lib/mnemosyne/conversation-memory/triageSession.ts
+      purpose: "DEFAULT_TRIAGE_QUEUE_PATH and the real fs.appendFileSync append-only convention this story's confirm route follows exactly."
+    - path: lib/mnemosyne/conversation-memory/scanForSecrets.ts
+      purpose: "SecretMatch's own real, redaction-safe shape — re-verified end-to-end through JSON serialization this round (docs/design-discussion.md §12.1) as the basis for safely rendering quarantine entries in the browser."
+    - path: mnemosyne/inventory/qdrant_inventory.py
+      purpose: "HttpQdrantClient.scroll_points() — the already-live-confirmed read primitive this story's new CLI verb calls directly, never reimplemented. Its own 'no delete/drop method exists anywhere' module contract must remain untouched by this story's additive, read-only verb."
+    - path: bin/graphify-bridge.mjs
+      purpose: "The concrete precedent for 'a small, deliberately separate implementation of the same shape' (here: the provenance-header comment-marker extraction, reimplemented in ~10 lines of Python rather than importing TS)."
+    - path: ui/index.html
+      purpose: "Personas panel (~line 268) — the concrete panel/jump-chip/panel-status/aria-live shell this story's new panel matches exactly, including its own batch-action-strip precedent (checkboxes + one button, no disabled attribute) for the confirm action's own row-level control."
+
+files_to_modify:
+  - file: lib/mnemosyne/conversation-memory/distributeIntakeEntries.ts
+    change: "Export the currently-private isScopeRouteConfirmationEntry() (additive, no behavior change) for reuse by this story's own confirm-route pre-validation."
+  - file: mnemosyne/inventory/qdrant_inventory.py
+    change: "Add a new, read-only CLI verb (argparse subcommand) that calls scroll_points('conversation_memory_intake'), partitions candidates vs. distribution markers via a local re-implementation of the provenance-header comment-marker extraction, and prints structured JSON to stdout. No delete/write method added or modified; create_collection()'s own existing one-write-exception status is unchanged."
+  - file: mnemosyne/tests/test_qdrant_inventory.py
+    change: "New tests for the new CLI verb's own read-only behavior and JSON output shape."
+  - file: src/server.mjs
+    change: "New routes: GET /conversation-memory/triage-queue (reads + classifies the shared JSONL queue), GET /conversation-memory/intake-candidates (execFile's the new Python CLI verb), POST /conversation-memory/scope-route/confirm (defense-in-depth pre-check against the intake-candidates read path, then a single fs.appendFileSync). Also update the GET / endpoints doc block to list all three."
+  - file: ui/index.html
+    change: "New <section id=\"triage-review\" class=\"panel panel-wide\">, matching the Personas panel's own shell exactly (including its batch-checkbox-strip precedent for row-level confirm controls), plus a new jump-chip in #jump-chips."
+  - file: ui/app.js
+    change: "New load/render wiring: triage-queue + intake-candidates fetch and merge, status-badge rendering per candidate, confirm button wired ONLY for candidate_unconfirmed rows, quarantine rows rendered with zero action controls."
+  - file: test/ui-shell.mjs
+    change: "New assertions that GET /ui's body mentions the triage-review panel, mirroring this file's own existing per-panel assertion convention."
+
+design_decisions:
+  - decision: "The confirm route's ONLY filesystem operation, anywhere in this story's route surface, is a single fs.appendFileSync call — never a read-modify-rewrite, never a delete/edit of an existing line."
+    rationale: "docs/design-discussion.md §12.3 — matches cm-01/cm-05/cm-07/cm-13's own identical append-only discipline exactly, per the task's own explicit instruction. Verified structurally (an fs-write-function spy test), not merely by convention."
+  - decision: "The confirm route reuses cm-13's own (now-exported) isScopeRouteConfirmationEntry() for its own pre-write shape validation, plus an additional defense-in-depth pre-check that the named (cluster_id, scope_key) pair matches a currently-known candidate_unconfirmed row."
+    rationale: "docs/grill-record.md round 5 finding 5.4 — avoids a second, independently-maintained shape-validation copy drifting from cm-13's own read-side trust; the extra candidate-match pre-check mirrors resolveDestinationScope()'s own 'right cluster, wrong scope key is also never trusted' discipline, applied one step earlier at write time, layered on top of (never replacing) cm-13's own independent re-validation at distribution time."
+  - decision: "A duplicate confirm of an already-confirmed (cluster_id, scope_key) pair succeeds (a harmless second line), never refused as an error."
+    rationale: "distributeIntakeEntries.ts's own explicitly-accepted 'tolerates a duplicate write (it is never destructive)' posture, verbatim — readScopeRouteConfirmations()'s own Set-based read naturally deduplicates, so refusing a duplicate would add complexity with no real safety benefit."
+  - decision: "Quarantine entries are rendered for visibility only — no confirm/dismiss/delete/re-triage control anywhere in this story's own UI, and cm-01's own quarantine-retention-policy open question is explicitly left open, not silently resolved."
+    rationale: "docs/design-discussion.md §12.3/task's own explicit instruction — the retention-policy question (open question #4, §5) is a genuinely separate, future design decision this story does not make as a side effect of adding visibility."
+  - decision: "The new Qdrant-intake-scroll capability is added as a new, read-only CLI verb on mnemosyne/inventory/qdrant_inventory.py, reusing cm-13's own scroll_points() directly, rather than a new production Qdrant HTTP client written in this Node service."
+    rationale: "docs/design-discussion.md §12.3 — reuses the harder-to-get-right piece (a real, already-live-confirmed HTTP client with real pagination/auth handling) rather than the easier piece (the small, stable comment-marker parsing, reimplemented safely in ~10 lines), the lower-risk direction of the two real options considered. Mirrors bin/graphify-bridge.mjs's own already-accepted small-separate-implementation precedent for the low-risk half."
+
+cross_cutting:
+  - concern: conversation-privacy-safety
+    action: "Quarantine entries render only cm-01's own already-redaction-safe SecretMatch fields, re-verified end-to-end through JSON serialization this round (docs/design-discussion.md §12.1) — no route in this story ever returns raw secret values, raw transcript content, or anything beyond already-distilled memory text (the same content already sitting in Qdrant meta/intake, already passed cm-01's persist-time gate) and cm-01's own redaction-safe match metadata."
+  - concern: existing-infrastructure
+    action: "Reuses cm-13's own scroll_points()/partitionPoints()-shaped logic and the shared triage-queue file/append convention unchanged — no new persistence primitive, no new Qdrant client duplicated on the write side, no parallel confirmation-record schema."
+  - concern: loud-failure
+    action: "A malformed or mismatched confirm request is refused with a real, explicit HTTP 400 naming the reason (no matching candidate_unconfirmed row) — never silently dropped, never silently downgraded to a no-op success."
+  - concern: documentation
+    action: "SERVICE.md's own route-table documentation and src/server.mjs's own GET / endpoints doc block both need a real entry for the three new routes once this story ships."
+
+risks:
+  - severity: critical
+    description: "A defect in the confirm route's own defense-in-depth pre-check (or its reuse of isScopeRouteConfirmationEntry()) could allow a malformed or mismatched confirmation record onto the shared queue file — one cm-13's own distribution logic would then read and, in the worst case, act on incorrectly (routing personal content to the wrong client scope)."
+    mitigation: "cm-13's own distribution-time re-validation (resolveDestinationScope()'s exact-cluster_id-AND-exact-scope_key match) is completely independent and unchanged by this story — even a defect in this story's own pre-check could not, by itself, cause a wrong-scope write, since cm-13 re-derives the decision from the same on-disk record independently at distribution time. This story's own pre-check is a real, additional safety layer, not the only one."
+  - severity: medium
+    description: "The new Python CLI verb re-implements the provenance-header comment-marker extraction independently from distillAndRemember.ts's own parseProvenanceHeader() (a real, accepted, second implementation of the same small, stable format)."
+    mitigation: "Named explicitly as a deliberate, low-risk duplication (docs/design-discussion.md §12.3), mirroring bin/graphify-bridge.mjs's own already-accepted precedent for exactly this kind of small-shape duplication; the format itself (a JSON blob inside a fixed HTML-comment marker) is simple and unlikely to change without a corresponding, visible change to distillAndRemember.ts's own PROVENANCE_HEADER_MARKER constant, which this story's own tests should assert stays byte-for-byte identical."
+  - severity: low
+    description: "The intake-candidates route's own real Qdrant scroll-endpoint request/response shape and the new CLI verb's own JSON stdout contract are not pinned to an exact wire format by this planning pass."
+    mitigation: "Named explicitly as this story's own first research-step task — confirm the real, current shape directly, mirroring this epic's own consistent 'confirm against the live system, not assumed' discipline."
+
+references:
+  - path: .pHive/epics/mnemosyne-conversation-memory/docs/design-discussion.md
+    relevant_excerpt: "§12.1 — the real code re-verification grounding this story (the two-real-data-sources finding, the redaction-safety re-verification through serialization). §12.3 — the full review-surface design: routes, the append-only confirm mechanism and its defense-in-depth pre-check, the quarantine-visibility-only decision, the cross-language bridging design."
+  - path: .pHive/epics/mnemosyne-conversation-memory/docs/grill-record.md
+    relevant_excerpt: "Round 5, findings 5.4-5.5 and the second/third leak/safety questions — the adversarial verification that this story's design has no path beyond a single append-only write, and that quarantine display carries no real secret-exposure risk."
+  - path: .pHive/epics/mnemosyne-conversation-memory/stories/cm-13-intake-distribution.yaml
+    relevant_excerpt: "The real ScopeRouteConfirmationEntry shape and readScopeRouteConfirmations()/resolveDestinationScope()'s own independent, unchanged re-validation logic this story's confirm action feeds into, never replaces."
+  - path: .pHive/epics/mnemosyne-conversation-memory/stories/cm-01-secret-credential-scanner.yaml
+    relevant_excerpt: "SecretMatch's own real, redaction-safe contract this story's quarantine display relies on unchanged."
+
+metric:
+  applies: true
+  name: conversation_memory.scope_route_confirmed_via_ui
+  direction: up
+  unit: count
+  baseline: 0
+  target: 1
+  window: "first real operator use of this panel, post-cm-13-landing with a real candidate present"
+  source:
+    kind: manual
+    ref: "Real confirmation that the operator successfully reviewed a real scope-route candidate and confirmed it entirely from the browser (a real ScopeRouteConfirmationEntry line appended, subsequently consumed by a real cm-13 run) — the concrete, falsifiable proof the operator's own 'see and parse it apart to the areas' ask is genuinely dogfoodable, not merely a hand-edited JSONL file."
+  verify_at: "first real UI-triggered confirmation, followed by a real cm-13 run consuming it"
+  owner: researcher

@@ -1,0 +1,248 @@
+id: cm-15-discovery-and-pilot-trigger-ui
+epic: mnemosyne-conversation-memory
+title: Discovery + pilot trigger UI — crawl for new sources, operator-marked selection, pipeline invocation
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [cm-08-bounded-operator-pilot, cm-02-conversation-source-discovery]
+
+description: |
+  New story (round 5, 2026-08-27, docs/design-discussion.md §12.2), the
+  first of two real pieces the operator's own dogfooding framing this pass
+  asked for — "a ui button that allows us to crawl and index the new
+  incoming data and conversations." Adds a new panel to the existing UI
+  shell (`ui/index.html`/`ui/app.js`, served from `src/server.mjs`, port
+  8477 by default — confirmed by direct read this round, correcting a
+  stale "port 8578" assumption, §12.1) that lets the operator (1) re-run
+  `cm-02`'s discovery scan on demand (the "crawl" button), (2) mark a
+  subset of the resulting manifest's real entries via checkboxes, and (3)
+  trigger `cm-08`'s bounded, operator-reviewed pilot orchestrator over
+  exactly that marked subset, with the real per-stage results rendered
+  back once the run completes.
+
+  **The central question, resolved explicitly, not hand-waved: does a UI
+  trigger button conflict with `cm-08`'s own explicit-confirmation-gate
+  design ("no auto-select," its own AC5)?** No — `cm-08`'s own story text
+  already names two valid selection mechanics, "a CLI confirm step OR an
+  edited manifest file." This story's UI flow is a real, HTTP-delivered
+  instance of the FIRST mechanic — a one-shot, explicit, non-persisted
+  confirmation of a specific subset — never the second: the operator's
+  checked boxes are never written back into `cm-02`'s own manifest file
+  (`~/.mnemosyne/conversation-sources.yaml`), which would silently
+  conflict with `cm-02`'s own AC7 idempotent-recompute-from-scratch
+  guarantee (a later re-scan would erase persisted marks). Three
+  independent, real layers enforce "no implicit selection," none trusted
+  alone: (1) client-side, the submit button is always reachable (no
+  `disabled` attribute — mirrors the Personas panel's own established
+  no-`disabled`-attribute convention) but refuses inline on an empty
+  checked set, mirroring `#reindex-paths`'s own empty-input refusal; (2)
+  server-side, the real enforcement point, `POST /conversation-memory/
+  pilot/run` rejects (400) any body whose combined marked-entry arrays are
+  empty; (3) CLI-level, `cm-08`'s own unchanged no-implicit-selection
+  refusal logic is reached via an explicit argument, the SAME code path
+  whether a human types the flag or the server passes it after an HTTP
+  request.
+
+  **A real, additive requirement this places on `cm-08`'s own future
+  implementation, named as a coordination point, NOT a change this story
+  makes to `cm-08`'s own already-reviewed YAML (which this story leaves
+  byte-for-byte unchanged):** `bin/mnemosyne-conversation-pilot.mjs`
+  should expose a machine-readable invocation mode (e.g.
+  `--sessions <path,path,...> --exports <key,key,...> --json`) alongside
+  whatever interactive/manifest-edit mechanic it implements — the SAME
+  confirmation-gate logic, a second real entry point, never a fork.
+
+  **Cross-language bridging, resolved by direct research, not invented
+  fresh:** `src/server.mjs` is launched as plain `exec node
+  "$HERE/src/server.mjs"` by `bin/mnemosyne` (no `tsx`) and cannot import
+  `cm-02`'s `discoverSources.ts` or `cm-08`'s orchestrator directly
+  (confirmed both by `bin/mnemosyne`'s own launch line and by
+  `bin/graphify-bridge.mjs`'s own doc comment naming the identical
+  constraint for its sibling zero-dep bin). Rather than relaunching the
+  whole HTTP service under `tsx`, this story follows
+  `bin/mnemosyne-onboard.mjs`'s own established precedent: a new, small,
+  `tsx`-launched CLI entry point
+  (`bin/mnemosyne-conversation-discover.mjs`, wrapping `discoverSources()`
+  with a `--json` flag), added to `bin/mnemosyne`'s own dispatcher with
+  the SAME three-line `tsx`-launch pattern already used for
+  `mnemosyne-persona.mjs`/`mnemosyne-agent.mjs`/`mnemosyne-onboard.mjs`.
+  `src/server.mjs`'s two new routes `execFile()` this CLI (and, once
+  built, `cm-08`'s own CLI in its new `--json` mode) and shape the JSON
+  stdout into the HTTP response — the SAME "thin HTTP wrapper shells out
+  to a CLI" architecture `engine.mjs` already uses for every existing
+  route in this file, extended to two new CLIs rather than a new
+  architectural pattern. No change to how `src/server.mjs` itself is
+  started.
+
+  **Progress-reporting mechanism, resolved by direct research (grep
+  confirms zero polling/SSE/streaming precedent anywhere in `ui/app.js`),
+  not invented fresh:** a plain synchronous `POST`, gated by the SAME
+  `window.confirm()` pattern `#reindex-form` already uses (naming that
+  this shells out against live Gemini + live Qdrant Cloud and can take
+  real time), a single loading-status message while in flight, and the
+  full per-stage result array (`cm-08`'s own AC6) rendered as a table from
+  the response body once it resolves — matching the one real precedent
+  this codebase has for a comparable long-running, live-write UI action
+  (`POST /index` via `#reindex-form`), not inventing new infrastructure.
+
+  **UI shell, matching the existing panel convention exactly (`ui/index.html`'s
+  Personas panel, ~line 268, read directly as the concrete precedent per
+  the task's own instruction):** a new `<section id="discovery-pilot"
+  class="panel panel-wide">`, its own `<h2>`, `panel-status` element(s), a
+  `panel-hint` naming real behavior/boundaries, a matching jump-chip near
+  the top of the file, and a per-panel `aria-live="polite"` region for
+  announcing scan/run outcomes — no new visual idiom invented.
+
+acceptance_criteria:
+  - "Given the operator has never run a scan this session, when the Discovery & Pilot panel loads, then it shows a real, empty-shaped status (never a fabricated manifest) and a 'Scan for new sources' control — no automatic background scan fires on page load"
+  - "Given the operator clicks 'Scan for new sources', when POST /conversation-memory/sources/scan completes, then the manifest's real sessions[]/excluded[]/exports are rendered as checkbox rows (one per session path, one per staged export key) — never a stale cached manifest, verified by confirming the route calls discoverSources({ write: true }) fresh on every call, matching cm-02's own AC7"
+  - "Given the operator clicks 'Run pilot on selected' with zero checkboxes marked, when the click handler runs, then no fetch() request fires and an inline status names the refusal reason — verified by a test asserting fetch is never called for this case"
+  - "Given the operator has marked at least one real entry and clicks 'Run pilot on selected', when the confirm dialog is accepted, then POST /conversation-memory/pilot/run is called with EXACTLY the marked subset (never a superset, never 'everything currently in the manifest') as its body"
+  - "Given POST /conversation-memory/pilot/run receives a body with empty combined sessionPaths/exportKeys arrays (bypassing the client, e.g. a direct API call), when the route handler runs, then it refuses with HTTP 400 and never invokes cm-08's orchestrator — the real, server-side enforcement point, never trusting client-side validation alone"
+  - "Given a non-empty marked subset, when POST /conversation-memory/pilot/run invokes cm-08's orchestrator, then it passes exactly that subset as an explicit argument — never omitting it, never falling back to any default/auto-selected set — verified by inspecting the real invocation arguments"
+  - "Given the pilot run completes (success or a per-stage failure), when the response is rendered, then every stage cm-08's orchestrator reports (discover/parse/triage/cluster/distill) appears in the UI with its own real ok/summary — never a single opaque pass/fail for the whole run"
+  - "Given a marked subset exceeding cm-08's own small-sample cap (its own AC1), when the pilot run executes, then cm-08's own orchestrator refusal is surfaced verbatim in the UI as a real per-stage failure — this story's own route never re-implements or re-enforces that cap client-side or server-side"
+
+steps:
+  - id: research
+    description: |
+      Confirm the real, current shape of cm-02's ConversationSourceManifest
+      (sessions[]/excluded[]/exports, DiscoveredSession.path as the real
+      per-session identifier) and cm-08's own not-yet-built orchestrator
+      contract (its own YAML's files_to_modify/acceptance_criteria) this
+      story's routes must invoke against. Confirm the real, current
+      bin/mnemosyne dispatcher pattern for adding a new tsx-launched CLI
+      entry point (mnemosyne-persona.mjs/mnemosyne-onboard.mjs's own
+      three-line precedent) and design bin/mnemosyne-conversation-
+      discover.mjs's own --json output contract concretely. Confirm
+      whether cm-08's own future implementation (once it lands) has
+      already added a --json/--sessions/--exports mode per this story's
+      own named coordination point, or whether this story's own
+      implementation step needs to propose that addition to cm-08's
+      implementer directly.
+    agent: researcher
+  - id: test-spec
+    description: |
+      Write failing tests for: (1) the two new server.mjs routes against
+      a stubbed execFile()/CLI-output boundary (never a real subprocess in
+      the automated suite); (2) the empty-selection 400 refusal; (3) the
+      client-side empty-checkbox refusal (no fetch call); (4) the UI
+      renders exactly the marked subset in the request body, never a
+      superset. Never live Qdrant, never live Gemini, never real personal
+      content in the automated suite.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: |
+      Implement bin/mnemosyne-conversation-discover.mjs (tsx-launched,
+      wraps discoverSources() with --json), the corresponding
+      bin/mnemosyne dispatcher entry, src/server.mjs's POST
+      /conversation-memory/sources/scan and POST /conversation-memory/
+      pilot/run routes (execFile-based, per-stage result shaping,
+      empty-selection 400 refusal), and the new ui/index.html panel +
+      ui/app.js wiring (scan button, checkbox rendering, marked-subset
+      submit with window.confirm gate and inline empty-selection
+      refusal).
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: |
+      Independently re-verify: no code path invokes cm-08's orchestrator
+      without an explicit, non-empty, request-scoped selection (read every
+      call site); the server-side 400 refusal is real, not a no-op; the
+      UI never persists marks into cm-02's own manifest file; the
+      progress-reporting design matches the reindex precedent rather than
+      inventing new infrastructure.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-conversation-memory.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: ui/index.html
+      purpose: "Personas panel (~line 268) — the concrete panel/jump-chip/panel-status/aria-live shell this story's new panel matches exactly."
+    - path: ui/app.js
+      purpose: "#reindex-form's own submit handler (~line 1180-1224) — the concrete synchronous-fetch/window.confirm/loading-status precedent this story's pilot-run trigger matches, and the empty-input inline-refusal idiom this story's empty-checkbox refusal matches."
+    - path: src/server.mjs
+      purpose: "The right, confirmed host (port 8477 default) — POST /reindex's own empty-body 400 pattern (~line 336-340) is this story's own server-side refusal's concrete precedent."
+    - path: bin/mnemosyne
+      purpose: "The dispatcher this story adds one new tsx-launched entry to, mirroring mnemosyne-onboard.mjs's/mnemosyne-persona.mjs's own three-line pattern exactly."
+    - path: bin/graphify-bridge.mjs
+      purpose: "States explicitly, in its own doc comment, the real constraint (plain node cannot import .ts) this story's own cross-language-bridging design is built around."
+    - path: .pHive/epics/mnemosyne-conversation-memory/stories/cm-08-bounded-operator-pilot.yaml
+      purpose: "The orchestrator this story's trigger route invokes — its own AC1/AC5/AC6 (small-sample cap, no-implicit-selection refusal, per-stage results) are the exact contract this story's routes must never re-implement or weaken."
+    - path: .pHive/epics/mnemosyne-conversation-memory/stories/cm-02-conversation-source-discovery.yaml
+      purpose: "discoverSources()'s own AC7 (idempotent, never a stale cache) — the reason this story's scan route always re-runs fresh rather than reading a cached manifest."
+
+files_to_modify:
+  - file: bin/mnemosyne-conversation-discover.mjs
+    change: "New file: tsx-launched CLI wrapping cm-02's discoverSources() with a --json output flag."
+  - file: bin/mnemosyne
+    change: "Add one new tsx-launched dispatch case for bin/mnemosyne-conversation-discover.mjs, mirroring the existing mnemosyne-onboard.mjs/mnemosyne-persona.mjs/mnemosyne-agent.mjs three-line pattern exactly."
+  - file: src/server.mjs
+    change: "New routes: POST /conversation-memory/sources/scan (execFile's the new discover CLI, returns the manifest) and POST /conversation-memory/pilot/run (validates a non-empty marked subset, 400 on empty, execFile's cm-08's own orchestrator CLI once it exposes a --json mode, shapes per-stage results into the response). Also update the GET / endpoints doc block to list both."
+  - file: ui/index.html
+    change: "New <section id=\"discovery-pilot\" class=\"panel panel-wide\">, matching the Personas panel's own shell exactly, plus a new jump-chip in #jump-chips."
+  - file: ui/app.js
+    change: "New load/render/submit wiring: scan button handler, checkbox-row rendering keyed by DiscoveredSession.path/export key, marked-subset collection, empty-selection inline refusal, window.confirm gate, synchronous pilot-run fetch with per-stage result rendering."
+  - file: test/ui-shell.mjs
+    change: "New assertions that GET /ui's body mentions the discovery-pilot panel, mirroring this file's own existing per-panel assertion convention (e.g. the personas panel's own pw-03 assertion)."
+
+design_decisions:
+  - decision: "The UI's checkbox-and-submit flow is cm-08's own 'CLI confirm step' selection mechanic, delivered over HTTP — never its 'edited manifest file' mechanic. The operator's marks are never persisted into cm-02's own manifest file."
+    rationale: "docs/design-discussion.md §12.2 — persisting marks into ~/.mnemosyne/conversation-sources.yaml would silently conflict with cm-02's own AC7 idempotent-recompute-from-scratch guarantee (a later re-scan would erase them). A one-shot, request-scoped confirmation avoids this entirely and is honestly one of cm-08's own two already-named valid mechanics, not a third, ungated one."
+  - decision: "No-implicit-selection is enforced by three independent layers (client-side inline refusal, server-side 400, cm-08's own unchanged CLI-level refusal) — none trusted alone."
+    rationale: "docs/design-discussion.md §12.2/round-5-grill-finding-5.3 — mirrors this epic's own repeated 'structural, not merely conventional' discipline (cm-14's own five-guarantee precedent, §11.4(d)); a client-side-only gate could be bypassed by a direct API call, so the server-side 400 is the real enforcement point, with cm-08's own CLI-level refusal as a third, independent backstop."
+  - decision: "Cross-language bridging via a new, small, tsx-launched CLI entry point + execFile() from src/server.mjs — never relaunching src/server.mjs itself under tsx, never reimplementing discoverSources()'s own scratch-filter/slug-decode logic in plain JS."
+    rationale: "docs/design-discussion.md §12.1/§12.2 — src/server.mjs is launched as plain node (confirmed via bin/mnemosyne's own launch line and bin/graphify-bridge.mjs's own doc comment naming the identical constraint for a sibling bin); relaunching the whole HTTP service under tsx is a broader, riskier surface change than this feature needs. Reimplementing discoverSources()'s own heuristic-laden decode/filter logic a second time in plain JS risks real drift from the already-tuned, already-tested original. bin/mnemosyne-onboard.mjs's own precedent (a small, tsx-launched CLI wrapper around otherwise-TS-only logic) is the concrete, lower-risk pattern this story follows instead."
+  - decision: "Progress reporting is a plain synchronous POST with a full per-stage result table rendered after the fact — no polling, no SSE."
+    rationale: "docs/design-discussion.md §12.1 — a direct grep of ui/app.js confirms zero polling/SSE/streaming precedent exists anywhere in this codebase; the one real precedent for a comparable long-running, live-write UI action (#reindex-form -> POST /index) is a plain synchronous fetch with a window.confirm gate and a single loading-status message. Matching this precedent avoids inventing new infrastructure with zero prior art in this repo."
+  - decision: "cm-08's own small-sample cap (its own AC1) is never re-implemented or re-capped by this story's own routes, client-side or server-side."
+    rationale: "This epic's own repeated 'one shared primitive, reused, never reimplemented' convention ([grill 4.4], round 4) — duplicating the cap risks the two copies drifting apart; a selection exceeding it is a real, loud, per-stage failure cm-08's own orchestrator reports, surfaced verbatim rather than silently truncated by this story."
+
+cross_cutting:
+  - concern: conversation-privacy-safety
+    action: "This story introduces zero new persistence/parsing/classification logic of its own — it triggers cm-02's already-reviewed discovery (metadata-only, never content) and cm-08's already-designed pilot orchestrator (which itself re-uses cm-01's persist-time scan checkpoint, unchanged). No response this story's routes return ever includes raw session/export content — only manifest metadata (paths/sizes/mtimes) and cm-08's own per-stage summary results."
+  - concern: existing-infrastructure
+    action: "Reuses discoverSources()/cm-08's orchestrator unchanged via a thin CLI-wrapper + execFile() bridge, the SAME architectural pattern engine.mjs already establishes for every existing route in src/server.mjs — no new persistence primitive, no new HTTP client, no new selection-gating mechanism beyond what cm-08 already designed."
+  - concern: loud-failure
+    action: "Any stage failure during a real pilot run (cm-01's scan, cm-05's triage, cm-06's clustering, cm-07's distillation) is reported per-stage in the response body, never collapsed into a generic all-or-nothing failure — mirrors cm-08's own AC6/cross_cutting loud-failure commitment exactly, now also true of this story's own HTTP surface."
+  - concern: documentation
+    action: "SERVICE.md's own route-table documentation and src/server.mjs's own GET / endpoints doc block both need a real entry for the two new routes once this story ships, mirroring how every prior route addition to this file has kept that block current."
+
+risks:
+  - severity: high
+    description: "A defect in the server-side 400 refusal (POST /conversation-memory/pilot/run) would be the first UI-reachable path capable of invoking real, live-Qdrant-writing, real-content-touching pipeline stages against an operator-unmarked or empty selection — the exact no-implicit-selection failure mode cm-08's own design exists to prevent, now reachable from a browser instead of only a terminal."
+    mitigation: "Three independent layers (client-side, server-side, CLI-level), none trusted alone — the server-side 400 is the real enforcement point and is covered by its own dedicated acceptance criterion and test, independent of whether the client-side check is ever bypassed."
+  - severity: medium
+    description: "The pilot-run HTTP connection stays open for the full run's real wall-clock duration (potentially minutes against a real 5+5-session sample, live Gemini + live Qdrant Cloud) — a real, accepted UX tradeoff of the synchronous-request design."
+    mitigation: "Bounded by cm-08's own small-sample cap (never re-implemented here, see design_decisions above); named explicitly in docs/design-discussion.md §12.5 as a residual, honestly-unsolved item rather than claimed fixed by this story."
+  - severity: medium
+    description: "cm-08's own orchestrator does not exist yet (status: pending) — this story's own routes are designed against cm-08's already-written story contract, not against running code, and cm-08's own future implementation may resolve its --json/--sessions/--exports invocation mode differently than this story's own research step anticipates."
+    mitigation: "Named as a real, additive coordination point on cm-08's own future implementation (docs/design-discussion.md §12.2), not a change this story makes to cm-08's own YAML; this story's own research step re-confirms the real, as-built contract before implementation if cm-08 has landed differently by then."
+
+references:
+  - path: .pHive/epics/mnemosyne-conversation-memory/docs/design-discussion.md
+    relevant_excerpt: "§12.1 — the real code re-verification grounding this story (port 8477 confirmed, cm-02/cm-08 both still pending, the plain-node-cannot-import-.ts constraint, zero polling/SSE precedent). §12.2 — the full trigger-surface design: the central no-implicit-selection question resolved, the three-layer enforcement, the cross-language bridging design, the progress-reporting decision."
+  - path: .pHive/epics/mnemosyne-conversation-memory/docs/grill-record.md
+    relevant_excerpt: "Round 5, findings 5.1-5.3 and the first leak/safety question — the adversarial verification that this story's design has no path to invoke the pipeline against an operator-unmarked selection."
+  - path: .pHive/epics/mnemosyne-conversation-memory/stories/cm-08-bounded-operator-pilot.yaml
+    relevant_excerpt: "AC1 (small-sample cap)/AC5 (no-implicit-selection refusal)/AC6 (per-stage results) — the exact orchestrator contract this story's routes invoke against unchanged."
+
+metric:
+  applies: true
+  name: conversation_memory.pilot_triggered_via_ui
+  direction: up
+  unit: count
+  baseline: 0
+  target: 1
+  window: "first real operator use of this panel, post-cm-08-landing"
+  source:
+    kind: manual
+    ref: "Real confirmation that the operator successfully scanned, marked a real subset, and triggered a real cm-08 pilot run entirely from the browser, with per-stage results rendered — the concrete, falsifiable proof the operator's own 'crawl and index' ask is genuinely dogfoodable, not merely API-reachable."
+  verify_at: "first real UI-triggered pilot run"
+  owner: researcher
