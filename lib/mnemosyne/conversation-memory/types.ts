@@ -15,8 +15,16 @@
 
 import type { SecretMatch } from './scanForSecrets.js';
 
-/** Which parser produced a given turn -- stamped at parse time, never inferred downstream. */
-export type ConversationSourceType = 'claude-code' | 'chatgpt';
+/**
+ * Which parser produced a given turn -- stamped at parse time, never
+ * inferred downstream. `'gemini-takeout'` added by `cm-10`'s
+ * `parseGeminiTakeoutExport.ts` (the Google Takeout "Gemini in Workspace"
+ * bulk export) -- distinct from a future `'gemini-share'` value a
+ * `parseGeminiShareExport.ts` would stamp, since the two are structurally
+ * different real input shapes (design-discussion.md §10.1) that should
+ * remain distinguishable in this field even though both are "Gemini".
+ */
+export type ConversationSourceType = 'claude-code' | 'chatgpt' | 'gemini-takeout';
 
 /**
  * Speaker role. `'system'` exists for parity with the ChatGPT `mapping`

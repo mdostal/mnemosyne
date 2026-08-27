@@ -84,6 +84,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "better-sqlite3": "^13.0.3",
+    "fflate": "^0.8.3",
     "tsx": "^4.23.11",
     "unpdf": "^1.8.1",
     "yaml": "^2.9.0",
