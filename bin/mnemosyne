@@ -11,6 +11,8 @@
 #        bin/mnemosyne agent init   [--harness claude|codex]
 #        bin/mnemosyne agent status [--harness claude|codex]
 #        bin/mnemosyne onboard <path> --collection <name> [--scope-id <id>] [--override project|enterprise]
+#        bin/mnemosyne conversation-pilot --selection-file <path> [--json]
+#        bin/mnemosyne conversation-pilot --sessions <path,...> --exports <id,...> --confirm [--json]
 set -euo pipefail
 export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"
 
@@ -85,6 +87,16 @@ if [ "${1:-}" = "onboard" ]; then
   # -- noEmit:true means there is no build step to import a .ts module any
   # other way.
   exec node "$HERE/node_modules/.bin/tsx" "$HERE/bin/mnemosyne-onboard.mjs" "$@"
+fi
+
+if [ "${1:-}" = "conversation-pilot" ]; then
+  shift
+  # cm-08-bounded-operator-pilot (epic: mnemosyne-conversation-memory):
+  # mnemosyne-conversation-pilot.mjs imports lib/mnemosyne/conversation-
+  # memory/*.ts + lib/mnemosyne/client.ts directly, so this is tsx-launched
+  # like persona.mjs/agent.mjs/onboard.mjs -- noEmit:true means there is no
+  # build step to import a .ts module any other way.
+  exec node "$HERE/node_modules/.bin/tsx" "$HERE/bin/mnemosyne-conversation-pilot.mjs" "$@"
 fi
 
 # --version/--help must be handled BEFORE the catch-all server exec below --
