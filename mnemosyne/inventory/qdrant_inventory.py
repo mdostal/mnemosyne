@@ -90,6 +90,60 @@ class HttpQdrantClient:
             raise QdrantInventoryError(f"Qdrant returned no metadata for {name!r}")
         return result
 
+    def scroll_points(
+        self, name: str, payload_filter: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        """Enumerate every point in collection ``name`` -- a NEW, purely
+        READ-ONLY method (story cm-13-intake-distribution, epic
+        mnemosyne-conversation-memory), in the SAME low-risk category as
+        this class's own existing ``list_collections()``/``collection_info()``
+        reads, never the same category as ``create_collection()``'s one
+        deliberate write exception. Does NOT add a delete/drop capability --
+        see the module docstring, still accurate after this addition.
+
+        Wraps Qdrant's own native ``POST /collections/{name}/points/scroll``
+        endpoint -- real shape confirmed directly against the operator's own
+        live Qdrant Cloud cluster this story's research step (2026-08-27):
+        ``{"result": {"points": [{"id": ..., "payload": {...}}, ...],
+        "next_page_offset": <id> | null}, "status": "ok"}``. Despite being an
+        HTTP POST (required to carry a filter/limit body), this is Qdrant's
+        own genuinely read-only enumeration verb -- no point is created,
+        modified, or removed by this call.
+
+        Paginates internally via ``next_page_offset`` until Qdrant reports
+        none remaining (or returns an empty page), returning the FULL,
+        flattened list of ``{"id", "payload"}`` entries across every page --
+        callers never need to handle pagination themselves.
+
+        ``payload_filter``, when given, is passed through UNCHANGED as
+        Qdrant's own native filter body (e.g. ``{"must": [{"key": ...,
+        "match": {"value": ...}}]}``) -- this method performs no filter
+        validation or rewriting of its own; omit it (default `None`) to
+        enumerate every point in the collection with no filter at all.
+        """
+        points: list[dict[str, Any]] = []
+        offset: Any = None
+        while True:
+            body: dict[str, Any] = {"limit": 250, "with_payload": True, "with_vector": False}
+            if payload_filter is not None:
+                body["filter"] = payload_filter
+            if offset is not None:
+                body["offset"] = offset
+
+            result = self._request(
+                "POST", f"/collections/{name}/points/scroll", body=body
+            ).get("result", {})
+            batch = result.get("points", [])
+            points.extend(
+                {"id": point.get("id"), "payload": point.get("payload", {})}
+                for point in batch
+            )
+
+            offset = result.get("next_page_offset")
+            if offset is None or not batch:
+                break
+        return points
+
     def create_collection(self, name: str, dim: int) -> None:
         """Create a NEW Qdrant collection (unnamed vector, cosine distance).
 
