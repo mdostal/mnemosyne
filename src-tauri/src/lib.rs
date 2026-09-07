@@ -1,5 +1,6 @@
 pub mod sidecar;
 pub mod tray;
+pub mod updater;
 
 use std::sync::Mutex;
 
@@ -108,6 +109,13 @@ pub fn run() {
       tauri_plugin_autostart::MacosLauncher::LaunchAgent,
       None,
     ))
+    // da-04-auto-updater-wiring: registering this plugin does NOT itself
+    // make any network request -- it only makes `app.updater()?.check()`
+    // callable. The actual call only ever happens from behind
+    // updater::maybe_trigger_update_check's own operator-toggle gate (see
+    // tray.rs's build_tray and updater.rs's own doc comment) -- default
+    // OFF, so a fresh install registers this plugin but never calls it.
+    .plugin(tauri_plugin_updater::Builder::new().build())
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(

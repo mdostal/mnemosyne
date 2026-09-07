@@ -203,14 +203,53 @@ unbounded, never a single immediate attempt) poll of the sidecar's own
 `GET /healthz` confirms it's actually accepting connections. The tray's
 right-click menu carries a real, visible, always-toggleable "Launch at
 Login" item (`tauri-plugin-autostart`, a genuine `launchd` LaunchAgent under
-`~/Library/LaunchAgents/` — never a bespoke login-item hack) plus Quit. The
-auto-updater (`da-04`) and a full local dogfood pass (`da-05`) are still
+`~/Library/LaunchAgents/` — never a bespoke login-item hack) plus Quit.
+
+`da-04` wires the auto-updater mechanism (`tauri-plugin-updater`): a
+locally-generated Ed25519/minisign signing keypair (public half committed
+into `tauri.conf.json`'s `plugins.updater.pubkey`, private half living ONLY
+at `~/.tauri/mnemosyne-desktop.key` on the operator's own machine, supplied
+to a build via the `TAURI_SIGNING_PRIVATE_KEY` env var and never committed —
+`src-tauri/tests/no_private_key_committed.rs` is a real, re-runnable proof
+of that, not a policy statement), plus a GitHub-Releases-hosted update
+manifest (`plugins.updater.endpoints`, resolving on this machine to
+`https://github.com/mdostal/mnemosyne/releases/download/desktop-v<version>/darwin-aarch64.json`).
+
+**The updater is OPT-IN, off by default.** The tray menu gains a second
+checkbox, "Check for Updates," unchecked on a fresh install — the app makes
+**zero** update-check network requests until the operator explicitly turns
+it on (a real test proves this: `src-tauri/src/updater.rs`'s
+`maybe_trigger_update_check_fires_zero_times_when_disabled`). The choice
+persists across restarts via a marker file under the app's own
+`app_data_dir` (mirroring `da-03`'s own autostart-default marker). Once
+enabled: a check fires immediately (the moment it's toggled on) and again
+once per subsequent app launch while it stays enabled; toggling it back off
+stops all further checks — no periodic timer, no background polling.
+
+**Two things `da-04` explicitly does NOT achieve** (named directly, never
+left to silent omission): **(1) no notarization** — the shipped build
+remains unsigned/unnotarized, Gatekeeper will still block it on first
+launch, and only a real, operator-owned Apple Developer Program membership
++ Developer ID Application certificate (which this agent cannot obtain)
+closes that gap; `da-05`'s own local "Open Anyway" workaround is the real
+staged path that doesn't wait on it. **(2) no live update-check has been
+exercised end-to-end** — no release has been published to
+`mdostal/mnemosyne`'s GitHub Releases yet, so a real check against a real
+published manifest is untested by this story, deferred honestly to `da-05`
+or a later release cycle. A full local dogfood pass (`da-05`) is still
 ahead. See `scripts/desktop-smoke.sh` for the real build-and-launch check,
 and `.pHive/epics/mnemosyne-desktop-app/` for the full epic.
 
 ```bash
 npx tauri dev            # run the placeholder window
 npx tauri build --debug  # debug build; .app lands under src-tauri/target/debug/bundle/macos/
+
+# Producing a real .sig alongside the build (bundle.createUpdaterArtifacts
+# is already true in tauri.conf.json) requires the real private key, kept
+# OUTSIDE this repo:
+export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/mnemosyne-desktop.key)"
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""   # only if generated without a password
+npx tauri build --debug
 ```
 
 ## Install hooks

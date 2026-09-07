@@ -33,6 +33,15 @@
     },
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE0N0IyQ0FDMTJDRDBGQTUKUldTbEQ4MFNyQ3g3cEpZZWhjTXJYMkE3aUE1RWQ4SllqQjc1dGw1TnlkdFN4VWQvK05Ga1dIbWQK",
+      "endpoints": [
+        "https://github.com/mdostal/mnemosyne/releases/download/desktop-v{{current_version}}/{{target}}-{{arch}}.json"
+      ]
     }
   }
 }

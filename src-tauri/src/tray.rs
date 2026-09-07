@@ -16,6 +16,15 @@
 //        a real, visible, operator-toggleable tray-menu checkbox (default
 //        on, but never a silent forced-on service with no real off switch).
 //
+// da-04-auto-updater-wiring adds one more real, visible, operator-toggleable
+// checkbox to this SAME menu: "Check for Updates" (updater.rs's own
+// `UPDATER_ENABLED_MARKER_FILENAME`-backed setting) -- deliberately the
+// OPPOSITE default of AC4's autostart checkbox: unchecked/OFF on a fresh
+// install, never on-by-default (the operator's own explicit instruction,
+// resolving design-discussion.md §7's open question 1). See updater.rs's
+// own doc comment for the full "zero network calls while off" gate this
+// checkbox's on_menu_event handler routes through.
+//
 // Kept free of any actual `tauri::Builder`/`.setup()` wiring itself (that
 // lives in lib.rs) so the pieces here are directly unit- and
 // integration-testable: `dashboard_url`/`poll_with_backoff` are pure,
@@ -34,6 +43,8 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Manager, Runtime, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_autostart::ManagerExt;
 
+use crate::updater;
+
 /// The label of the single dashboard window this story ever creates. Never
 /// declared as a static window in tauri.conf.json -- this app launches as a
 /// tray-only "background... service, not necessarily a full window a user
@@ -43,6 +54,7 @@ use tauri_plugin_autostart::ManagerExt;
 pub const WINDOW_LABEL: &str = "dashboard";
 
 const LAUNCH_AT_LOGIN_MENU_ID: &str = "launch_at_login";
+const CHECK_FOR_UPDATES_MENU_ID: &str = "check_for_updates";
 const QUIT_MENU_ID: &str = "quit";
 
 /// The marker file recording "the autostart default has already been
@@ -214,12 +226,52 @@ pub fn build_tray<R: Runtime>(app: &AppHandle<R>, port: u16) -> tauri::Result<()
         CheckMenuItemBuilder::with_id(LAUNCH_AT_LOGIN_MENU_ID, "Launch at Login")
             .checked(launch_at_login_checked)
             .build(app)?;
+
+    // da-04-auto-updater-wiring: the operator's own opt-in toggle, default
+    // UNCHECKED/OFF (updater::is_updater_enabled reads `false` whenever the
+    // marker file is absent, which it always is on a fresh install -- unlike
+    // launch-at-login above, there is no default-application step here at
+    // all, deliberately: this setting is never turned on except by the
+    // operator's own explicit click).
+    let updater_marker_path = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| dir.join(updater::UPDATER_ENABLED_MARKER_FILENAME));
+    let updater_enabled = updater_marker_path
+        .as_deref()
+        .map(updater::is_updater_enabled)
+        .unwrap_or(false);
+
+    let check_for_updates_item =
+        CheckMenuItemBuilder::with_id(CHECK_FOR_UPDATES_MENU_ID, "Check for Updates")
+            .checked(updater_enabled)
+            .build(app)?;
     let quit_item = MenuItemBuilder::with_id(QUIT_MENU_ID, "Quit").build(app)?;
     let menu = MenuBuilder::new(app)
         .item(&launch_at_login_item)
+        .item(&check_for_updates_item)
         .separator()
         .item(&quit_item)
         .build()?;
+
+    // Cadence (documented, not left implicit -- README.md/SERVICE.md carry
+    // the same note): fires the real update-check once per app launch, ONLY
+    // if the operator already had this enabled from a previous session. The
+    // on_menu_event handler below fires a second, independent trigger point
+    // -- immediately, the moment the operator toggles it ON at runtime --
+    // so turning it on doesn't silently wait for the next relaunch. Both
+    // trigger points route through the exact same
+    // `updater::maybe_trigger_update_check` gate that the zero-calls-while-
+    // off test in updater.rs proves fires nothing when disabled.
+    {
+        let app_for_launch_check = app.clone();
+        updater::maybe_trigger_update_check(updater_enabled, move || {
+            tauri::async_runtime::spawn(async move {
+                updater::spawn_update_check(&app_for_launch_check).await;
+            });
+        });
+    }
 
     TrayIconBuilder::new()
         .icon(
@@ -246,6 +298,36 @@ pub fn build_tray<R: Runtime>(app: &AppHandle<R>, port: u16) -> tauri::Result<()
                 if let Err(e) = launch_at_login_item.set_checked(now_enabled) {
                     log::error!("[da-03] failed to update the launch-at-login menu checkbox: {e}");
                 }
+            }
+            CHECK_FOR_UPDATES_MENU_ID => {
+                let Ok(app_data_dir) = app.path().app_data_dir() else {
+                    log::error!(
+                        "[da-04] failed to resolve app_data_dir -- cannot persist the \
+                         Check-for-Updates toggle, leaving it unchanged"
+                    );
+                    return;
+                };
+                let marker_path =
+                    app_data_dir.join(updater::UPDATER_ENABLED_MARKER_FILENAME);
+                let currently_enabled = updater::is_updater_enabled(&marker_path);
+                let now_enabled = !currently_enabled;
+                if let Err(e) = updater::set_updater_enabled(&marker_path, now_enabled) {
+                    log::error!("[da-04] failed to persist the Check-for-Updates toggle: {e}");
+                    return;
+                }
+                if let Err(e) = check_for_updates_item.set_checked(now_enabled) {
+                    log::error!("[da-04] failed to update the Check-for-Updates menu checkbox: {e}");
+                }
+                // Fire the real check immediately on toggle-ON (this
+                // module's own documented cadence, alongside the
+                // once-per-launch trigger above) -- routes through the
+                // exact same zero-calls-while-off gate.
+                let app_for_toggle_check = app.clone();
+                updater::maybe_trigger_update_check(now_enabled, move || {
+                    tauri::async_runtime::spawn(async move {
+                        updater::spawn_update_check(&app_for_toggle_check).await;
+                    });
+                });
             }
             QUIT_MENU_ID => app.exit(0),
             _ => {}

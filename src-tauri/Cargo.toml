@@ -25,6 +25,9 @@ tauri = { version = "2.11.3", features = ["tray-icon"] }
 tauri-plugin-log = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-autostart = "2"
+# da-04-auto-updater-wiring: real-check gated entirely behind updater.rs's
+# own operator-toggle (default OFF) -- see updater.rs's own doc comment.
+tauri-plugin-updater = "2"
 
 [dev-dependencies]
 # "test" enables tauri::test's MockRuntime -- feature-unified onto the
