@@ -1,0 +1,154 @@
+id: da-04-auto-updater-wiring
+epic: mnemosyne-desktop-app
+title: Auto-updater wiring — signing keypair, manifest, GitHub Releases hosting (excludes notarization)
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [da-01-tauri-project-scaffolding]
+
+description: |
+  The operator's own "auto-update" ask, made real via Tauri's own
+  first-party `tauri-plugin-updater` (docs/design-discussion.md §2,
+  docs/research-brief.md §3.4) — a real, concretely-confirmed mechanism,
+  not an invented one (grill-record.md finding 2.3): a locally-generated
+  signing keypair, a static update manifest, and GitHub Releases as the
+  hosting location, confirmed directly usable because `gh repo view`
+  confirms `mdostal/mnemosyne` is public.
+
+  Explicitly, firmly OUT OF SCOPE for this story, by design: macOS code
+  signing and notarization (docs/design-discussion.md §2.3,
+  grill-record.md finding 5.1) — a real, named, operator-owned
+  prerequisite (a paid Apple Developer Program membership plus a real
+  "Developer ID Application" signing certificate) this agent cannot
+  obtain or configure on the operator's behalf. This story wires the
+  UPDATE mechanism only; it never attempts to make the resulting build
+  Gatekeeper-silent.
+
+  New cross-cutting concern this story is the first real consumer of
+  (docs/design-discussion.md §5): `desktop-signing-and-secret-custody`.
+  The updater's private signing key has real, permanent, irreversible
+  consequences if lost (every already-installed copy of the app is
+  permanently stranded from ever updating again — Tauri's own docs,
+  quoted directly) or leaked (an attacker could sign a malicious update
+  every existing installation would silently trust). This story's own
+  acceptance criteria ARE that concern's implementation checklist.
+
+acceptance_criteria:
+  - "Given `npm run tauri signer generate -- -w ~/.tauri/mnemosyne-desktop.key` (or the real, current equivalent this story's own research step re-confirms) is run once, locally, when the keypair is generated, then the PUBLIC key is committed into `tauri.conf.json`'s `plugins.updater.pubkey`, and the PRIVATE key file is verified to NOT exist anywhere under this repo's own working tree (confirmed by an explicit `git status`/`find` check as part of this story's own review step) — the private key is referenced ONLY by the `TAURI_SIGNING_PRIVATE_KEY` env var at build time, never committed, never printed to any log, story output, or commit message"
+  - "Given `tauri.conf.json`'s `bundle.createUpdaterArtifacts: true` is set, when a debug `cargo tauri build` runs (per da-01's own smoke check) with `TAURI_SIGNING_PRIVATE_KEY` set in the build environment only, then the build produces a real `.sig` signature file alongside the built artifact"
+  - "Given `plugins.updater.endpoints` is configured with a GitHub-Releases-shaped URL template (using `{{current_version}}`/`{{target}}`/`{{arch}}` substitution, confirmed real and documented in research-brief.md §3.4), when the endpoint URL is resolved for this machine's real target/arch, then it points at a real, well-formed `https://github.com/mdostal/mnemosyne/releases/...` URL — never a placeholder or invented hosting domain"
+  - "Given no release has been published yet (this story wires the mechanism, it does not publish a first real release), when this story's own review step runs, then it explicitly documents that a live end-to-end update-check (hitting a real published manifest) is NOT exercised by this story — deferred honestly to da-05's own dogfood story or a later release cycle, never silently claimed as proven here"
+  - "Given this story's own scope explicitly excludes macOS notarization, when this story's own documentation is written, then it states directly (not merely by omission) that the shipped build remains unsigned/unnotarized and that Gatekeeper will still block it on first launch — pointing at da-05's own named, Apple-documented local workaround rather than silently implying this story solved that separately"
+
+steps:
+  - id: research
+    description: >
+      Re-confirm the real, current `tauri-plugin-updater` install method,
+      the real, current `tauri signer generate` command syntax, and the
+      real, current `tauri.conf.json` schema keys (`bundle.
+      createUpdaterArtifacts`, `plugins.updater.pubkey`,
+      `plugins.updater.endpoints`) against Tauri v2's own live docs at
+      build time — re-fetch, don't trust research-brief.md's snapshot as
+      unchanged. Re-confirm `mdostal/mnemosyne`'s real GitHub visibility
+      (`gh repo view --json visibility`) immediately before implementation,
+      since a repo-visibility change between this planning pass and this
+      story's execution would invalidate the GitHub-Releases-hosting
+      decision.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Write a real (not mocked) check that asserts no private-key
+      material exists anywhere in the repo's own working tree or git
+      history after this story's implementation (a real `git log -p --all
+      | grep`-style scan restricted to this story's own touched files,
+      plus a real filesystem scan for common private-key file patterns)
+      — the concrete, re-runnable proof acceptance criterion 1's
+      never-committed requirement holds, not merely a policy statement.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Generate the keypair locally (never printing the private key to any
+      tool output this story's own implementation step produces), wire
+      `tauri.conf.json`'s updater config with the public key and the
+      GitHub Releases endpoint template, add `tauri-plugin-updater` to
+      `src-tauri/Cargo.toml`, and write the documentation note required by
+      acceptance criterion 5.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: >
+      Independently re-verify the private-key-never-committed proof
+      (mirrors `ro-06`'s own independent-reviewer-re-verification
+      discipline, applied here to secret custody rather than Qdrant
+      safety) and confirm the debug build produces a real `.sig` file.
+      Never trust the implementer's own self-report that the key
+      wasn't committed — re-run the scan independently.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-desktop-app.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: src-tauri/tauri.conf.json
+      purpose: "Gains bundle.createUpdaterArtifacts, plugins.updater.pubkey, plugins.updater.endpoints — created by da-01, extended by this story."
+  tech_stack:
+    signing_mechanism: "tauri signer generate — Ed25519 minisign-format keypair per Tauri's own updater docs, research-brief.md §3.4."
+    hosting: "GitHub Releases (static JSON manifest), confirmed directly usable — mdostal/mnemosyne confirmed PUBLIC via gh repo view, research-brief.md §1."
+    excluded_scope: "macOS notarization — a real, operator-owned prerequisite (paid Apple Developer Program membership + Developer ID Application certificate) this story does not and cannot complete."
+
+files_to_modify:
+  - file: src-tauri/tauri.conf.json
+    change: "Add bundle.createUpdaterArtifacts: true, plugins.updater.pubkey, plugins.updater.endpoints."
+  - file: src-tauri/Cargo.toml
+    change: "Add tauri-plugin-updater dependency."
+  - file: src-tauri/src/lib.rs
+    change: "Initialize the updater plugin."
+  - file: .gitignore
+    change: "Add an explicit entry ensuring no *.key/private-key file pattern under ~/.tauri or a local build directory is ever accidentally staged — belt-and-suspenders alongside the private key never living inside the repo's own working tree in the first place."
+
+design_decisions:
+  - decision: "GitHub Releases (static JSON manifest) chosen over a dynamic update server or CrabNebula Cloud."
+    rationale: "grill-record.md finding 2.3 — confirmed real (one of exactly three Tauri-documented hosting paths), free, and directly usable today because mdostal/mnemosyne is confirmed public — zero new hosting infrastructure required."
+  - decision: "Notarization is explicitly excluded from this story's scope, named directly in its own documentation output rather than left to silent omission."
+    rationale: "grill-record.md finding 5.1 — the task's own explicit instruction to name this as a real, operator-owned blocker rather than glossing over it; this story is the concrete point where 'auto-update is wired' could be mistaken for 'the app is fully shippable,' so the distinction is stated directly here."
+
+cross_cutting:
+  - concern: desktop-signing-and-secret-custody
+    action: "NEW, named concern (not in the generic .pHive/cross-cutting-concerns.yaml list, mirroring ro-11's external-fetch-safety and cm-01's conversation-privacy-safety precedent) — this story's own acceptance criteria 1 and the test-spec/review steps' independent private-key-never-committed verification ARE this concern's implementation checklist."
+  - concern: documentation
+    action: "README.md/SERVICE.md gain a real note on the update mechanism AND the explicit unsigned/unnotarized caveat (acceptance criterion 5) — never one without the other."
+  - concern: versioning
+    action: "The updater's own version-comparison mechanism depends on package.json/tauri.conf.json's version field staying in sync with future releases — this story documents that dependency, not enforces it (out of this story's own narrow scope)."
+
+risks:
+  - severity: critical
+    description: "Losing or leaking the updater's private signing key has permanent, irreversible consequences for every already-installed copy of the app (Tauri's own docs, quoted directly in design-discussion.md §2.1)."
+    mitigation: "The private key never enters the repo's own working tree or git history at any point — verified by an explicit, independently-re-run scan (acceptance criterion 1, review step), not merely a policy statement."
+  - severity: high
+    description: "An unsigned build's auto-updater could be blocked by Gatekeeper's quarantine mechanism on every self-installed update, not just the first install (docs/design-discussion.md §2.2, grill-record.md finding 3.2) — genuinely untested by this story, which only wires the mechanism and never exercises a live update cycle."
+    mitigation: "Named explicitly, not silently assumed solved; acceptance criterion 4 requires this story to state directly that a live end-to-end update check is deferred, and da-05/a future release cycle is the real empirical observation point."
+
+references:
+  - path: .pHive/epics/mnemosyne-desktop-app/docs/design-discussion.md
+    relevant_excerpt: "§2 (auto-update mechanism), §2.2 (Gatekeeper interaction, grill 3.2), §2.3 (notarization gap, grill 5.1), §5 (new desktop-signing-and-secret-custody concern)."
+  - path: .pHive/epics/mnemosyne-desktop-app/docs/grill-record.md
+    relevant_excerpt: "Finding 2.3 — GitHub Releases confirmed real, not invented; Finding 5.1 — notarization named as a real, operator-owned blocker with a real staged workaround."
+
+metric:
+  applies: true
+  name: desktop_app.updater_private_key_zero_leak_incidents
+  direction: down
+  unit: count
+  baseline: null
+  target: 0
+  window: "every run, permanently"
+  source:
+    kind: manual
+    ref: "Reviewer's independently-run private-key-never-committed scan, every merge and every subsequent regression pass"
+  verify_at: integrate
+  owner: reviewer

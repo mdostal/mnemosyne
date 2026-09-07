@@ -401,6 +401,60 @@ npm run test:e2e
 - No secrets printed. No Don-stack / multica-daemon / auriga touched.
 - Zero third-party deps — runs on the hive's Node with no install step.
 
+## Desktop app (Tauri)
+
+A Tauri v2 shell under [`src-tauri/`](./src-tauri/) packages this service as
+a long-running desktop app instead of a foreground terminal process:
+`da-01`/`da-02` landed the project scaffold and a vendored-Node sidecar,
+`da-03` landed the tray/menu-bar icon + lazily-created dashboard window +
+launch-at-login toggle, and `da-04` wires the auto-updater mechanism
+(signing keypair, GitHub-Releases-hosted manifest) — see the README's own
+"Desktop app (Tauri)" section for the full narrative and
+`.pHive/epics/mnemosyne-desktop-app/` for the epic.
+
+**Auto-updater — opt-in, defaults OFF.** The tray menu's "Check for Updates"
+checkbox is unchecked on a fresh install and stays that way until the
+operator explicitly turns it on — this app makes ZERO update-check network
+requests while it's off, proven by a real test
+(`src-tauri/src/updater.rs`'s `maybe_trigger_update_check_fires_zero_times_when_disabled`
+and its full-off-path sibling). The choice persists across restarts (a
+marker file under the app's own `app_data_dir`, mirroring `da-03`'s own
+autostart-default marker pattern). Once enabled, a real
+`tauri-plugin-updater` check fires immediately (the moment it's toggled on)
+and once more on every subsequent app launch while it stays enabled;
+toggling it back off stops all further checks.
+
+**What `da-04` does NOT achieve, named explicitly rather than left to
+silent omission:**
+- **No notarization.** The shipped build remains unsigned/unnotarized —
+  Gatekeeper will still block it on first launch. This story wires the
+  UPDATE mechanism only; a real Apple Developer Program membership + a
+  Developer ID Application certificate (an operator-owned prerequisite this
+  agent cannot obtain) is required for a Gatekeeper-silent build. `da-05`'s
+  own local workaround (System Settings → Privacy & Security → "Open
+  Anyway") is the real, staged path that does not wait on that.
+- **No live end-to-end update-check has been exercised.** No release has
+  been published to `mdostal/mnemosyne`'s GitHub Releases yet, so a real
+  update check against a real published manifest is untested by this
+  story — deferred honestly to `da-05` or a later release cycle, never
+  claimed as proven here.
+
+**`da-05` (real dogfood build, this epic's final story) — real findings,
+not assumed:** a genuine release `cargo tauri build` + `codesign --sign -`
++ real Finder-triggered launch on the operator's own machine (macOS 26.5.1)
+found that this specific ad-hoc-signed (no Developer ID Team) build did
+**not** show the classic blocking Gatekeeper dialog even with a real
+quarantine xattr applied to a fresh, never-launched copy — macOS's own
+`GKQuarantineResolver` logged `XProtect suppress first launch warning:
+true` and instead silently ran the app via App Translocation. See the
+README's own "`da-05`: real local dogfood build" section for the full,
+verbatim evidence and `scripts/da-05-dogfood-checklist.sh` for the
+re-runnable checklist. **Still genuinely open, restated here per this
+story's own acceptance criterion 5, never claimed resolved:** whether an
+auto-installed update would re-trigger Gatekeeper's quarantine flow on the
+replacement bundle (grill-record.md finding 3.2) — no second release
+exists yet to test this against.
+
 ## Deferred (honest scope — see idea-brief for the full design)
 
 - Obsidian **meta layer** + enterprise/project layer routing (recall/remember

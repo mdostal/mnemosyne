@@ -1,0 +1,47 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Mnemosyne Desktop",
+  "version": "0.1.0",
+  "identifier": "com.mdostal.mnemosyne.desktop",
+  "build": {
+    "frontendDist": "dist"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "externalBin": [
+      "binaries/mnemosyne-node"
+    ],
+    "resources": {
+      "../src/*.mjs": "src/",
+      "../src/layers/*.mjs": "src/layers/",
+      "../bin/graphify-bridge.mjs": "bin/graphify-bridge.mjs",
+      "../ui/*": "ui/"
+    },
+    "android": {
+      "debugApplicationIdSuffix": ".debug"
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE0N0IyQ0FDMTJDRDBGQTUKUldTbEQ4MFNyQ3g3cEpZZWhjTXJYMkE3aUE1RWQ4SllqQjc1dGw1TnlkdFN4VWQvK05Ga1dIbWQK",
+      "endpoints": [
+        "https://github.com/mdostal/mnemosyne/releases/download/desktop-v{{current_version}}/{{target}}-{{arch}}.json"
+      ]
+    }
+  }
+}

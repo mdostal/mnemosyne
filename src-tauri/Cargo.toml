@@ -1,0 +1,36 @@
+[package]
+name = "mnemosyne-desktop"
+version = "0.1.0"
+description = "Mnemosyne Desktop -- Tauri shell wrapping Pantheon's Memory god dashboard/API service (src/server.mjs)"
+authors = ["mdostal"]
+license = "UNLICENSED"
+repository = "https://github.com/mdostal/mnemosyne"
+edition = "2021"
+rust-version = "1.77.2"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "mnemosyne_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.11.3", features = ["tray-icon"] }
+tauri-plugin-log = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-autostart = "2"
+# da-04-auto-updater-wiring: real-check gated entirely behind updater.rs's
+# own operator-toggle (default OFF) -- see updater.rs's own doc comment.
+tauri-plugin-updater = "2"
+
+[dev-dependencies]
+# "test" enables tauri::test's MockRuntime -- feature-unified onto the
+# [dependencies] tauri entry above for `cargo test` builds only, never
+# shipped in the real app binary. See tests/tray_window.rs.
+tauri = { version = "2.11.3", features = ["tray-icon", "test"] }

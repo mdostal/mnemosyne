@@ -184,6 +184,183 @@ small per-repo + shared memory bundles before a ticket, status-aware write-back
 after a run, and a cache-safe prompt layout that keeps the stable prefix
 separate from the variable ticket memory delta.
 
+## Desktop app (Tauri)
+
+A Tauri v2 project skeleton lives under [`src-tauri/`](./src-tauri/) — a
+packaged, long-running desktop app that wraps this service's own dashboard
+(`src/server.mjs` + `ui/`) with a native tray/window and auto-update,
+instead of a foreground terminal the operator must keep open.
+
+`da-01`/`da-02` landed the project scaffold and a vendored-Node sidecar
+(spawned with an explicit `PATH`/`SWARM_MEMORY_BIN`/`PORT` fix so it works
+identically whether launched from a terminal or Finder/Dock/launchd).
+`da-03` adds the tray/menu-bar shell itself: a native tray icon whose
+left-click shows/focuses a single dashboard window pointed at exactly
+`http://127.0.0.1:8477/ui` (never the bare `/` root, which content-negotiates
+differently) — the app launches with **zero windows**, tray-only, and the
+window is created lazily on first click, only after a bounded (never
+unbounded, never a single immediate attempt) poll of the sidecar's own
+`GET /healthz` confirms it's actually accepting connections. The tray's
+right-click menu carries a real, visible, always-toggleable "Launch at
+Login" item (`tauri-plugin-autostart`, a genuine `launchd` LaunchAgent under
+`~/Library/LaunchAgents/` — never a bespoke login-item hack) plus Quit.
+
+`da-04` wires the auto-updater mechanism (`tauri-plugin-updater`): a
+locally-generated Ed25519/minisign signing keypair (public half committed
+into `tauri.conf.json`'s `plugins.updater.pubkey`, private half living ONLY
+at `~/.tauri/mnemosyne-desktop.key` on the operator's own machine, supplied
+to a build via the `TAURI_SIGNING_PRIVATE_KEY` env var and never committed —
+`src-tauri/tests/no_private_key_committed.rs` is a real, re-runnable proof
+of that, not a policy statement), plus a GitHub-Releases-hosted update
+manifest (`plugins.updater.endpoints`, resolving on this machine to
+`https://github.com/mdostal/mnemosyne/releases/download/desktop-v<version>/darwin-aarch64.json`).
+
+**The updater is OPT-IN, off by default.** The tray menu gains a second
+checkbox, "Check for Updates," unchecked on a fresh install — the app makes
+**zero** update-check network requests until the operator explicitly turns
+it on (a real test proves this: `src-tauri/src/updater.rs`'s
+`maybe_trigger_update_check_fires_zero_times_when_disabled`). The choice
+persists across restarts via a marker file under the app's own
+`app_data_dir` (mirroring `da-03`'s own autostart-default marker). Once
+enabled: a check fires immediately (the moment it's toggled on) and again
+once per subsequent app launch while it stays enabled; toggling it back off
+stops all further checks — no periodic timer, no background polling.
+
+**Two things `da-04` explicitly does NOT achieve** (named directly, never
+left to silent omission): **(1) no notarization** — the shipped build
+remains unsigned/unnotarized (real Gatekeeper enforcement still applies —
+`da-05`'s own real findings below show this can be a silent App
+Translocation rather than always a blocking dialog, depending on the exact
+macOS version and quarantine state), and only a real, operator-owned Apple
+Developer Program membership + Developer ID Application certificate (which
+this agent cannot obtain) closes that gap; `da-05`'s own local "Open
+Anyway" workaround is the real staged path that doesn't wait on it. **(2)
+no live update-check has been exercised end-to-end** — no release has been
+published to `mdostal/mnemosyne`'s GitHub Releases yet, so a real check
+against a real published manifest is untested by this story, deferred
+honestly to `da-05` or a later release cycle. See `scripts/desktop-smoke.sh`
+for `da-01`'s own debug build-and-launch check,
+`scripts/da-05-dogfood-checklist.sh` for the full real release
+build-sign-launch-dogfood checklist, and `.pHive/epics/mnemosyne-desktop-app/`
+for the full epic.
+
+```bash
+npx tauri dev            # run the placeholder window
+npx tauri build --debug  # debug build; .app lands under src-tauri/target/debug/bundle/macos/
+
+# Producing a real .sig alongside the build (bundle.createUpdaterArtifacts
+# is already true in tauri.conf.json) requires the real private key, kept
+# OUTSIDE this repo:
+export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/mnemosyne-desktop.key)"
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""   # only if generated without a password
+npx tauri build --debug
+```
+
+### `da-05`: real local dogfood build, ad-hoc signed and launched
+
+`da-05` is this epic's own final story — the operator's own literal
+"release to dogfood" ask, made real. It builds and runs what `da-01`-`da-04`
+already produced (no application code changed):
+
+```bash
+cd src-tauri && cargo tauri build   # a REAL release build (not --debug) --
+                                     # .app lands under
+                                     # src-tauri/target/release/bundle/macos/
+codesign --sign - "src-tauri/target/release/bundle/macos/Mnemosyne Desktop.app"
+codesign -dv --verbose=4 "src-tauri/target/release/bundle/macos/Mnemosyne Desktop.app"
+```
+
+`scripts/da-05-dogfood-checklist.sh` is the literal, ordered, re-runnable
+checklist (build → sign → move-or-launch → first launch → Gatekeeper
+observation → override → dashboard load → second launch), each step naming
+its own real pass/fail signal.
+
+**Real findings from actually running this on the operator's own machine**
+(macOS 26.5.1), not assumed from generic docs:
+
+- Tauri's own bundler already ad-hoc-signs the `.app` during `cargo tauri
+  build` even with no `signingIdentity` configured (`flags=0x20002
+  (adhoc,linker-signed)`, confirmed via `codesign -dv` on the fresh output,
+  before any manual signing). The story's own named `codesign --sign -`
+  step (Tauri's own docs, `v2.tauri.app/distribute/sign/macos/`, confirmed
+  directly: "If you do not wish to provide an Apple-authenticated identity,
+  but still wish to sign your application, you can configure an _ad-hoc_
+  signature") re-signs the whole bundle explicitly and deterministically —
+  real, applies cleanly to a Tauri `.app` bundle specifically, not assumed
+  by analogy to the Node-SEA precedent alone.
+- A `.app` produced directly by a local `cargo tauri build` carries **no**
+  `com.apple.quarantine` extended attribute (only files that arrive via a
+  browser download, AirDrop, Mail, etc. get that xattr) — so a from-scratch
+  local build launched via Finder/`open` does not exercise Gatekeeper's
+  quarantine path at all on first launch, confirmed directly (`xattr -l`
+  empty, real Finder-AppleEvent launch succeeded immediately, tray icon
+  registered, no dialog).
+- To exercise the actual precondition a genuinely downloaded/distributed
+  copy would carry, a real quarantine xattr matching a Safari-download's
+  own shape was applied to a truly fresh, never-before-launched
+  `/Applications` copy (`xattr -w com.apple.quarantine "0083;<hex-time>;
+  Safari;<uuid>" ...`) — a standard, real technique that sets the identical
+  flag a browser sets, then observes the OS's own genuine response, not a
+  faked outcome. **On this exact machine and macOS version, no interactive
+  "Apple could not verify... malware" dialog appeared, on either a genuinely
+  fresh first launch or a second launch of the same quarantined copy.**
+  Direct, verbatim unified-system-log evidence explains why: macOS's own
+  `GKQuarantineResolver` (part of `CoreServicesUIAgent`) logged, both times,
+  `XProtect suppress first launch warning: true`. Instead, the OS silently
+  protected the launch via real App Translocation (the process's own
+  resolved path was `/private/var/folders/.../AppTranslocation/.../d/
+  Mnemosyne Desktop.app/...`, not `/Applications/...`, confirmed via
+  `pgrep`) — the quarantine xattr was **not** cleared by this, and every
+  subsequent launch of the quarantined copy kept re-translocating rather
+  than ever running from its real path. This is real, current Gatekeeper
+  behavior for an ad-hoc-signed (no Developer ID Team) local build on this
+  OS version — genuinely different from the classic blocking-dialog
+  behavior the epic's own research-brief.md/design-discussion.md assumed
+  from Tauri's generic docs, and worth re-checking on a different machine
+  or macOS version rather than assumed to transfer unchanged.
+- Because no dialog ever appeared on this run, the System Settings →
+  Privacy & Security → "Open Anyway" → password-confirm step (acceptance
+  criterion 2) was never triggered/available to actually perform on this
+  machine, for this build — not skipped by choice or by an inability to
+  type a password (though that inability is also real and independently
+  true: no agent should attempt to enter an operator's own login password,
+  and this environment has no Accessibility/screen-capture access to
+  verify GUI state directly either way — confirmed directly: a `System
+  Events` query failed with "osascript is not allowed assistive access").
+  The dogfood copy left in `/Applications` had its test-only quarantine
+  xattr stripped before being left for the operator, so it launches
+  cleanly from its real path today.
+- **A real, previously-undocumented gap found by actually running a
+  RELEASE build for the first time in this epic** (`da-02`/`da-03`/`da-04`
+  each only ever built and ran `--debug` builds, per their own commit
+  messages): `lib.rs`'s `tauri_plugin_log` file-logger registration is
+  gated behind `cfg!(debug_assertions)`, so a genuine release build (the
+  one this story's own "release to dogfood" ask actually requires) never
+  writes to `~/Library/Logs/com.mdostal.mnemosyne.desktop/Mnemosyne
+  Desktop.log` at all — `log::info!`/`log::warn!`/`log::error!` calls
+  (including the sidecar's own loud-failure spawn/PATH-fix/EADDRINUSE
+  logging da-02 built) go nowhere in this exact build configuration. Named
+  here rather than silently observed and dropped; out of this story's own
+  `files_to_modify: []` scope to fix (no application code changes), a real
+  candidate for a small follow-up story.
+- **Genuinely untestable on this machine, by design, per this story's own
+  acceptance criteria and the epic's own standing constraint**: this
+  machine's real, independently-running, long-lived production Mnemosyne
+  service already holds port 8477 (confirmed via `lsof`, same PID
+  throughout this story's work, never touched). This build's own sidecar
+  therefore cannot bind 8477 either, so the dashboard's own 10 panels
+  rendering inside the app's own window (acceptance criterion 3) could not
+  be observed live on this machine — the same, exact limitation `da-02`'s
+  and `da-03`'s own honest reports already named.
+- **Still genuinely open, restated explicitly per acceptance criterion 5,
+  never claimed resolved by this story**: whether an auto-installed update
+  (once a second real release exists) would re-trigger Gatekeeper's
+  quarantine flow on the replacement bundle (grill-record.md finding 3.2).
+  This story's own real observations above are about a FIRST build's first
+  and second manual launches only — no update cycle was exercised (none
+  can be, since only one release exists), so this question is not answered
+  by anything in this story and remains for a future release-cycle story.
+
 ## Install hooks
 
 `bin/mnemosyne-install-hooks` auto-wires `hooks/settings.hooks.json` into a

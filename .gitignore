@@ -3,6 +3,18 @@ node_modules/
 *.log
 __pycache__/
 
+# da-04-auto-updater-wiring: belt-and-suspenders against ever accidentally
+# staging the updater's own signing private key (which must live ONLY at
+# ~/.tauri/mnemosyne-desktop.key on the operator's own machine, referenced
+# at build time via the TAURI_SIGNING_PRIVATE_KEY env var -- see
+# src-tauri/src/updater.rs and src-tauri/tests/no_private_key_committed.rs).
+# This repo's own working tree should never contain a `.tauri/` directory or
+# a `*.key`-suffixed file at all; these patterns exist purely as a second,
+# independent line of defense on top of that discipline.
+.tauri/
+*.key
+*.key.pub
+
 # Playwright MCP tool session output (console logs, page snapshots) --
 # tooling byproduct from browser-based verification checks, never repo content.
 .playwright-mcp/
@@ -71,3 +83,5 @@ config/minerva.local.yaml
 !.pHive/epics/mnemosyne-agent-harness-install/**
 !.pHive/epics/mnemosyne-repo-onboarding/
 !.pHive/epics/mnemosyne-repo-onboarding/**
+!.pHive/epics/mnemosyne-desktop-app/
+!.pHive/epics/mnemosyne-desktop-app/**

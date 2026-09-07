@@ -1,0 +1,148 @@
+id: da-03-tray-shell-and-dashboard-window
+epic: mnemosyne-desktop-app
+title: Tray/menu-bar shell, dashboard window wiring, and launch-at-login
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [da-02-node-sidecar-packaging]
+
+description: |
+  The operator's own words ("run long term... a background... service, not
+  necessarily a full window a user stares at") made real: a native
+  tray/menu-bar icon (`TrayIconBuilder`, docs/research-brief.md §3.5)
+  whose click shows/focuses a window pointed at the sidecar's own real
+  dashboard — `http://127.0.0.1:8477/ui`, the EXISTING, already fully-built
+  10-panel dashboard (`ui/index.html`, confirmed via direct grep of its
+  `<section id=` elements: `connect-banner`, `liveliness`, `settings`,
+  `lanes`, `search`, `graph`, `operations`, `personas`,
+  `persona-layer-stack`, `memory-levels`). This story builds ZERO new UI —
+  it only wires an existing, unmodified page into a native window shell.
+
+  Real, previously-unnamed startup race condition closed explicitly
+  (docs/design-discussion.md §3.2, grill-record.md finding 2.2): the
+  window must not navigate to the dashboard URL until `da-02`'s own
+  sidecar has a real, live HTTP listener — this story polls the existing
+  `GET /healthz` liveness route (the cheapest correct endpoint for this,
+  distinct from the heavier `/health` Qdrant/embedder self-test) with a
+  bounded backoff before creating/navigating the window, rather than
+  surfacing a browser connection-refused error on a cold launch.
+
+  Launch-at-login, real and first-party (docs/research-brief.md §3.6):
+  `tauri-plugin-autostart` with `MacosLauncher::LaunchAgent` — a real
+  `launchd` LaunchAgent, never a bespoke login-item script — wired as a
+  real, visible, operator-toggleable tray-menu item (default on, matching
+  "run long term," but never a silent, un-toggleable forced background
+  service).
+
+acceptance_criteria:
+  - "Given `da-02`'s sidecar is spawned but its HTTP listener is not yet accepting connections, when the tray-icon-click handler runs, then it polls `GET http://127.0.0.1:8477/healthz` with a bounded backoff (not an unbounded retry, and not a single immediate attempt) before creating or navigating the dashboard window — a real, observable delay-then-load, never a connection-refused error surfaced to the operator on a cold launch"
+  - "Given the sidecar's `/healthz` responds 200, when the dashboard window opens, then its webview's loaded URL is exactly `http://127.0.0.1:8477/ui` (confirmed against `src/server.mjs`'s own real default PORT, line 86) — never a bare `http://127.0.0.1:8477/` (which content-negotiates differently for non-browser Accept headers per that file's own doc comment) and never a hard-coded port that could drift from whatever `da-02`'s sidecar Command actually sets via its own PORT env var"
+  - "Given the tray icon is left-clicked while the dashboard window is already open but not focused, when the click handler runs, then the existing window is shown/focused (`window.show()` + `window.set_focus()`) rather than a second window being created"
+  - "Given `tauri-plugin-autostart` is wired with `MacosLauncher::LaunchAgent`, when the operator toggles the tray menu's 'Launch at login' item, then `isEnabled()` reflects the real, current state after each toggle, and a real `launchd` LaunchAgent registration is created/removed accordingly — never a bespoke, hand-rolled login-item mechanism"
+  - "Given a reviewer diffs `src/`, `bin/`, and `ui/` against `dev`'s own tip after this story's implementation step, then the diff remains empty — this story adds Rust/Tauri-side window-and-tray code only, never a modification to the dashboard it displays"
+
+steps:
+  - id: research
+    description: >
+      Confirm the real, current `TrayIconBuilder`/`on_tray_icon_event`
+      API shape and the real, current `tauri-plugin-autostart` API shape
+      against Tauri v2's own live docs at build time (re-fetch, don't
+      trust research-brief.md's snapshot as still exactly current-syntax
+      by the time this story executes — Tauri's own release cadence,
+      observed directly in research-brief.md §3.1, makes minor API drift
+      a real possibility). Confirm the real PORT value `da-02`'s own
+      sidecar-spawn Command sets, rather than re-guessing 8477 as a
+      hard-coded literal independent of that story's own implementation.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Write a real (not mocked) integration check that starts the
+      packaged app, asserts the tray icon exists, simulates a click, and
+      asserts the resulting window's loaded URL is exactly
+      `http://127.0.0.1:<the real PORT>/ui` after the healthz-poll
+      completes — proving acceptance criteria 1-2 against real behavior,
+      not a stubbed sidecar.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Implement `TrayIconBuilder` + menu (Quit, Launch at login toggle),
+      the `/healthz`-poll-then-navigate startup sequence, the
+      show/focus-existing-window click behavior, and
+      `tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, ...)`
+      wiring with the real toggle bound to the tray menu item.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: >
+      Independently re-verify: launch the real packaged app, confirm the
+      real observable delay-then-load behavior on a cold launch (not
+      merely reading the code and assuming the poll logic is correct),
+      toggle launch-at-login and confirm a real LaunchAgent
+      plist appears/disappears under `~/Library/LaunchAgents/`.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-desktop-app.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: src/server.mjs
+      purpose: "Lines 1-56 (route table doc comment), line 86 (PORT default 8477), lines 102-121 (serveUiAsset — /ui, /ui/* static serving) — the exact real URL/route contract this story's window navigates to, unmodified."
+    - path: ui/index.html
+      purpose: "The real, already-built 10-panel dashboard this story's window displays unchanged — confirmed via direct grep of every `<section id=` element."
+  tech_stack:
+    tray_api: "tauri::tray::TrayIconBuilder (Tauri v2, tray-icon Cargo feature) — research-brief.md §3.5, re-confirmed against live docs by this story's own research step."
+    autostart_plugin: "tauri-plugin-autostart, MacosLauncher::LaunchAgent — research-brief.md §3.6, Rust >=1.77.2 required per its own docs."
+    dashboard_url: "http://127.0.0.1:<PORT>/ui, PORT sourced from da-02's own sidecar-spawn Command, default 8477 per src/server.mjs:86 — never independently hard-coded in this story's own code."
+
+files_to_modify:
+  - file: src-tauri/src/lib.rs
+    change: "Add TrayIconBuilder setup, tray menu (Quit + Launch at login toggle), on_tray_icon_event window show/focus handler, the healthz-poll-then-navigate sequence, and tauri-plugin-autostart initialization."
+  - file: src-tauri/Cargo.toml
+    change: "Add the tray-icon feature flag and the tauri-plugin-autostart dependency."
+  - file: src-tauri/capabilities/default.json
+    change: "Grant autostart:allow-enable/allow-disable/allow-is-enabled capability permissions."
+
+design_decisions:
+  - decision: "Poll GET /healthz with a bounded backoff before creating/navigating the dashboard window, rather than navigating immediately and letting the webview show its own connection-refused error."
+    rationale: "grill-record.md finding 2.2 — a real, previously-unnamed startup race condition between sidecar-listener-readiness and window navigation; the existing /healthz route (liveness-only, always 200 once the process is up) is the cheapest correct signal for this, distinct from the heavier /health self-test."
+  - decision: "Launch-at-login defaults to visible-and-toggleable in the tray menu, never a silent forced-on background service."
+    rationale: "The operator's own words ask for 'run long term,' not 'run invisibly with no way to turn it off' — a real, user-facing toggle keeps this an honest, inspectable default rather than an unaccountable background process."
+
+cross_cutting:
+  - concern: existing-infrastructure
+    action: "Zero changes to ui/index.html, ui/app.js, or ui/style.css — the dashboard displayed is byte-for-byte the same file src/server.mjs already serves today, verified by an explicit diff-against-dev acceptance criterion."
+  - concern: documentation
+    action: "README.md/SERVICE.md gain a short note describing the tray-icon/window-shell behavior once implemented, expanded fully in da-05's dogfood documentation."
+
+risks:
+  - severity: medium
+    description: "A cold-launch race condition (window navigates before the sidecar's HTTP listener is ready) would present as an intermittent, hard-to-reproduce blank-window bug if the healthz-poll design isn't implemented correctly."
+    mitigation: "Acceptance criterion 1 requires the poll-then-navigate sequence explicitly; the review step re-verifies by observing a real cold launch, not by reading the poll code and assuming it's correct."
+  - severity: low
+    description: "tauri-plugin-autostart's own API surface could have drifted between this planning pass's research-brief.md snapshot and this story's future execution."
+    mitigation: "Research step re-fetches the plugin's live docs rather than trusting the snapshot as still exactly current."
+
+references:
+  - path: .pHive/epics/mnemosyne-desktop-app/docs/design-discussion.md
+    relevant_excerpt: "§3.2 (startup race, grill 2.2), §3.3 (launch-at-login), §3.4 (bespoke-wiring check, grill 4.1)."
+  - path: .pHive/epics/mnemosyne-desktop-app/docs/grill-record.md
+    relevant_excerpt: "Finding 2.2 — the webview-navigation race condition, named and resolved with a concrete poll mechanism."
+
+metric:
+  applies: true
+  name: desktop_app.cold_launch_dashboard_load_success
+  direction: up
+  unit: boolean
+  baseline: null
+  target: 1
+  window: "every build, permanently"
+  source:
+    kind: manual
+    ref: "Reviewer's independently-observed cold Finder/Dock launch through to a fully-loaded dashboard window, every merge and every subsequent regression pass"
+  verify_at: integrate
+  owner: reviewer
