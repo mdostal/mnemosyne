@@ -439,6 +439,22 @@ silent omission:**
   story — deferred honestly to `da-05` or a later release cycle, never
   claimed as proven here.
 
+**`da-05` (real dogfood build, this epic's final story) — real findings,
+not assumed:** a genuine release `cargo tauri build` + `codesign --sign -`
++ real Finder-triggered launch on the operator's own machine (macOS 26.5.1)
+found that this specific ad-hoc-signed (no Developer ID Team) build did
+**not** show the classic blocking Gatekeeper dialog even with a real
+quarantine xattr applied to a fresh, never-launched copy — macOS's own
+`GKQuarantineResolver` logged `XProtect suppress first launch warning:
+true` and instead silently ran the app via App Translocation. See the
+README's own "`da-05`: real local dogfood build" section for the full,
+verbatim evidence and `scripts/da-05-dogfood-checklist.sh` for the
+re-runnable checklist. **Still genuinely open, restated here per this
+story's own acceptance criterion 5, never claimed resolved:** whether an
+auto-installed update would re-trigger Gatekeeper's quarantine flow on the
+replacement bundle (grill-record.md finding 3.2) — no second release
+exists yet to test this against.
+
 ## Deferred (honest scope — see idea-brief for the full design)
 
 - Obsidian **meta layer** + enterprise/project layer routing (recall/remember
