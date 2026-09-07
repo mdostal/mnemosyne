@@ -2,6 +2,40 @@
 
 All notable changes to Mnemosyne are documented here.
 
+## [0.16.0] — 2026-09-07
+
+`mnemosyne-desktop-app` epic (`da-01`..`da-05`) — Mnemosyne now ships as a
+real, dogfoodable macOS desktop app instead of a terminal-only service.
+Tauri v2 wraps the existing Node service as a vendored sidecar (a real
+PATH-inheritance gap between GUI launch and the shell wrapper is fixed
+explicitly, proven with an adversarial negative-control test), runs it from
+a tray icon with a lazily-created dashboard window and a toggleable
+launch-at-login, and offers an opt-in (default OFF) auto-updater wired to
+GitHub Releases, with the update-signing private key kept outside the repo.
+
+### Added
+
+- **Tauri v2 project scaffold** (`src-tauri/`, `da-01`) — `Mnemosyne
+  Desktop` app shell, `com.mdostal.mnemosyne.desktop` identifier.
+- **Node-runtime sidecar packaging** (`src-tauri/src/sidecar.rs`, `da-02`) —
+  a real, stripped, ad-hoc-signed Node binary bundled as a Tauri
+  `externalBin`, with an explicit PATH/`SWARM_MEMORY_BIN` fix so the
+  service launches correctly from Finder/Dock/launchd, not just a login
+  shell.
+- **Tray/menu-bar shell and dashboard window** (`src-tauri/src/tray.rs`,
+  `da-03`) — the app launches tray-only; the dashboard window
+  (`http://127.0.0.1:8477/ui`) is created lazily on first click, with a
+  bounded health-check backoff and a real toggleable "Launch at Login"
+  menu item (`tauri-plugin-autostart`).
+- **Auto-update wiring, opt-in and default OFF** (`src-tauri/src/updater.rs`,
+  `da-04`) — `tauri-plugin-updater` against a GitHub Releases manifest;
+  every update-check call site routes through a single enable/disable gate
+  that defaults to disabled until the operator opts in.
+- **Local dogfood build** (`da-05`) — a real `cargo tauri build --release`,
+  ad-hoc signed and verified, with a literal re-runnable checklist script
+  (`scripts/da-05-dogfood-checklist.sh`) covering build → sign → launch →
+  Gatekeeper observation → dashboard load.
+
 ## [0.15.0] — 2026-08-19
 
 `mnemosyne-repo-onboarding` epic (`ro-01`..`ro-13`) — Mnemosyne can now
