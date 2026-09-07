@@ -1,7 +1,7 @@
 id: da-01-tauri-project-scaffolding
 epic: mnemosyne-desktop-app
 title: Tauri v2 project scaffolding — src-tauri/ skeleton, no sidecar yet
-status: pending
+status: complete
 complexity: medium
 methodology: tdd
 depends_on: []
@@ -94,9 +94,10 @@ context:
     - path: package.json
       purpose: "engines.node: >=22, confirms the Node baseline the desktop build environment must satisfy; no `bin`/`scripts` entries added by this story — the Tauri project lives entirely under src-tauri/, a sibling build surface, not an npm-published artifact of this package."
   tech_stack:
-    rust_toolchain: "Already installed (~/.cargo/bin/cargo, ~/.cargo/bin/rustc) — confirmed research-brief.md §1; exact rustc version re-confirmed by this story's own research step."
-    tauri_cli_version: "UNCONFIRMED at planning time (v2.11.5 observed 2026-09-06 via GitHub releases — re-check, don't hard-pin) — this story's own first research task."
-    target_triple: "UNCONFIRMED — this story's own research step runs `rustc --print host-tuple` and records the real value for da-02 to consume."
+    rust_toolchain: "CONFIRMED this pass: rustc 1.97.1 (8bab26f4f 2026-07-14), cargo 1.97.1 (c980f4866 2026-06-30) — both present at ~/.cargo/bin/."
+    tauri_cli_version: "CONFIRMED this pass: @tauri-apps/cli 2.11.4 is npm's current `latest` dist-tag (re-checked via `npm view @tauri-apps/cli version`/`dist-tags` — supersedes research-brief.md's v2.11.5 observation, which was the `tauri` Rust crate's tag on crates.io/GitHub, not the npm CLI package; crates.io's `tauri` crate itself IS at 2.11.5 (`default_version`/`max_version` both 2.11.5), and that's exactly the version Cargo resolved into src-tauri/Cargo.lock for the `tauri` dependency — a real, minor JS-CLI-vs-Rust-crate version-numbering divergence within the same Tauri v2 release train, not a stale assumption). Installed via `npm install --save-dev @tauri-apps/cli@2.11.4` per this story's own acceptance criteria (real current documented method for an existing npm project, confirmed against v2.tauri.app's own getting-started docs)."
+    target_triple: "CONFIRMED this pass: `rustc --print host-tuple` → `aarch64-apple-darwin` on this machine — the exact value da-02's own sidecar-binary-naming step consumes directly (e.g. `binaries/mnemosyne-node-aarch64-apple-darwin`)."
+    node_version: "CONFIRMED this pass: v24.18.1 (unchanged from research-brief.md), satisfies package.json's `engines.node: >=22`."
 
 files_to_modify:
   - file: src-tauri/Cargo.toml

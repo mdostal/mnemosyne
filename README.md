@@ -184,6 +184,23 @@ small per-repo + shared memory bundles before a ticket, status-aware write-back
 after a run, and a cache-safe prompt layout that keeps the stable prefix
 separate from the variable ticket memory delta.
 
+## Desktop app (Tauri)
+
+A Tauri v2 project skeleton lives under [`src-tauri/`](./src-tauri/) — the
+first step (`da-01`) toward a packaged, long-running desktop app that wraps
+this service's own dashboard (`src/server.mjs` + `ui/`) with a native
+tray/window and auto-update, instead of a foreground terminal the operator
+must keep open. This scaffold ships a placeholder window only — no
+sidecar, tray, updater, or real dashboard wiring yet (those land in
+`da-02`..`da-05`). See `scripts/desktop-smoke.sh` for the real
+build-and-launch check, and `.pHive/epics/mnemosyne-desktop-app/` for the
+full epic.
+
+```bash
+npx tauri dev            # run the placeholder window
+npx tauri build --debug  # debug build; .app lands under src-tauri/target/debug/bundle/macos/
+```
+
 ## Install hooks
 
 `bin/mnemosyne-install-hooks` auto-wires `hooks/settings.hooks.json` into a

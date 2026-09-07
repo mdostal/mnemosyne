@@ -401,6 +401,15 @@ npm run test:e2e
 - No secrets printed. No Don-stack / multica-daemon / auriga touched.
 - Zero third-party deps — runs on the hive's Node with no install step.
 
+## Desktop app (Tauri)
+
+A Tauri v2 skeleton under [`src-tauri/`](./src-tauri/) is the first step
+toward packaging this service as a long-running desktop app (tray icon,
+window, auto-update) instead of a foreground terminal process. Placeholder
+window only so far, no sidecar/tray/updater/dashboard wiring yet — see
+`.pHive/epics/mnemosyne-desktop-app/` and the README's own "Desktop app
+(Tauri)" section.
+
 ## Deferred (honest scope — see idea-brief for the full design)
 
 - Obsidian **meta layer** + enterprise/project layer routing (recall/remember

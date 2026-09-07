@@ -67,6 +67,7 @@
     "test:onboard-smoke-mode-b": "node test/onboard-smoke-mode-b.mjs"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^20.19.43",
     "ajv": "^8.20.0",
