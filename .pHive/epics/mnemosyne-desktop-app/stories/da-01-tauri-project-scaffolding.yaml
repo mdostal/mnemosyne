@@ -1,0 +1,149 @@
+id: da-01-tauri-project-scaffolding
+epic: mnemosyne-desktop-app
+title: Tauri v2 project scaffolding — src-tauri/ skeleton, no sidecar yet
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: []
+
+description: |
+  The true root of this epic's dependency graph: a real, buildable Tauri
+  v2 project skeleton in `src-tauri/` with a placeholder webview window
+  (no sidecar, no tray, no updater — those are `da-02`/`da-03`/`da-04`'s
+  own concerns), proving `cargo tauri dev` and a debug `cargo tauri build`
+  actually run end-to-end on this real machine before any real
+  sidecar/tray/updater complexity is added on top.
+
+  Real environment facts this story's own first step re-confirms (never
+  assumed stale from research-brief.md, since a build pass may run days
+  or weeks after this planning pass): `~/.cargo/bin/cargo`/`rustc`
+  presence, the real installed Rust toolchain version
+  (`rustc --version`), the real current Tauri CLI version available via
+  `npm view @tauri-apps/cli version` (research-brief.md §3.1 observed
+  `v2.11.5` as the latest tagged release on 2026-09-06 — this story's own
+  research step re-checks rather than hard-coding that number), and the
+  real target triple this machine builds for (`rustc --print host-tuple`
+  — research-brief.md's own reconnaissance expects `aarch64-apple-darwin`
+  but this story confirms it directly rather than assuming).
+
+  Scope, explicitly bounded: `tauri.conf.json`'s `bundle.externalBin`,
+  `bundle.resources`, and `plugins.updater` keys are NOT set by this
+  story — they're `da-02`/`da-04`'s own concerns. This story's window
+  loads a trivial placeholder page (e.g. Tauri's own default
+  `index.html` scaffold), never the real dashboard — that wiring is
+  `da-03`'s concern, which needs a real sidecar (`da-02`) to point at
+  first.
+
+acceptance_criteria:
+  - "Given the Tauri CLI is not yet installed on this machine (confirmed in research-brief.md §1), when this story's research step completes, then it has installed the CLI via the real, current documented method (`npm install --save-dev @tauri-apps/cli` or `cargo install tauri-cli`, whichever this story's own research step confirms is Tauri v2's own current recommended path) and records the exact version installed"
+  - "Given a fresh `src-tauri/` directory does not exist in this repo (confirmed in research-brief.md §1), when `tauri init` (or the equivalent current scaffolding command) completes, then `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, and `src-tauri/src/lib.rs`/`main.rs` all exist, with `tauri.conf.json`'s `productName`/`identifier` fields set to real, Mnemosyne-specific values (never left as generic scaffold placeholders)"
+  - "Given the scaffolded project, when `cargo tauri dev` is run on this real machine, then a real window opens showing the scaffold's placeholder page with no crash and no unresolved dependency error"
+  - "Given the scaffolded project, when a debug `cargo tauri build` is run, then a real `.app` bundle is produced under `src-tauri/target/` with no build error — this is the concrete, re-runnable proof the Rust/Cargo/Tauri toolchain genuinely works end-to-end on this machine before any sidecar/tray/updater complexity is layered on"
+  - "Given the real target triple this machine builds for, when this story's research step runs `rustc --print host-tuple`, then the exact returned value is recorded in this story's own `context.tech_stack` (or an equivalent build note) for `da-02`'s own sidecar-binary-naming step to consume directly, never re-guessed"
+
+steps:
+  - id: research
+    description: >
+      Confirm the real, current Tauri v2 CLI install method and version
+      (`npm view @tauri-apps/cli version`, or Tauri's own current
+      getting-started docs at v2.tauri.app if the npm registry alone is
+      ambiguous — re-fetch directly, don't trust research-brief.md's
+      `v2.11.5` as still current by the time this story executes). Confirm
+      `rustc --print host-tuple`'s real output on this machine. Confirm
+      the real Node major version this machine's Tauri build environment
+      will target (research-brief.md's `v24.18.1`, `engines.node: ">=22"`
+      — re-check, don't assume unchanged).
+    agent: researcher
+  - id: test-spec
+    description: >
+      Define this story's own smoke-test contract before scaffolding: a
+      real (not mocked) build-and-launch check script
+      (`scripts/desktop-smoke.sh` or equivalent) that runs `cargo tauri
+      build` and asserts a `.app` bundle exists afterward with a non-zero
+      size — the concrete, re-runnable proof acceptance criterion 4
+      requires, written before the scaffold exists so it can fail
+      honestly first.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Run the real Tauri CLI scaffolding command, set real
+      `productName`/`identifier` values (never generic placeholders),
+      confirm the placeholder window opens via `cargo tauri dev`, and
+      leave `bundle.externalBin`/`bundle.resources`/`plugins.updater`
+      entirely unset (out of this story's scope by design).
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: >
+      Independently re-run `cargo tauri dev` and the debug `cargo tauri
+      build` from a clean shell (not trusting the implementer's own
+      "it worked for me" report) — mirrors `ro-06`'s own
+      independent-reviewer-re-verification discipline, applied here to a
+      build/toolchain proof rather than a Qdrant-safety proof.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-desktop-app.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: package.json
+      purpose: "engines.node: >=22, confirms the Node baseline the desktop build environment must satisfy; no `bin`/`scripts` entries added by this story — the Tauri project lives entirely under src-tauri/, a sibling build surface, not an npm-published artifact of this package."
+  tech_stack:
+    rust_toolchain: "Already installed (~/.cargo/bin/cargo, ~/.cargo/bin/rustc) — confirmed research-brief.md §1; exact rustc version re-confirmed by this story's own research step."
+    tauri_cli_version: "UNCONFIRMED at planning time (v2.11.5 observed 2026-09-06 via GitHub releases — re-check, don't hard-pin) — this story's own first research task."
+    target_triple: "UNCONFIRMED — this story's own research step runs `rustc --print host-tuple` and records the real value for da-02 to consume."
+
+files_to_modify:
+  - file: src-tauri/Cargo.toml
+    change: "New file: Tauri v2 project manifest, generated by the real scaffolding command."
+  - file: src-tauri/tauri.conf.json
+    change: "New file: base Tauri config with real productName/identifier — bundle.externalBin/resources/plugins.updater left unset by design."
+  - file: src-tauri/src/lib.rs
+    change: "New file: scaffold entry point (or main.rs, whichever the real scaffolding command produces) with a single placeholder window, no sidecar/tray/updater code."
+  - file: scripts/desktop-smoke.sh
+    change: "New file: real build-and-launch smoke check per this story's own test-spec step."
+
+design_decisions:
+  - decision: "This story's own research step re-confirms the real, current Tauri CLI version and install method rather than trusting research-brief.md's observed v2.11.5 as still current."
+    rationale: "This is a planning-only pass; a future build pass may execute days or weeks later, and Tauri's own release cadence (multiple patch releases within days, observed directly in research-brief.md §3.1) makes a hard-pinned version number stale risk real, not hypothetical."
+  - decision: "bundle.externalBin, bundle.resources, and plugins.updater are explicitly left unset by this story, deferred to da-02/da-04."
+    rationale: "Keeps this story's own blast radius to 'does the toolchain work at all' — isolating the sidecar-packaging decision's own real risk (da-02) from the scaffolding step's much lower, purely-mechanical risk."
+
+cross_cutting:
+  - concern: documentation
+    action: "README.md/SERVICE.md gain a short 'desktop app (Tauri)' pointer once this scaffold exists, expanded fully by da-05's own dogfood-build documentation."
+  - concern: existing-infrastructure
+    action: "Zero files under src/, bin/, or ui/ are touched by this story — the Tauri project is purely additive, under a new src-tauri/ directory."
+
+risks:
+  - severity: medium
+    description: "The Tauri CLI's own current version/install method may have changed between this planning pass's research (2026-09-06) and this story's own future execution."
+    mitigation: "Research step re-fetches/re-checks directly rather than trusting a hard-pinned version from research-brief.md."
+  - severity: low
+    description: "A first-time Rust/Cargo build on this machine could surface toolchain gaps (missing Xcode command-line tools, missing linker) not visible from `cargo`/`rustc` binary presence alone."
+    mitigation: "The debug `cargo tauri build` acceptance criterion is a real, concrete proof this gap doesn't exist silently — never assumed solved just because the cargo/rustc binaries are present."
+
+references:
+  - path: .pHive/epics/mnemosyne-desktop-app/docs/research-brief.md
+    relevant_excerpt: "§1 — real environment facts (Rust/Cargo present, Tauri CLI absent, no src-tauri/ anywhere); §3.1 — Tauri v2.11.5 confirmed current major/latest version as of this pass."
+  - path: .pHive/epics/mnemosyne-repo-onboarding/stories/ro-06-collection-creation-and-scope-mapping.yaml
+    relevant_excerpt: "Schema and independent-reviewer-re-verification precedent this story's own review step follows."
+
+metric:
+  applies: true
+  name: desktop_app.scaffold_build_success
+  direction: up
+  unit: boolean
+  baseline: null
+  target: 1
+  window: "every build, permanently"
+  source:
+    kind: manual
+    ref: "Reviewer's independently-run `cargo tauri dev` + debug `cargo tauri build`, every merge and every subsequent regression pass"
+  verify_at: integrate
+  owner: reviewer

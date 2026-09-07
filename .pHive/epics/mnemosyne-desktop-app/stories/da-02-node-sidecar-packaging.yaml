@@ -1,0 +1,176 @@
+id: da-02-node-sidecar-packaging
+epic: mnemosyne-desktop-app
+title: Node-runtime sidecar packaging — the epic's single highest-risk story
+status: pending
+complexity: high
+methodology: tdd
+depends_on: [da-01-tauri-project-scaffolding]
+
+description: |
+  The one genuinely new, highest-blast-radius decision in this epic,
+  deliberately isolated into its own story with its own explicit proof —
+  mirroring `ro-06`'s own precedent of isolating this repo's single
+  riskiest action into a dedicated story with its own safety proof.
+
+  Real decision (docs/design-discussion.md §1, re-derived in grill-record.md
+  finding 5.2 from the real dependency graph, not the task's original
+  assumed one): bundle a real, unmodified platform `node` executable as a
+  Tauri `externalBin` sidecar (renamed per Tauri's own `-$TARGET_TRIPLE`
+  convention), and ship `src/server.mjs`'s own already-shipped `.mjs`
+  files plus `ui/*` as Tauri `resources` — never a Node
+  Single-Executable-Application (SEA) compile. Confirmed directly
+  (research-brief.md §2.2): `src/server.mjs`'s entire transitive import
+  graph (`engine.mjs`, `flight-status.mjs`, `status-filter.mjs`,
+  `graphify-bridge.mjs`, `layers/{meta,enterprise,project,code-graph}.mjs`,
+  `merge.mjs`) has ZERO npm-package dependencies — only Node builtins and
+  local relative imports — so this story ships zero `node_modules`, and
+  needs zero native-addon compatibility handling.
+
+  Two real, previously-invisible gaps this story's own acceptance
+  criteria close explicitly, not silently:
+
+  1. **The PATH gap (docs/design-discussion.md §1.2, grill-record.md
+     finding 2.1):** `src/engine.mjs` resolves `swarm-memory` via `$PATH`
+     (`execFileP(process.env.SWARM_MEMORY_BIN || "swarm-memory", ...)`).
+     Confirmed directly on this machine: `swarm-memory` resolves to
+     `~/.local/bin/swarm-memory`, exactly the directory `bin/mnemosyne`'s
+     own bash wrapper explicitly prepends to `$PATH`
+     (`export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"`) —
+     precisely because a GUI-launched process (which is exactly how a
+     packaged Tauri app's own sidecar is launched, bypassing that bash
+     wrapper entirely) does not inherit that PATH augmentation by
+     default. This story's sidecar-spawn code must set the equivalent
+     PATH (or an explicit `SWARM_MEMORY_BIN` absolute path) on the
+     sidecar `Command`'s own environment.
+  2. **The readiness gap (docs/design-discussion.md §3.2, grill-record.md
+     finding 2.2):** this story's own acceptance criteria require a real,
+     working `GET /healthz` response from the spawned sidecar before
+     `da-03`'s window-wiring story can build on it — this story owns
+     proving the sidecar reaches a servable state at all, `da-03` owns
+     the poll-before-navigate UI behavior built on top of it.
+
+  Explicitly, this story modifies zero lines of `src/`, `bin/`, or `ui/`
+  — it spawns the exact, already-shipped `src/server.mjs` unchanged
+  (docs/design-discussion.md §3.4, grill-record.md finding 4.1).
+
+acceptance_criteria:
+  - "Given `rustc --print host-tuple`'s real output (confirmed by da-01's own research step, e.g. `aarch64-apple-darwin`), when the sidecar binary is named, then it exactly matches Tauri's own `-$TARGET_TRIPLE` externalBin naming convention — never a guessed or hard-coded triple"
+  - "Given `src-tauri/binaries/mnemosyne-node-<TARGET_TRIPLE>` is a real, unmodified platform `node` executable satisfying `package.json`'s `engines.node: \">=22\"`, when `tauri.conf.json`'s `bundle.externalBin` and `bundle.resources` are configured, then a debug `cargo tauri build` (per da-01's own smoke check) produces a bundle containing both the renamed node binary AND `src/*.mjs`/`bin/graphify-bridge.mjs`/`ui/*` under the bundle's real resource directory"
+  - "Given the sidecar is spawned via `app.shell().sidecar(\"mnemosyne-node\")` with args pointing at the bundled `src/server.mjs`'s real resolved resource path, when the packaged app is launched, then `GET http://127.0.0.1:8477/healthz` returns 200 within a bounded real wait (the readiness gap, closed for real, not merely documented as a future concern)"
+  - "Given this story's sidecar-spawn `Command` sets an explicit PATH (or `SWARM_MEMORY_BIN`) environment value reproducing `bin/mnemosyne`'s own `/opt/homebrew/bin:$HOME/.local/bin` augmentation, when the packaged app is launched from Finder or the Dock (NEVER only from an interactive terminal/`cargo tauri dev`, which would silently inherit a login shell's own PATH and hide this exact bug), then `GET http://127.0.0.1:8477/health` reports `swarm-memory` reachable (not an `ENOENT`/subprocess-not-found degradation) — this is the story's own single most load-bearing acceptance criterion, given grill-record.md finding 2.1's own explicit warning that a terminal-only test would hide this bug"
+  - "Given the bundled `.mjs` files are shipped as Tauri resources rather than modified in place, when a reviewer diffs `src/server.mjs`, `src/engine.mjs`, and every file under `src/layers/`, `bin/graphify-bridge.mjs`, and `ui/` against `dev`'s own tip, then the diff is empty — zero application-code changes, proving the 'compose, don't fork' discipline (grill-record.md finding 4.1) held in the real implementation, not merely in the design doc"
+
+steps:
+  - id: research
+    description: >
+      Confirm the real target triple from da-01's own recorded research
+      output. Confirm the exact real byte size and SHA of the platform
+      `node` binary this story vendors (from the operator's own installed
+      Node v24.18.1, or an official nodejs.org download for the confirmed
+      target triple — decide and document which, don't leave it
+      ambiguous). Re-confirm, by direct shell command on the real machine,
+      that `swarm-memory` still resolves via `~/.local/bin/swarm-memory`
+      (research-brief.md §2.4) before hard-coding that path into any
+      sidecar environment setup — a stale assumption here would silently
+      reintroduce the exact bug this story exists to close.
+    agent: researcher
+  - id: test-spec
+    description: >
+      Write a real (not mocked) integration check: spawn the sidecar
+      exactly as the Rust `Command` setup will (same args, same
+      explicit-PATH environment), from a subprocess whose OWN inherited
+      environment has been deliberately stripped down to a minimal
+      Finder/Dock-equivalent PATH (never the full interactive-shell PATH)
+      — the only way to genuinely exercise acceptance criterion 4 rather
+      than accidentally pass it by inheriting a rich terminal PATH.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Configure `tauri.conf.json`'s `bundle.externalBin`/`bundle.resources`,
+      vendor the real node binary under `src-tauri/binaries/`, write the
+      Rust sidecar-spawn code (`app.shell().sidecar(...).env("PATH", ...)
+      .args([...]).spawn()`) with the PATH fix and PORT env var wired,
+      and confirm zero changes to any file under `src/`, `bin/`, or
+      `ui/`.
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: >
+      Independently re-verify acceptance criterion 4 for real — actually
+      launch the packaged `.app` from Finder (double-click, not a
+      terminal), never trusting the implementer's own self-report that
+      "it works," mirroring `ro-06`'s own independent-reviewer discipline.
+      Confirm the `src/`/`bin/`/`ui/` diff-against-`dev` is genuinely
+      empty.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: Commit and push to feat/mnemosyne-desktop-app.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: src/server.mjs
+      purpose: "The exact, unmodified file this story's sidecar spawns — port 8477 default (line 86), serves /ui and the JSON/health routes; zero changes made to it by this story."
+    - path: src/engine.mjs
+      purpose: "Resolves `swarm-memory` via `process.env.SWARM_MEMORY_BIN || \"swarm-memory\"` and `$PATH` (execFileP) — the exact real code path this story's PATH-fix acceptance criterion targets."
+    - path: bin/mnemosyne
+      purpose: "The existing bash wrapper's own `export PATH=\"/opt/homebrew/bin:$HOME/.local/bin:$PATH\"` line — the real precedent this story's sidecar-spawn environment setup must reproduce, since the sidecar bypasses this wrapper entirely."
+  tech_stack:
+    node_runtime_source: "UNCONFIRMED — this story's own research step decides between vendoring the operator's own installed Node v24.18.1 binary or downloading an official nodejs.org build for the confirmed target triple, and documents which."
+    swarm_memory_resolved_path: "~/.local/bin/swarm-memory (a pipx-venv symlink), confirmed on this machine 2026-09-06 — this story's research step re-confirms rather than assuming unchanged."
+
+files_to_modify:
+  - file: src-tauri/tauri.conf.json
+    change: "Add bundle.externalBin and bundle.resources entries for the sidecar binary and the app's own .mjs/ui files."
+  - file: src-tauri/binaries/mnemosyne-node-<TARGET_TRIPLE>
+    change: "New file: a real, unmodified platform node executable, renamed per Tauri's externalBin convention."
+  - file: src-tauri/src/lib.rs
+    change: "Add the sidecar-spawn setup code (shell().sidecar(...), explicit PATH/PORT env, args pointing at the bundled server.mjs resource path)."
+
+design_decisions:
+  - decision: "Bundle a real Node runtime binary rather than compiling a Node SEA binary."
+    rationale: "Re-derived in grill-record.md finding 5.2 from the real, hand-traced dependency graph (zero npm packages, so the usual native-addon-compatibility risk and the usual SEA node_modules-avoidance size benefit both fail to apply here) — not a rubber-stamp of the task's original framing."
+  - decision: "The sidecar-spawn Command explicitly sets PATH (or SWARM_MEMORY_BIN) rather than relying on inherited environment."
+    rationale: "grill-record.md finding 2.1 — a Tauri sidecar bypasses bin/mnemosyne's own bash wrapper entirely, which is the ONLY place in this codebase today that fixes this exact PATH-inheritance gap for GUI-launched processes."
+  - decision: "Zero application code under src/, bin/, or ui/ is modified by this story."
+    rationale: "grill-record.md finding 4.1 — proves the sidecar is a packaging layer around the existing, unmodified service boundary, never a second, parallel memory-access mechanism."
+
+cross_cutting:
+  - concern: loud-failure
+    action: "If the sidecar fails to reach swarm-memory (PATH misconfiguration or otherwise), the existing /health degradation reporting surfaces this unchanged — this story adds no new silent-failure path around sidecar startup itself (a spawn failure is surfaced, not swallowed)."
+  - concern: existing-infrastructure
+    action: "Zero changes to src/server.mjs, src/engine.mjs, or any file under src/layers/ — verified by an explicit diff-against-dev acceptance criterion, not just a policy statement."
+
+risks:
+  - severity: critical
+    description: "The PATH-inheritance gap (grill-record.md finding 2.1) is real and was previously invisible to any test run only from an interactive terminal — the single highest-blast-radius risk in this story, and arguably this whole epic, since a silent failure here would surface only after the operator has already dogfooded a build that appeared to work in dev mode."
+    mitigation: "Acceptance criterion 4 explicitly requires a Finder/Dock launch, never a terminal-only test; the test-spec step's own subprocess environment is deliberately stripped to a minimal PATH to force this bug to surface in CI/pre-merge rather than in the operator's own hands."
+  - severity: medium
+    description: "Vendoring the wrong node binary (wrong architecture, or a binary that doesn't match package.json's engines.node >=22 constraint) would produce a sidecar that fails to start silently or loudly depending on how it fails."
+    mitigation: "Research step confirms the real target triple and the real vendored binary's own reported version before implementation proceeds."
+
+references:
+  - path: .pHive/epics/mnemosyne-desktop-app/docs/design-discussion.md
+    relevant_excerpt: "§1 (sidecar decision, re-derived per grill 5.2), §1.2 (PATH gap, grill 2.1), §3.4 (bespoke-wiring check, grill 4.1)."
+  - path: .pHive/epics/mnemosyne-desktop-app/docs/grill-record.md
+    relevant_excerpt: "Finding 2.1 — the PATH-inheritance gap; Finding 5.2 — the sidecar decision re-derived from real numbers, not the task's original framing."
+  - path: .pHive/epics/mnemosyne-repo-onboarding/stories/ro-06-collection-creation-and-scope-mapping.yaml
+    relevant_excerpt: "The precedent for isolating this epic's single highest-blast-radius action into its own story with its own independent-reviewer-re-verified safety proof."
+
+metric:
+  applies: true
+  name: desktop_app.sidecar_finder_launch_health_success
+  direction: up
+  unit: boolean
+  baseline: null
+  target: 1
+  window: "every build, permanently"
+  source:
+    kind: manual
+    ref: "Reviewer's independently-run Finder/Dock launch + GET /health check against the real packaged .app, every merge and every subsequent regression pass"
+  verify_at: integrate
+  owner: reviewer

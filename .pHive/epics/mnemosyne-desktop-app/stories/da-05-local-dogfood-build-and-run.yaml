@@ -1,0 +1,147 @@
+id: da-05-local-dogfood-build-and-run
+epic: mnemosyne-desktop-app
+title: Local dogfood build + run — the operator's own "release to dogfood" ask, made real and verifiable
+status: pending
+complexity: medium
+methodology: tdd
+depends_on: [da-02-node-sidecar-packaging, da-03-tray-shell-and-dashboard-window, da-04-auto-updater-wiring]
+
+description: |
+  The operator's own explicit words, made real as their own distinct,
+  concrete, independently-verifiable story rather than folded silently
+  into "the build works" claims from earlier stories: "we need to have it
+  release to dogfood." This story is the first point in this epic where
+  every earlier piece (sidecar, tray/window, updater wiring) is built
+  together into one real artifact and actually run the way the operator
+  will really run it — launched from Finder/the Dock, not from an
+  interactive dev shell.
+
+  Real, named, operator-owned prerequisite this story works around, not
+  waits on (docs/design-discussion.md §2.3, grill-record.md finding 5.1):
+  the built `.app` is unsigned/unnotarized (macOS notarization requires a
+  paid Apple Developer Program membership this agent cannot obtain). This
+  story applies the real, Apple-documented local Gatekeeper override
+  (System Settings → Privacy & Security → "Open Anyway," quoted directly
+  from `support.apple.com` in research-brief.md §3.8) — a real, one-time-
+  per-build, operator's-own-machine-only workaround, never a claim that
+  this makes the build broadly distributable.
+
+  Real, named, genuinely open empirical question this story is the first
+  chance to observe (docs/design-discussion.md §2.2, grill-record.md
+  finding 3.2): whether an auto-installed update (once a second real
+  release exists, out of this story's own scope) would re-trigger
+  Gatekeeper's quarantine flow on the replacement bundle. This story's own
+  acceptance criteria do NOT require exercising a live update cycle — that
+  needs a second published release, genuinely out of scope for a FIRST
+  dogfood build — but it does require this open question to be restated
+  explicitly in this story's own completion report, never silently
+  dropped now that a working build exists.
+
+acceptance_criteria:
+  - "Given `da-02`, `da-03`, and `da-04` are all complete, when a real (debug or ad-hoc-signed, `codesign --sign -`) release build is produced via `cargo tauri build` on this operator's own machine, then a real `.app` bundle exists under `src-tauri/target/release/bundle/macos/` (or the real path this machine's build actually produces — confirmed directly, not assumed from a generic Tauri doc example)"
+  - "Given the built `.app` is unsigned/unnotarized, when it is first launched (double-clicked from Finder, or opened from the Dock after being placed in `/Applications`), then macOS blocks it with the real, documented Gatekeeper warning, and applying the real, Apple-documented override (System Settings → Privacy & Security → 'Open Anyway' → confirm password) allows it to launch — this exact sequence is performed for real on this machine, not merely described"
+  - "Given the app has launched successfully once, when the operator clicks the tray/menu-bar icon, then the real dashboard (`ui/index.html`'s own 10 panels, unchanged) loads and is visibly interactive within the bounded startup delay `da-03`'s own healthz-poll allows for — the operator can see real liveliness/settings/lanes/search/graph/operations/personas/memory-levels panel content, not a blank or error page"
+  - "Given the app is quit and relaunched a second time (from Finder/the Dock again, not a terminal), when it starts, then it no longer shows the first-launch Gatekeeper warning (per Apple's own docs: 'you can open it in the future by double-clicking it, just as you can for any authorized app') — confirming the override was real and persistent for this specific build, not a one-shot fluke"
+  - "Given no live update cycle is exercised by this story (no second release exists yet), when this story's own completion report is written, then it explicitly restates grill-record.md finding 3.2's own open question (does an auto-installed update re-trigger Gatekeeper quarantine on the replacement bundle) as still genuinely open — never silently dropped now that a first working build exists, and never claimed resolved by this story's own real, but narrower, first-launch observation"
+
+steps:
+  - id: research
+    description: >
+      Confirm the real, current `cargo tauri build` invocation for a
+      release (vs. debug) build, and the real, current recommended
+      ad-hoc-signing step for a local-only unsigned/unnotarized build
+      (`codesign --sign -`, per research-brief.md §4's own Node SEA
+      section citing the same command for a different artifact type —
+      confirm it applies identically to a Tauri `.app` bundle via Tauri's
+      own docs, don't assume by analogy alone).
+    agent: researcher
+  - id: test-spec
+    description: >
+      Define this story's own completion checklist as a literal, ordered,
+      re-runnable script the operator (or a future re-execution of this
+      story) can follow exactly: build → move to /Applications (or launch
+      in place) → first launch → Gatekeeper block observed → System
+      Settings override applied → dashboard visibly loads → quit → second
+      launch → no Gatekeeper block on the second launch. Each step names
+      its own real, observable pass/fail signal.
+    agent: tester
+    depends_on: [research]
+  - id: implement
+    description: >
+      Run the real release build, perform the real ad-hoc signing step,
+      and produce the real, distributable-to-this-operator-only `.app`
+      artifact — no application code changes (this story builds and runs
+      what `da-01`-`da-04` already produced).
+    agent: developer
+    depends_on: [test-spec]
+  - id: review
+    description: >
+      Independently re-run the full checklist from `test-spec` end to
+      end, on the real operator's own machine, narrating each real,
+      observed outcome (including the Gatekeeper block, the override, and
+      the dashboard load) — this is the epic's own final, real,
+      human-observable proof that "release to dogfood" genuinely
+      happened, not a simulated or assumed pass.
+    agent: reviewer
+    depends_on: [implement]
+  - id: integrate
+    description: >
+      Commit and push to feat/mnemosyne-desktop-app, including this
+      story's own completion report (the real, observed outcomes from the
+      review step, and the restated-open Gatekeeper/auto-update question
+      per acceptance criterion 5).
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+  key_files:
+    - path: ui/index.html
+      purpose: "The real dashboard this story's own final acceptance check confirms loads and is interactive inside the packaged app's own window — unchanged by this entire epic."
+  tech_stack:
+    signing_posture: "Unsigned or ad-hoc-signed (codesign --sign -) — a real, local-only artifact; NOT notarized, NOT intended for distribution beyond this operator's own machine (docs/design-discussion.md §2.3)."
+    gatekeeper_workaround: "Apple's own documented System Settings -> Privacy & Security -> 'Open Anyway' flow, research-brief.md §3.8 — real, one-time-per-build, this operator's own machine only."
+
+files_to_modify: []
+
+design_decisions:
+  - decision: "This story's own acceptance criteria stop at a real, successful FIRST launch plus a real, successful SECOND launch (no Gatekeeper re-block) — they deliberately do NOT require exercising a live auto-update cycle."
+    rationale: "A live update cycle requires a second, later, real published release — genuinely out of scope for a first dogfood build's own completion bar; forcing it here would either be faked (a rubber-stamped pass) or would block this story indefinitely on work that belongs to a future release cycle. Named explicitly as a deliberate scope boundary (acceptance criterion 5), not a silently dropped requirement."
+  - decision: "The dogfood build uses ad-hoc signing (codesign --sign -), never a real Developer ID Application signature."
+    rationale: "grill-record.md finding 5.1 — a real Developer ID Application certificate requires the operator's own paid Apple Developer Program membership, a real, unresolved, operator-owned prerequisite this story does not wait on; ad-hoc signing is the real, available, local-only substitute that lets Gatekeeper's own override flow work at all."
+
+cross_cutting:
+  - concern: documentation
+    action: "README.md/SERVICE.md gain the epic's own final, real 'how to build and dogfood the desktop app locally' section, written from this story's own actually-observed steps, not a generic Tauri tutorial's own generic steps."
+  - concern: loud-failure
+    action: "If the dashboard fails to load within da-03's own bounded healthz-poll window, this story's review step reports that as a real failure, not a 'probably just slow' assumption — ties back to the existing /health degradation contract, unchanged."
+
+risks:
+  - severity: high
+    description: "The Gatekeeper/auto-update interaction (grill-record.md finding 3.2) remains genuinely untested by this story, since no second release exists yet to exercise a real update cycle against."
+    mitigation: "Acceptance criterion 5 requires this open question to be restated explicitly in this story's own completion report — never silently dropped once a first working build exists. A future release-cycle story (out of this epic's own scope) is the real place this gets resolved empirically."
+  - severity: medium
+    description: "A first-launch Gatekeeper block could be mistaken for a real app crash/bug by a future reader of this story's own completion report if the sequence isn't narrated clearly."
+    mitigation: "The test-spec step's own literal, ordered checklist names the Gatekeeper block as an EXPECTED, real step in the sequence, not a failure signal — reviewed and confirmed against Apple's own documented behavior, not treated as a bug to chase."
+
+references:
+  - path: .pHive/epics/mnemosyne-desktop-app/docs/design-discussion.md
+    relevant_excerpt: "§2.2 (Gatekeeper/auto-update residual risk, grill 3.2), §2.3 (notarization gap + staged local workaround, grill 5.1)."
+  - path: .pHive/epics/mnemosyne-desktop-app/docs/research-brief.md
+    relevant_excerpt: "§3.8 — the real, Apple-documented local Gatekeeper override, quoted directly from support.apple.com."
+  - path: .pHive/epics/mnemosyne-desktop-app/docs/grill-record.md
+    relevant_excerpt: "Finding 3.2 — the residual auto-update/Gatekeeper interaction, named as genuinely untested and explicitly deferred to this story's own real, empirical (but narrower) first-launch observation."
+
+metric:
+  applies: true
+  name: desktop_app.dogfood_launch_to_dashboard_success
+  direction: up
+  unit: boolean
+  baseline: null
+  target: 1
+  window: "this build, and every subsequent regression pass against a new build"
+  source:
+    kind: manual
+    ref: "Reviewer's independently-narrated, real Finder/Dock launch -> Gatekeeper override -> dashboard-load sequence, performed on the operator's own machine"
+  verify_at: integrate
+  owner: reviewer

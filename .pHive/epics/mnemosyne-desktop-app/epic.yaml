@@ -1,0 +1,166 @@
+name: mnemosyne-desktop-app
+title: Package Mnemosyne as a Tauri desktop app — dogfood release, long-term run, auto-update
+target_codebase: /Users/mdostal/Documents/work/pantheon/mnemosyne
+methodology: tdd
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: dev
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [infrastructure, multi-system-integration, packaging-and-distribution]
+  roster: [researcher, technical-writer, tpm]
+  per_tag_reasoning:
+    infrastructure: "New Rust/Tauri process shell (src-tauri/) wrapping an already-shipped Node HTTP server (src/server.mjs) — a genuinely new runtime/build layer, not a code change to the wrapped service."
+    multi-system-integration: "Cross-stack: Rust/Cargo (already installed) + Tauri CLI (not yet installed) + the existing Node/JS server + a real macOS code-signing/notarization regime this agent cannot complete on the operator's behalf."
+    packaging-and-distribution: "The epic's entire deliverable is a distributable, auto-updating desktop artifact — a new concern category this repo has never planned for before (no prior epic touches app bundling, code signing, or an update channel)."
+  confidence: high
+  gate_decisions:
+    scale: medium
+    h_v_required: false
+    structured_outline_required: false
+
+description: |
+  Operator's own words, verbatim: "we need to have it release to dogfood
+  and i need it to run long term and auto-update." Asked directly to
+  choose between Tauri, Electron, and a bare background service, the
+  operator chose Tauri.
+
+  Real research (docs/research-brief.md) confirms this repo runs TWO
+  separate Node HTTP servers — `src/server.mjs` (port 8477, the
+  operator's own fully-built 10-panel dashboard, confirmed via direct
+  grep to have ZERO npm-package dependencies in its entire transitive
+  import graph) and `lib/mnemosyne/server.ts` (port 3141, a separate
+  client-API server backing `ingest`/`crawl` CLI verbs, which DOES carry
+  real npm dependencies including `better-sqlite3`'s native bindings).
+  This epic packages `src/server.mjs` ONLY — confirmed the correct scope
+  because the dashboard's own client code (`ui/app.js`) never calls the
+  second server at all.
+
+  The sidecar-packaging decision (docs/design-discussion.md §1) is: bundle
+  a real, unmodified platform Node binary plus `src/server.mjs`'s own
+  already-shipped `.mjs`/`ui/*` files as Tauri `resources`, rather than
+  compiling a Node Single-Executable-Application (SEA) binary. The
+  original premise that SEA carries "more real risk" due to
+  `better-sqlite3`'s native bindings turned out to be factually
+  inapplicable once the real dependency graph was traced by hand (zero
+  npm packages in `src/server.mjs`'s own graph) — the decision was
+  re-derived from the real remaining differences (build-tool overhead,
+  SEA's own "Active development" API-stability level, a real
+  `useCodeCache`/dynamic-`import()` interaction), not rubber-stamped from
+  the task's original framing (grill-record.md finding 5.2).
+
+  Real, concretely-confirmed auto-update mechanism (docs/design-
+  discussion.md §2): `tauri-plugin-updater`, a locally-generated signing
+  keypair (private key never committed/printed/persisted), and a static
+  update manifest hosted on GitHub Releases — confirmed directly usable
+  because `gh repo view` confirms `mdostal/mnemosyne` is public.
+
+  Real, named, operator-owned blocker (docs/design-discussion.md §2.3): a
+  fully notarized, Gatekeeper-silent build requires a paid Apple Developer
+  Program membership and a real signing certificate this agent cannot
+  obtain. Named explicitly, never silently assumed solved. A real, staged
+  path is named for local dogfooding today regardless — Apple's own
+  documented "Open Anyway" Gatekeeper override (System Settings > Privacy
+  & Security), a one-time-per-build, operator's-own-machine workaround,
+  not a production-distribution fix.
+
+  Real shell design (docs/design-discussion.md §3): a native tray/
+  menu-bar icon (`TrayIconBuilder`) opens a window pointed at the
+  sidecar's own real `http://127.0.0.1:8477/ui` (the existing, unmodified,
+  already-fully-built dashboard — zero new UI built by this epic), gated
+  by a real `/healthz`-poll readiness check before navigation (a real
+  startup race condition this research surfaced and named explicitly,
+  grill-record.md finding 2.2). `tauri-plugin-autostart`
+  (`MacosLauncher::LaunchAgent`) provides real, first-party launch-at-
+  login behavior.
+
+  A real, previously-invisible PATH-resolution gap was found and named as
+  a first-class design decision (docs/design-discussion.md §1.2,
+  grill-record.md finding 2.1): `bin/mnemosyne`'s own bash wrapper already
+  carries an explicit `PATH` fix for exactly the class of bug a Tauri
+  sidecar (which bypasses that wrapper) would otherwise reintroduce —
+  confirmed on this real machine that `swarm-memory` resolves via
+  `~/.local/bin`, the exact directory that fix adds.
+
+  Built by composing already-shipped code unchanged — zero lines of
+  `src/`, `bin/`, or `ui/` are modified by any story in this
+  decomposition (docs/design-discussion.md §3.4, grill-record.md finding
+  4.1 — confirmed this is not a second, parallel memory-access mechanism,
+  only a packaging/window-chrome/process-lifecycle layer around the
+  existing, unmodified service boundary).
+
+notes: |
+  Planned 2026-09-06, branch `feat/mnemosyne-desktop-app` off the real,
+  fetched tip of `dev` (`b1a2a81`, v0.15.0). Full research (real repo
+  reads/greps + direct WebFetch of Tauri v2's own current docs at
+  v2.tauri.app, Node.js's own SEA docs at nodejs.org, and Apple's own
+  Gatekeeper guide at support.apple.com) -> design-discussion -> one grill
+  round (8 findings, all resolved, unresolved_count: 0) pass. See docs/
+  for the full trail. Planning-only pass: no application code touched, no
+  Tauri CLI installed, no cargo/npm packages added — a future build pass
+  executes this decomposition.
+
+  Real environment facts confirmed this pass (docs/research-brief.md §1):
+  Rust/Cargo already installed (`~/.cargo/bin/{cargo,rustc}`), Tauri CLI
+  NOT installed, no `src-tauri/` or any prior Tauri/Electron scaffolding
+  anywhere in this repo, Node v24.18.1 available, macOS `Darwin 25.5.0`
+  `arm64`, GitHub remote `mdostal/mnemosyne` confirmed PUBLIC (load-bearing
+  for the auto-updater's GitHub-Releases hosting decision).
+
+  Real, explicit relationship/decision notes, not silently resolved:
+  - This epic packages `src/server.mjs` (port 8477) ONLY — the separate
+    `lib/mnemosyne/server.ts` client-API server (port 3141, `ingest`/
+    `crawl`) is out of scope, confirmed correct because the dashboard's
+    own client code never calls it (grill-record.md finding 1.1).
+  - The sidecar-packaging decision (bundle a real Node runtime, not a
+    Node SEA binary) was RE-DERIVED from the real numbers once the
+    task's own original "native-binding risk" premise was found
+    factually inapplicable to this specific server's dependency graph —
+    named explicitly as a re-derivation, not a rubber-stamp
+    (grill-record.md finding 5.2).
+  - Macos notarization is named as a real, unresolved, operator-owned
+    prerequisite this planning pass cannot close — a real staged
+    local-dogfood path (Apple's own documented Gatekeeper override)
+    is named as already-unblocked regardless (grill-record.md finding
+    5.1).
+  - The interaction between an unsigned build's auto-updater and macOS
+    Gatekeeper's quarantine behavior on a self-installed update is named
+    as a genuinely untested, undocumented residual risk — `da-05`'s own
+    acceptance criteria treat "observed and reported" as sufficient,
+    never "definitely worked" (grill-record.md finding 3.2).
+  - 3 open questions genuinely need the operator's own answer before/
+    around execution (docs/design-discussion.md §7): auto-update
+    default-on timing, comfort with public GitHub Releases hosting of
+    built binaries, and the Apple Developer Program timeline.
+  - `gate_decisions.scale: medium` (not `large`) and no H/V/structured-
+    outline pass — this epic's own real scope (5 stories, one target
+    platform/architecture, one operator, no multi-phase data pipeline)
+    is a real, concretely smaller shape than `mnemosyne-repo-onboarding`'s
+    or `mnemosyne-conversation-memory`'s own `large`-scale gate decisions,
+    decided for real against this epic's actual content, not copied
+    from either precedent by default.
+
+stories:
+  - id: da-01-tauri-project-scaffolding
+    title: Tauri v2 project scaffolding — src-tauri/ skeleton, no sidecar yet
+    complexity: medium
+    depends_on: []
+  - id: da-02-node-sidecar-packaging
+    title: Node-runtime sidecar packaging — the epic's single highest-risk story
+    complexity: high
+    depends_on: [da-01-tauri-project-scaffolding]
+  - id: da-03-tray-shell-and-dashboard-window
+    title: Tray/menu-bar shell, dashboard window wiring, and launch-at-login
+    complexity: high
+    depends_on: [da-02-node-sidecar-packaging]
+  - id: da-04-auto-updater-wiring
+    title: Auto-updater wiring — signing keypair, manifest, GitHub Releases hosting (excludes notarization)
+    complexity: medium
+    depends_on: [da-01-tauri-project-scaffolding]
+  - id: da-05-local-dogfood-build-and-run
+    title: Local dogfood build + run — the operator's own "release to dogfood" ask, made real and verifiable
+    complexity: medium
+    depends_on: [da-02-node-sidecar-packaging, da-03-tray-shell-and-dashboard-window, da-04-auto-updater-wiring]
