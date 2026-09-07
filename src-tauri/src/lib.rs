@@ -1,4 +1,5 @@
 pub mod sidecar;
+pub mod tray;
 
 use std::sync::Mutex;
 
@@ -103,6 +104,10 @@ fn spawn_sidecar(app: &tauri::AppHandle) {
 pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_shell::init())
+    .plugin(tauri_plugin_autostart::init(
+      tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+      None,
+    ))
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
@@ -112,6 +117,13 @@ pub fn run() {
         )?;
       }
       spawn_sidecar(app.handle());
+      // da-03: tray icon + lazily-created dashboard window + launch-at-login
+      // toggle -- see tray.rs's own doc comment for the full acceptance
+      // criteria this wires up. Uses the SAME sidecar::DEFAULT_PORT the
+      // spawn_sidecar() call above passes to the sidecar's own PORT env var
+      // (both read the one constant -- never two independently hard-coded
+      // literals that could drift apart).
+      tray::build_tray(app.handle(), sidecar::DEFAULT_PORT)?;
       Ok(())
     })
     .run(tauri::generate_context!())

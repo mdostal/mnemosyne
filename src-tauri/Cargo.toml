@@ -21,6 +21,13 @@ tauri-build = { version = "2.6.3", features = [] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
-tauri = { version = "2.11.3", features = [] }
+tauri = { version = "2.11.3", features = ["tray-icon"] }
 tauri-plugin-log = "2"
 tauri-plugin-shell = "2"
+tauri-plugin-autostart = "2"
+
+[dev-dependencies]
+# "test" enables tauri::test's MockRuntime -- feature-unified onto the
+# [dependencies] tauri entry above for `cargo test` builds only, never
+# shipped in the real app binary. See tests/tray_window.rs.
+tauri = { version = "2.11.3", features = ["tray-icon", "test"] }

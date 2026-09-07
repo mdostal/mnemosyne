@@ -186,15 +186,27 @@ separate from the variable ticket memory delta.
 
 ## Desktop app (Tauri)
 
-A Tauri v2 project skeleton lives under [`src-tauri/`](./src-tauri/) — the
-first step (`da-01`) toward a packaged, long-running desktop app that wraps
-this service's own dashboard (`src/server.mjs` + `ui/`) with a native
-tray/window and auto-update, instead of a foreground terminal the operator
-must keep open. This scaffold ships a placeholder window only — no
-sidecar, tray, updater, or real dashboard wiring yet (those land in
-`da-02`..`da-05`). See `scripts/desktop-smoke.sh` for the real
-build-and-launch check, and `.pHive/epics/mnemosyne-desktop-app/` for the
-full epic.
+A Tauri v2 project skeleton lives under [`src-tauri/`](./src-tauri/) — a
+packaged, long-running desktop app that wraps this service's own dashboard
+(`src/server.mjs` + `ui/`) with a native tray/window and auto-update,
+instead of a foreground terminal the operator must keep open.
+
+`da-01`/`da-02` landed the project scaffold and a vendored-Node sidecar
+(spawned with an explicit `PATH`/`SWARM_MEMORY_BIN`/`PORT` fix so it works
+identically whether launched from a terminal or Finder/Dock/launchd).
+`da-03` adds the tray/menu-bar shell itself: a native tray icon whose
+left-click shows/focuses a single dashboard window pointed at exactly
+`http://127.0.0.1:8477/ui` (never the bare `/` root, which content-negotiates
+differently) — the app launches with **zero windows**, tray-only, and the
+window is created lazily on first click, only after a bounded (never
+unbounded, never a single immediate attempt) poll of the sidecar's own
+`GET /healthz` confirms it's actually accepting connections. The tray's
+right-click menu carries a real, visible, always-toggleable "Launch at
+Login" item (`tauri-plugin-autostart`, a genuine `launchd` LaunchAgent under
+`~/Library/LaunchAgents/` — never a bespoke login-item hack) plus Quit. The
+auto-updater (`da-04`) and a full local dogfood pass (`da-05`) are still
+ahead. See `scripts/desktop-smoke.sh` for the real build-and-launch check,
+and `.pHive/epics/mnemosyne-desktop-app/` for the full epic.
 
 ```bash
 npx tauri dev            # run the placeholder window

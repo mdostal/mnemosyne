@@ -7,15 +7,7 @@
     "frontendDist": "dist"
   },
   "app": {
-    "windows": [
-      {
-        "title": "Mnemosyne Desktop",
-        "width": 800,
-        "height": 600,
-        "resizable": true,
-        "fullscreen": false
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }
