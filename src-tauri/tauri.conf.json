@@ -30,6 +30,15 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "externalBin": [
+      "binaries/mnemosyne-node"
+    ],
+    "resources": {
+      "../src/*.mjs": "src/",
+      "../src/layers/*.mjs": "src/layers/",
+      "../bin/graphify-bridge.mjs": "bin/graphify-bridge.mjs",
+      "../ui/*": "ui/"
+    },
     "android": {
       "debugApplicationIdSuffix": ".debug"
     }
