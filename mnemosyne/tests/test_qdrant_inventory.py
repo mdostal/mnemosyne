@@ -511,6 +511,53 @@ class MainIntakeCandidatesCliTests(unittest.TestCase):
         self.assertEqual(printed["ok"], False)
         self.assertIn("missing", printed["error"])
 
+    def test_scroll_collection_subcommand_scrolls_the_named_collection_and_prints_points(self):
+        # 2026-09-08: general-purpose memory maintenance -- a thin CLI
+        # wrapper around the already-existing, general
+        # HttpQdrantClient.scroll_points(name) method, for ANY collection,
+        # not just conversation_memory_intake.
+        with tempfile.TemporaryDirectory() as tmp:
+            key_path = Path(tmp) / "qdrant.key"
+            key_path.write_text("fake-key\n", encoding="utf-8")
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text('[qdrant]\nurl = "https://example.qdrant.local:6333"\n', encoding="utf-8")
+
+            fake_client = FakeQdrantClient()
+            scroll_calls = []
+            fake_client.scroll_points = lambda name: (scroll_calls.append(name), [{"id": "p1", "payload": {"text": "hello"}}])[1]
+
+            buf = io.StringIO()
+            with patch.object(qdrant_inventory_module, "build_qdrant_client", return_value=fake_client):
+                with redirect_stdout(buf):
+                    exit_code = main(
+                        [
+                            "--key-path", str(key_path),
+                            "--config-path", str(config_path),
+                            "scroll-collection", "--collection", "some_other_collection",
+                        ]
+                    )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(scroll_calls, ["some_other_collection"])
+            printed = json.loads(buf.getvalue())
+            self.assertEqual(printed, {"ok": True, "points": [{"id": "p1", "payload": {"text": "hello"}}]})
+
+    def test_scroll_collection_subcommand_reports_ok_false_on_a_real_qdrant_error_never_raises_uncaught(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            exit_code = main(
+                [
+                    "--key-path", "/tmp/does-not-exist/qdrant.key",
+                    "--config-path", "/tmp/does-not-exist/config.toml",
+                    "scroll-collection", "--collection", "anything",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        printed = json.loads(buf.getvalue())
+        self.assertEqual(printed["ok"], False)
+        self.assertIn("missing", printed["error"])
+
     def test_no_subcommand_default_path_is_byte_for_byte_unchanged(self):
         """Additive-only requirement: main() with no subcommand at all still
         runs the ORIGINAL inventory path exactly as before this story."""

@@ -501,6 +501,26 @@ def main(argv: list[str] | None = None) -> int:
         "--json", action="store_true", help="accepted for CLI-convention consistency; output is always JSON"
     )
 
+    # General-purpose memory maintenance (2026-09-08): a thin CLI wrapper
+    # around the ALREADY-EXISTING, general HttpQdrantClient.scroll_points(name)
+    # method (added by cm-13-intake-distribution) -- this adds ZERO new
+    # read/write capability to that class, just a second, general-collection
+    # CLI entry point alongside intake-candidates's intake-only one. Still
+    # read-only; HttpQdrantClient's own "no delete/drop method exists
+    # anywhere in this module" contract is unaffected.
+    scroll_parser = subparsers.add_parser(
+        "scroll-collection",
+        help=(
+            "Read-only: scroll_points(<collection>) against ANY named "
+            "collection and print the raw points as JSON. No delete/write "
+            "capability of any kind."
+        ),
+    )
+    scroll_parser.add_argument("--collection", required=True, help="the real, resolved Qdrant collection name")
+    scroll_parser.add_argument(
+        "--json", action="store_true", help="accepted for CLI-convention consistency; output is always JSON"
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "intake-candidates":
@@ -510,6 +530,21 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"ok": False, "error": str(exc)}))
             return 1
         print(json.dumps({"ok": True, **result}))
+        return 0
+
+    if args.command == "scroll-collection":
+        try:
+            api_key = read_qdrant_key(args.key_path, args.config_path)
+            url = load_qdrant_url(args.config_path)
+            client = build_qdrant_client(url, api_key)
+            points = client.scroll_points(args.collection)
+        except QdrantInventoryError as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}))
+            return 1
+        except Exception as exc:  # noqa: BLE001 -- real Qdrant/network errors, reported not raised
+            print(json.dumps({"ok": False, "error": f"scroll-collection failed: {exc}"}))
+            return 1
+        print(json.dumps({"ok": True, "points": points}))
         return 0
 
     try:

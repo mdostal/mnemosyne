@@ -280,6 +280,40 @@ export function makePythonScrollPointsFn({ exec = execFileAsync, pythonBin = PYT
 }
 
 // ---------------------------------------------------------------------------
+// General-purpose memory maintenance (2026-09-08) -- a sibling of
+// makePythonScrollPointsFn() above, for ANY named collection via the
+// `scroll-collection` verb, not just conversation_memory_intake. Used by
+// bin/mnemosyne-memory-remove.mjs.
+// ---------------------------------------------------------------------------
+
+export function makePythonScrollCollectionFn(collectionName, { exec = execFileAsync, pythonBin = PYTHON_BIN, cwd = REPO_ROOT } = {}) {
+  return async function scrollCollection() {
+    let stdout;
+    try {
+      const result = await exec(
+        pythonBin,
+        ['-m', 'mnemosyne.inventory.qdrant_inventory', 'scroll-collection', '--collection', collectionName, '--json'],
+        { cwd, maxBuffer: 64 * 1024 * 1024 },
+      );
+      stdout = result.stdout;
+    } catch (e) {
+      const detail = (e && e.stderr && String(e.stderr).trim()) || (e && e.message) || String(e);
+      throw new Error(`scroll-collection failed for ${collectionName}: ${detail}`);
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(stdout);
+    } catch {
+      throw new Error(`scroll-collection CLI verb returned output that could not be parsed as JSON: ${String(stdout ?? '').slice(0, 200)}`);
+    }
+    if (!parsed.ok) {
+      throw new Error(parsed.error || 'scroll-collection CLI verb reported ok:false');
+    }
+    return Array.isArray(parsed.points) ? parsed.points : [];
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Direct-run CLI dispatch.
 // ---------------------------------------------------------------------------
 
