@@ -277,6 +277,34 @@ test('confirms via entry_id match alone when the hit reports a null content_hash
   if (result.ok) assert.equal(result.destinationScope, marker.distributed_to_scope);
 });
 
+test('the destination recall() query is the entry\'s own real content, never the bare entryId (semantically meaningless UUID)', async () => {
+  // Real, live-confirmed bug (2026-09-08): this module's own first real use
+  // queried recall() with the bare entryId (a UUID). recall() is a semantic
+  // search -- a UUID has no semantic content to match against, so a real
+  // query for a real, known-present destination copy returned zero
+  // confirming hits (refused a legitimate decommission). Querying with the
+  // entry's own real text instead (byte-for-byte what the destination copy
+  // actually stores, per distributeIntakeEntries.ts's own unchanged-text
+  // write) scores far above the relevance floor. This test locks that fix
+  // in structurally, not just by inspection.
+  const { entryMetadata, entryPoint, entryText, markerPoint, confirmingHit } = makeConfirmedScenario();
+  const { scrollPoints } = makeScrollPointsStub([entryPoint, markerPoint]);
+  const { recall, calls } = makeFakeRecall(recallSuccess([confirmingHit]));
+  const { deletePoints } = makeFakeDeletePoints();
+
+  await decommissionIntakeEntry({
+    entryId: entryMetadata.entry_id,
+    scrollPoints,
+    recall,
+    deletePoints,
+    skipBackup: true,
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.query, entryText);
+  assert.notEqual(calls[0]!.query, entryMetadata.entry_id);
+});
+
 // ---------------------------------------------------------------------------
 // AC 3: both checks pass -> proceeds for exactly this ONE entryId; deletes
 // exactly the two real point ids (entry's own point + its marker's own

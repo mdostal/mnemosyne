@@ -514,7 +514,19 @@ export async function decommissionIntakeEntry(options: DecommissionIntakeEntryOp
   const destinationScope = destinationScopeLabel as unknown as Scope; // ONE, well-documented widening assertion, mirrors distributeIntakeEntries.ts's own resolveDestinationScope().
   const expectedContentHash = createHash('sha256').update(originalText).digest('hex');
 
-  const recallResult = await recall(entryId, destinationScope, 'broad');
+  // Real, live-confirmed finding (2026-09-08, this entry's own first real
+  // use): `recall()` is a semantic search -- querying with the bare
+  // `entryId` (a UUID, semantically meaningless) reliably fails to surface
+  // the destination copy at all (confirmed directly: a real query for a
+  // real entry_id against a real, known-present destination copy returned
+  // zero confirming hits). The destination copy's own content.ts is
+  // BYTE-FOR-BYTE `originalText` (distributeIntakeEntries.ts's own
+  // `ingestDocument(client, { content: candidate.text, ... })` -- the
+  // entry's own unchanged persisted text), so querying with `originalText`
+  // itself scores far above `min_score` (confirmed live: 0.84 vs. the
+  // 0.53 floor) since it's asking to recall text nearly identical to what
+  // is actually stored.
+  const recallResult = await recall(originalText, destinationScope, 'broad');
   if (!recallResult.ok) {
     return refuse(
       entryId,
