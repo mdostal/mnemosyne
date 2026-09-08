@@ -139,9 +139,24 @@ export class VectorLayerAdapter implements LayerAdapter {
       return this.failure(query, scope, intent, 'invalid_query', 'query must not be empty');
     }
 
+    // Real, live-confirmed bug fix (2026-09-08): this call previously never
+    // passed --scope at all, so every recall silently queried
+    // `[general].default_scope` ("top") regardless of what scope was
+    // requested -- confirmed directly by passing a nonexistent scope name
+    // and observing real "top"-scope hits returned anyway (`ok: true`,
+    // no error). remember() has always correctly resolved `scope` (via
+    // `cfg.scopes?.[scope]`); recall() alone had this asymmetric gap.
+    // `intent: 'broad'` maps to `--escalate` (walk the scope ladder
+    // narrow->broad, swarm-memory's own documented flag semantics);
+    // `'narrow'` (the default) omits it, searching only the exact scope.
+    const args = ['recall', normalizedQuery, '--scope', scope, '--json'];
+    if (intent === 'broad') {
+      args.push('--escalate');
+    }
+
     let stdout: string;
     try {
-      const result = await execFileAsync(this.command, ['recall', normalizedQuery, '--json'], {
+      const result = await execFileAsync(this.command, args, {
         timeout: this.timeoutMs,
       });
       stdout = result.stdout;

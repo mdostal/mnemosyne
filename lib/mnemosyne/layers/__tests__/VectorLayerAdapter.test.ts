@@ -55,6 +55,48 @@ describe('VectorLayerAdapter', () => {
     ]);
   });
 
+  it('passes --scope with the real requested scope to the swarm-memory recall call (regression: this was silently omitted, always querying the default scope)', async () => {
+    const adapter = makeAdapter('hits');
+    const dir = await mkdtemp(path.join(tmpdir(), 'fake-swarm-memory-argv-'));
+    const argvLog = path.join(dir, 'argv.jsonl');
+    const previous = process.env.FAKE_SWARM_MEMORY_ARGV_LOG;
+    process.env.FAKE_SWARM_MEMORY_ARGV_LOG = argvLog;
+    try {
+      await withMode('hits', () => adapter.recall('needle', { scope: 'clients' }));
+    } finally {
+      if (previous === undefined) delete process.env.FAKE_SWARM_MEMORY_ARGV_LOG;
+      else process.env.FAKE_SWARM_MEMORY_ARGV_LOG = previous;
+    }
+
+    const logged = (await readFile(argvLog, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as string[]);
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toEqual(['recall', 'needle', '--scope', 'clients', '--json']);
+
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('passes --escalate only for intent: "broad", never for the default "narrow"', async () => {
+    const adapter = makeAdapter('hits');
+    const dir = await mkdtemp(path.join(tmpdir(), 'fake-swarm-memory-argv-'));
+    const argvLog = path.join(dir, 'argv.jsonl');
+    const previous = process.env.FAKE_SWARM_MEMORY_ARGV_LOG;
+    process.env.FAKE_SWARM_MEMORY_ARGV_LOG = argvLog;
+    try {
+      await withMode('hits', () => adapter.recall('needle', { scope: 'clients' }));
+      await withMode('hits', () => adapter.recall('needle', { scope: 'clients', intent: 'broad' }));
+    } finally {
+      if (previous === undefined) delete process.env.FAKE_SWARM_MEMORY_ARGV_LOG;
+      else process.env.FAKE_SWARM_MEMORY_ARGV_LOG = previous;
+    }
+
+    const logged = (await readFile(argvLog, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as string[]);
+    expect(logged).toHaveLength(2);
+    expect(logged[0]).not.toContain('--escalate');
+    expect(logged[1]).toContain('--escalate');
+
+    await rm(dir, { recursive: true, force: true });
+  });
+
   it('maps all 7 provenance fields from swarm-memory output', async () => {
     const adapter = makeAdapter('hits');
     const result = await withMode('hits', () => adapter.recall('needle'));

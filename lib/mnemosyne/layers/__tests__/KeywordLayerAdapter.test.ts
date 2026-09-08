@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { KeywordLayerAdapter } from '../KeywordLayerAdapter.js';
@@ -42,6 +45,26 @@ describe('KeywordLayerAdapter', () => {
       'exact keyword match for PAN-8968',
       'second exact keyword match for PAN-8968',
     ]);
+  });
+
+  it('passes --scope with the real requested scope to the swarm-memory grep call (regression: this was silently omitted, always querying the default scope)', async () => {
+    const adapter = makeAdapter();
+    const dir = await mkdtemp(path.join(tmpdir(), 'fake-swarm-memory-argv-'));
+    const argvLog = path.join(dir, 'argv.jsonl');
+    const previous = process.env.FAKE_SWARM_MEMORY_ARGV_LOG;
+    process.env.FAKE_SWARM_MEMORY_ARGV_LOG = argvLog;
+    try {
+      await withMode('grep-hits', () => adapter.recall('PAN-8968', { scope: 'clients' }));
+    } finally {
+      if (previous === undefined) delete process.env.FAKE_SWARM_MEMORY_ARGV_LOG;
+      else process.env.FAKE_SWARM_MEMORY_ARGV_LOG = previous;
+    }
+
+    const logged = (await readFile(argvLog, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as string[]);
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toEqual(['grep', 'PAN-8968', '--scope', 'clients', '--json']);
+
+    await rm(dir, { recursive: true, force: true });
   });
 
   it('parses the real `swarm-memory grep --json` shape: a top-level ARRAY of {scope, collection, hits}, not an object', async () => {

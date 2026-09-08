@@ -94,9 +94,17 @@ export class KeywordLayerAdapter implements LayerAdapter {
       return this.failure(query, scope, intent, 'invalid_query', 'query must not be empty');
     }
 
+    // Same real, live-confirmed bug as VectorLayerAdapter.recall() (fixed
+    // 2026-09-08): --scope was never passed, so every grep silently
+    // queried the default scope regardless of what was requested.
+    const args = ['grep', normalizedQuery, '--scope', scope, '--json'];
+    if (intent === 'broad') {
+      args.push('--escalate');
+    }
+
     let stdout: string;
     try {
-      const result = await execFileAsync(this.command, ['grep', normalizedQuery, '--json'], {
+      const result = await execFileAsync(this.command, args, {
         timeout: this.timeoutMs,
       });
       stdout = result.stdout;
