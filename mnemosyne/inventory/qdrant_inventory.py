@@ -17,6 +17,7 @@ import json
 import os
 import re
 import ssl
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -69,7 +70,12 @@ class HttpQdrantClient:
         self.url = url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
-        self._ssl = ssl.create_default_context()
+        try:
+            import certifi
+
+            self._ssl = ssl.create_default_context(cafile=certifi.where())
+        except ImportError:
+            self._ssl = ssl.create_default_context()
 
     def _request(
         self, method: str, path: str, body: dict[str, Any] | None = None
@@ -252,14 +258,52 @@ def collect_intake_candidates(client: Any) -> dict[str, Any]:
     }
 
 
-def read_qdrant_key(path: str | Path = DEFAULT_KEY_PATH) -> str:
+def read_qdrant_key(
+    path: str | Path = DEFAULT_KEY_PATH,
+    config_path: str | Path = DEFAULT_CONFIG_PATH,
+) -> str:
+    """Resolves the Qdrant API key exactly the same way the TS layer
+    (`VectorLayerAdapter.ts`) and the `swarm-memory` CLI already do: a plain
+    key file first (backward compatible), falling back to `[qdrant].api_key_cmd`
+    from config.toml when the file doesn't exist. The command's stdout is
+    used in-memory for this process's own Qdrant calls only -- never written
+    to disk, matching the standing rule that a real secret value is never
+    persisted anywhere outside its own authoritative store (here, gcloud
+    Secret Manager, already the operator's real source of truth for this key)."""
     key_path = Path(path).expanduser()
     try:
         key = key_path.read_text(encoding="utf-8").strip()
-    except FileNotFoundError as exc:
-        raise QdrantInventoryError(f"Qdrant API key file missing: {key_path}") from exc
+        if not key:
+            raise QdrantInventoryError(f"Qdrant API key file is empty: {key_path}")
+        return key
+    except FileNotFoundError:
+        pass
+
+    cfg_path = Path(config_path).expanduser()
+    if not cfg_path.is_file():
+        raise QdrantInventoryError(
+            f"Qdrant API key file missing: {key_path}, and no config found at {cfg_path} "
+            "to resolve [qdrant].api_key_cmd from"
+        )
+    parser = configparser.ConfigParser()
+    parser.read(cfg_path)
+    api_key_cmd = parser.get("qdrant", "api_key_cmd", fallback="").strip().strip('"').strip("'")
+    if not api_key_cmd:
+        raise QdrantInventoryError(
+            f"Qdrant API key file missing: {key_path}, and {cfg_path} has no "
+            "[qdrant].api_key_cmd to fall back to"
+        )
+    try:
+        result = subprocess.run(
+            api_key_cmd, shell=True, capture_output=True, text=True, timeout=30, check=True
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise QdrantInventoryError(
+            f"api_key_cmd from {cfg_path} failed to resolve a Qdrant API key"
+        ) from exc
+    key = result.stdout.strip()
     if not key:
-        raise QdrantInventoryError(f"Qdrant API key file is empty: {key_path}")
+        raise QdrantInventoryError(f"api_key_cmd from {cfg_path} returned an empty key")
     return key
 
 
@@ -379,7 +423,7 @@ def run_inventory(
     manifest_path: str | Path = DEFAULT_MANIFEST_PATH,
     environ: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    api_key = read_qdrant_key(key_path)
+    api_key = read_qdrant_key(key_path, config_path)
     url = load_qdrant_url(config_path, environ)
     client = build_qdrant_client(url, api_key)
     collections = inventory_collections(client)
@@ -397,7 +441,7 @@ def run_intake_candidates(
     sequence exactly, then delegates to collect_intake_candidates() (never a
     write of any kind, never a manifest file written to disk -- this verb's
     whole result is printed to stdout by main(), below)."""
-    api_key = read_qdrant_key(key_path)
+    api_key = read_qdrant_key(key_path, config_path)
     url = load_qdrant_url(config_path, environ)
     client = build_qdrant_client(url, api_key)
     return collect_intake_candidates(client)

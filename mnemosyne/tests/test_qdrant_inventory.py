@@ -76,7 +76,27 @@ class QdrantInventoryTests(unittest.TestCase):
 
     def test_missing_qdrant_key_fails_loudly(self):
         with self.assertRaisesRegex(QdrantInventoryError, "missing"):
-            read_qdrant_key("/tmp/does-not-exist/qdrant.key")
+            read_qdrant_key(
+                "/tmp/does-not-exist/qdrant.key",
+                "/tmp/does-not-exist/config.toml",
+            )
+
+    def test_missing_key_falls_back_to_api_key_cmd_from_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text(
+                '[qdrant]\napi_key_cmd = "echo resolved-via-cmd"\n',
+                encoding="utf-8",
+            )
+            key = read_qdrant_key("/tmp/does-not-exist/qdrant.key", config_path)
+            self.assertEqual(key, "resolved-via-cmd")
+
+    def test_missing_key_and_missing_api_key_cmd_fails_loudly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text('[qdrant]\nurl = "https://example.qdrant.local:6333"\n', encoding="utf-8")
+            with self.assertRaisesRegex(QdrantInventoryError, "missing"):
+                read_qdrant_key("/tmp/does-not-exist/qdrant.key", config_path)
 
     def test_loads_qdrant_url_from_env_before_config(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -444,7 +464,11 @@ class RunIntakeCandidatesTests(unittest.TestCase):
 
     def test_missing_key_fails_loudly_never_silently_returns_empty(self):
         with self.assertRaises(QdrantInventoryError):
-            run_intake_candidates(key_path="/tmp/does-not-exist/qdrant.key", environ={})
+            run_intake_candidates(
+                key_path="/tmp/does-not-exist/qdrant.key",
+                config_path="/tmp/does-not-exist/config.toml",
+                environ={},
+            )
 
 
 class MainIntakeCandidatesCliTests(unittest.TestCase):
@@ -475,7 +499,11 @@ class MainIntakeCandidatesCliTests(unittest.TestCase):
         buf = io.StringIO()
         with redirect_stdout(buf):
             exit_code = main(
-                ["--key-path", "/tmp/does-not-exist/qdrant.key", "intake-candidates"]
+                [
+                    "--key-path", "/tmp/does-not-exist/qdrant.key",
+                    "--config-path", "/tmp/does-not-exist/config.toml",
+                    "intake-candidates",
+                ]
             )
 
         self.assertEqual(exit_code, 1)
