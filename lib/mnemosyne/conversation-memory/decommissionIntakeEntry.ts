@@ -170,15 +170,25 @@ import type { Hit, RecallResult } from '../interfaces.js';
 
 /**
  * This module's OWN async-shaped injectable destination-check primitive --
- * mirrors `MnemosyneClient.recall()`'s REAL signature (`lib/mnemosyne/
- * client.ts`, `async recall(query, scope, intent?)`), not `interfaces.ts`'s
- * `RecallFn` (declared synchronous there for that file's own
- * contract-literalism reasons -- see that file's doc comment). The SAME
- * accepted deviation `distributeIntakeEntries.ts`'s own `ScrollPointsFn`
- * already takes for its own injected primitive, applied here a second time.
- * REQUIRED -- no default production `MnemosyneClient` is constructed by
- * this module itself; a real production implementation is expected to be
- * `client.recall.bind(client)` for a real, wired `MnemosyneClient` (see
+ * shaped like a single layer adapter's `recall(query, {scope, intent})`
+ * (`VectorLayerAdapter.recall()`, `lib/mnemosyne/layers/
+ * VectorLayerAdapter.ts`), not `MnemosyneClient.recall()`'s multi-layer
+ * aggregate. Real, live-confirmed finding (2026-09-08): going through the
+ * full multi-layer client mixed in the `graphify` layer -- irrelevant to
+ * what this check verifies, and its own underlying data changing during
+ * normal repo activity made results genuinely non-deterministic
+ * call-to-call for the identical query/scope. This check only ever needs to
+ * confirm a VECTOR-layer write (cm-07/cm-13's own ingestDocument()/
+ * remember() always write via VectorLayerAdapter), so querying that single
+ * layer directly is both more correct and deterministic. Not
+ * `interfaces.ts`'s `RecallFn` (declared synchronous there for that file's
+ * own contract-literalism reasons -- see that file's doc comment) -- the
+ * SAME accepted deviation `distributeIntakeEntries.ts`'s own
+ * `ScrollPointsFn` already takes for its own injected primitive, applied
+ * here a second time. REQUIRED -- no default production adapter is
+ * constructed by this module itself; a real production implementation is
+ * `(query, scope, intent) => vectorAdapter.recall(query, { scope, intent })`
+ * for a real `VectorLayerAdapter` (see
  * `bin/mnemosyne-conversation-decommission.mjs`'s own direct-run wiring).
  * Tests MUST supply a fake -- never live Qdrant, never a real recall call.
  */
@@ -514,19 +524,32 @@ export async function decommissionIntakeEntry(options: DecommissionIntakeEntryOp
   const destinationScope = destinationScopeLabel as unknown as Scope; // ONE, well-documented widening assertion, mirrors distributeIntakeEntries.ts's own resolveDestinationScope().
   const expectedContentHash = createHash('sha256').update(originalText).digest('hex');
 
-  // Real, live-confirmed finding (2026-09-08, this entry's own first real
-  // use): `recall()` is a semantic search -- querying with the bare
-  // `entryId` (a UUID, semantically meaningless) reliably fails to surface
-  // the destination copy at all (confirmed directly: a real query for a
-  // real entry_id against a real, known-present destination copy returned
-  // zero confirming hits). The destination copy's own content.ts is
-  // BYTE-FOR-BYTE `originalText` (distributeIntakeEntries.ts's own
-  // `ingestDocument(client, { content: candidate.text, ... })` -- the
-  // entry's own unchanged persisted text), so querying with `originalText`
-  // itself scores far above `min_score` (confirmed live: 0.84 vs. the
-  // 0.53 floor) since it's asking to recall text nearly identical to what
-  // is actually stored.
-  const recallResult = await recall(originalText, destinationScope, 'broad');
+  // Real, live-confirmed findings (2026-09-08, this entry's own first real
+  // use -- two rounds):
+  // (a) `recall()` is a semantic search -- querying with the bare `entryId`
+  //     (a UUID, semantically meaningless) reliably fails to surface the
+  //     destination copy at all.
+  // (b) Querying with the FULL persisted text (header + body) ALSO fails --
+  //     every entry in a batch shares near-identical header boilerplate
+  //     (`<!-- remembered via Mnemosyne... -->`/the provenance comment), so
+  //     that boilerplate dominates the embedding and the top hits become
+  //     OTHER entries with a similar header, never this one. Stripping down
+  //     to just the body (everything after the header's own closing `-->`)
+  //     and querying with THAT scores far above `min_score` against the
+  //     real destination copy (confirmed live: 0.80 vs. the 0.53 floor).
+  // (c) The injected `recall` primitive must be a SINGLE-layer (vector-only)
+  //     lookup, not `MnemosyneClient`'s multi-layer aggregate -- confirmed
+  //     live that mixing in the `graphify` layer (which has nothing to do
+  //     with what this check verifies) made results genuinely
+  //     non-deterministic call-to-call for the identical query/scope
+  //     (graphify's own underlying graph data appears to change during
+  //     normal repo activity). See this module's own top-of-file doc
+  //     comment and `bin/mnemosyne-conversation-decommission.mjs`'s
+  //     production wiring, which binds `recall` to
+  //     `VectorLayerAdapter.recall()` directly, never the full client.
+  const bodyMarkerIndex = originalText.lastIndexOf('-->');
+  const queryText = (bodyMarkerIndex === -1 ? originalText : originalText.slice(bodyMarkerIndex + 3)).trim() || originalText;
+  const recallResult = await recall(queryText, destinationScope, 'narrow');
   if (!recallResult.ok) {
     return refuse(
       entryId,

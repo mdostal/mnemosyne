@@ -277,17 +277,18 @@ test('confirms via entry_id match alone when the hit reports a null content_hash
   if (result.ok) assert.equal(result.destinationScope, marker.distributed_to_scope);
 });
 
-test('the destination recall() query is the entry\'s own real content, never the bare entryId (semantically meaningless UUID)', async () => {
-  // Real, live-confirmed bug (2026-09-08): this module's own first real use
-  // queried recall() with the bare entryId (a UUID). recall() is a semantic
-  // search -- a UUID has no semantic content to match against, so a real
-  // query for a real, known-present destination copy returned zero
-  // confirming hits (refused a legitimate decommission). Querying with the
-  // entry's own real text instead (byte-for-byte what the destination copy
-  // actually stores, per distributeIntakeEntries.ts's own unchanged-text
-  // write) scores far above the relevance floor. This test locks that fix
-  // in structurally, not just by inspection.
-  const { entryMetadata, entryPoint, entryText, markerPoint, confirmingHit } = makeConfirmedScenario();
+test('the destination recall() query is the entry\'s own real BODY text (header stripped), never the bare entryId or the full header+body text', async () => {
+  // Real, live-confirmed bugs found across two rounds of actual live use
+  // (2026-09-08): (1) querying with the bare entryId (a UUID, semantically
+  // meaningless) reliably found nothing; (2) querying with the FULL
+  // persisted text (header + body) ALSO failed -- every entry in a batch
+  // shares near-identical header boilerplate, which dominates the
+  // embedding and surfaces OTHER entries with a similar header instead of
+  // this one. Stripping to just the body (everything after the header's
+  // own closing `-->`) is what actually, reliably matches the real
+  // destination copy. This test locks that fix in structurally.
+  const body = 'Some real distilled body text.'; // makeCandidatePoint()'s own default body
+  const { entryMetadata, entryPoint, markerPoint, confirmingHit } = makeConfirmedScenario();
   const { scrollPoints } = makeScrollPointsStub([entryPoint, markerPoint]);
   const { recall, calls } = makeFakeRecall(recallSuccess([confirmingHit]));
   const { deletePoints } = makeFakeDeletePoints();
@@ -301,8 +302,9 @@ test('the destination recall() query is the entry\'s own real content, never the
   });
 
   assert.equal(calls.length, 1);
-  assert.equal(calls[0]!.query, entryText);
+  assert.equal(calls[0]!.query, body);
   assert.notEqual(calls[0]!.query, entryMetadata.entry_id);
+  assert.ok(!calls[0]!.query.includes('-->'), 'query must not include any header boilerplate');
 });
 
 // ---------------------------------------------------------------------------

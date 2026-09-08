@@ -52,7 +52,7 @@ import { fileURLToPath } from 'node:url';
 
 import { makePythonScrollPointsFn, PYTHON_BIN, REPO_ROOT } from './mnemosyne-conversation-triage-review.mjs';
 import { decommissionIntakeEntry, makeHttpQdrantDeletePointsFn } from '../lib/mnemosyne/conversation-memory/decommissionIntakeEntry.ts';
-import { MnemosyneClient } from '../lib/mnemosyne/client.ts';
+import { VectorLayerAdapter } from '../lib/mnemosyne/layers/VectorLayerAdapter.ts';
 
 export { PYTHON_BIN, REPO_ROOT };
 
@@ -121,8 +121,16 @@ async function runCli(argv) {
   }
 
   const scrollPoints = makePythonScrollPointsFn();
-  const client = new MnemosyneClient({ rootDirectory: process.env.MNEMOSYNE_ROOT_DIR || process.cwd() });
-  const recall = (query, scope, intent) => client.recall(query, scope, intent);
+  // Real, live-confirmed finding (2026-09-08): the full multi-layer
+  // MnemosyneClient.recall() mixes in the `graphify` layer, which has
+  // nothing to do with this check and made results non-deterministic
+  // call-to-call for the identical query/scope. This destination check only
+  // ever needs to confirm a VECTOR-layer write (cm-07/cm-13's own
+  // ingestDocument()/remember() always write via VectorLayerAdapter) --
+  // querying that single layer directly is both more correct and
+  // deterministic than going through the full aggregate.
+  const vectorAdapter = new VectorLayerAdapter();
+  const recall = (query, scope, intent) => vectorAdapter.recall(query, { scope, intent });
   const deletePoints = makeHttpQdrantDeletePointsFn();
 
   return runDecommission({ entryId: flags.entryId, noBackup: flags.noBackup === true, scrollPoints, recall, deletePoints });

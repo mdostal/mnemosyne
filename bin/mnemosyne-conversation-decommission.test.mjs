@@ -86,7 +86,7 @@ test('a full, wired, both-checks-passing invocation returns ok:true and calls de
       return scenario.points;
     },
     recall: async (query, scope) => {
-      assert.equal(query, scenario.entryId);
+      assert.equal(query, 'Some real body.'); // body-only, header stripped (2026-09-08 fix)
       assert.equal(scope, 'meta');
       return {
         ok: true,
