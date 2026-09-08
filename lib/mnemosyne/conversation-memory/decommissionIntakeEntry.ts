@@ -139,7 +139,6 @@
  * operator-named `entryId`.
  */
 
-import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -522,10 +521,8 @@ export async function decommissionIntakeEntry(options: DecommissionIntakeEntryOp
   // only, fails closed on anything inconclusive.
   const destinationScopeLabel = marker.distributed_to_scope;
   const destinationScope = destinationScopeLabel as unknown as Scope; // ONE, well-documented widening assertion, mirrors distributeIntakeEntries.ts's own resolveDestinationScope().
-  const expectedContentHash = createHash('sha256').update(originalText).digest('hex');
-
   // Real, live-confirmed findings (2026-09-08, this entry's own first real
-  // use -- two rounds):
+  // use -- three rounds):
   // (a) `recall()` is a semantic search -- querying with the bare `entryId`
   //     (a UUID, semantically meaningless) reliably fails to surface the
   //     destination copy at all.
@@ -547,6 +544,27 @@ export async function decommissionIntakeEntry(options: DecommissionIntakeEntryOp
   //     comment and `bin/mnemosyne-conversation-decommission.mjs`'s
   //     production wiring, which binds `recall` to
   //     `VectorLayerAdapter.recall()` directly, never the full client.
+  // (d) The originally-designed `content_hash` cross-check can NEVER
+  //     succeed for a real distributed entry, confirmed structurally: the
+  //     destination write passes `candidate.text` (the intake point's own
+  //     FULL text, including ITS OWN "remembered via Mnemosyne..." wrapper
+  //     line) as `content` into `ingestDocument()`, and `VectorLayerAdapter.
+  //     remember()` prepends ANOTHER fresh wrapper on top of that
+  //     (`header + text + '\n'`) -- so the destination's on-disk/indexed
+  //     text is genuinely, permanently DOUBLE-wrapped, never byte-identical
+  //     to `originalText`, and any `content_hash` computed over it can
+  //     never equal `sha256(originalText)`. Confirmed live: a real
+  //     destination hit's `content_hash` never matched, for a real,
+  //     genuinely-present entry. This is harmless, pre-existing behavior of
+  //     the write path (cm-13/`remember()`), not something to fix here --
+  //     but it means an exact-match verification needs a mechanism that
+  //     survives it. Fix: verify the destination hit's own content
+  //     CONTAINS `originalText` verbatim as a substring (confirmed live:
+  //     it always does, since the write path only ever wraps/prepends,
+  //     never rewrites the inner text) -- still a strict, exact,
+  //     non-fuzzy match (AC's own "never fuzzy/similarity-based"
+  //     requirement), just one immune to the outer-wrapper timestamp that
+  //     changes on every write.
   const bodyMarkerIndex = originalText.lastIndexOf('-->');
   const queryText = (bodyMarkerIndex === -1 ? originalText : originalText.slice(bodyMarkerIndex + 3)).trim() || originalText;
   const recallResult = await recall(queryText, destinationScope, 'narrow');
@@ -561,15 +579,14 @@ export async function decommissionIntakeEntry(options: DecommissionIntakeEntryOp
   const confirmingHit = recallResult.hits.find((hit: Hit) => {
     const parsedHit = parseProvenanceHeader(hit.content);
     if (parsedHit === null || parsedHit.entry_id !== entryId) return false;
-    if (hit.provenance.content_hash !== null && hit.provenance.content_hash !== expectedContentHash) return false;
-    return true;
+    return hit.content.includes(originalText);
   });
 
   if (!confirmingHit) {
     return refuse(
       entryId,
       'destination_not_confirmed',
-      `destination check failed: no hit in scope ${destinationScopeLabel} independently confirmed entry_id ${entryId} (matched by entry_id/content_hash) -- refusing to delete`,
+      `destination check failed: no hit in scope ${destinationScopeLabel} independently confirmed entry_id ${entryId} (matched by entry_id, exact-content-containment) -- refusing to delete`,
     );
   }
 

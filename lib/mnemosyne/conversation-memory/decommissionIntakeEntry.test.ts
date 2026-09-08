@@ -245,11 +245,19 @@ test('refuses when recall() succeeds but finds NO hit confirming this entry_id a
   assert.equal(deleteCalls.length, 0);
 });
 
-test('refuses when a hit matches entry_id but its content_hash is present and MISMATCHED (fails closed, never fuzzy)', async () => {
-  const { entryMetadata, entryPoint, entryText, markerPoint } = makeConfirmedScenario();
+test('refuses when a hit matches entry_id but its content does NOT contain the real original text (fails closed, never fuzzy)', async () => {
+  // Real, live-confirmed finding (2026-09-08): content_hash can never be
+  // trusted as an exact-match signal (the destination write always
+  // re-wraps candidate.text with a fresh outer header, so a hash of the
+  // stored content never equals a hash of the original alone) -- the
+  // real exact-match mechanism is verifying the hit's own content
+  // CONTAINS the original text verbatim. This test exercises that check's
+  // own failure mode: a hit whose provenance names the right entry_id but
+  // whose actual content has been altered/truncated must still refuse.
+  const { entryMetadata, entryPoint, markerPoint } = makeConfirmedScenario();
   const { scrollPoints } = makeScrollPointsStub([entryPoint, markerPoint]);
-  const wrongHash = createHash('sha256').update(entryText + 'tampered').digest('hex');
-  const { recall } = makeFakeRecall(recallSuccess([makeConfirmingHit(entryText, wrongHash)]));
+  const tamperedHit = makeConfirmingHit(`<!-- mnemosyne-intake-provenance\n${JSON.stringify(entryMetadata)}\n-->\n\nTAMPERED, not the real body`, null);
+  const { recall } = makeFakeRecall(recallSuccess([tamperedHit]));
   const { deletePoints, calls: deleteCalls } = makeFakeDeletePoints();
 
   const result = await decommissionIntakeEntry({ entryId: entryMetadata.entry_id, scrollPoints, recall, deletePoints });
@@ -259,10 +267,17 @@ test('refuses when a hit matches entry_id but its content_hash is present and MI
   assert.equal(deleteCalls.length, 0);
 });
 
-test('confirms via entry_id match alone when the hit reports a null content_hash (layer has no hash concept)', async () => {
+test('confirms when the destination hit is the real write path\'s own double-wrapped copy (a fresh outer header prepended around the original text, unchanged)', async () => {
+  // Real, live-confirmed shape of a real destination write (2026-09-08):
+  // distributeIntakeEntries.ts passes the intake point's own FULL text
+  // (including ITS OWN outer wrapper) as `content` into ingestDocument(),
+  // and VectorLayerAdapter.remember() prepends ANOTHER fresh wrapper on
+  // top -- so the real destination copy is genuinely double-wrapped, and
+  // still must be confirmed via substring containment, not exact equality.
   const { entryMetadata, entryPoint, entryText, marker, markerPoint } = makeConfirmedScenario();
   const { scrollPoints } = makeScrollPointsStub([entryPoint, markerPoint]);
-  const { recall } = makeFakeRecall(recallSuccess([makeConfirmingHit(entryText, null)]));
+  const doubleWrapped = `<!-- remembered via Mnemosyne (TS client) @ 2026-09-08T02:00:00.000Z scope=meta status=provisional branch=x commit=y -->\n${entryText}`;
+  const { recall } = makeFakeRecall(recallSuccess([makeConfirmingHit(doubleWrapped, null)]));
   const { deletePoints } = makeFakeDeletePoints();
 
   const result = await decommissionIntakeEntry({
