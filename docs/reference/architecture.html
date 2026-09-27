@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Architecture — Mnemosyne Docs</title>
+<meta name="description" content="Mnemosyne architecture: the layer stack, component diagram, and recall() request flow.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%A0%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="../assets/mnemosyne.css">
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="../index.html"><span class="mark">◈</span> Mnemosyne</a>
+    <div class="links">
+      <a href="architecture.html" style="color:var(--amber-bright)">Architecture</a>
+      <a href="http-api.html">HTTP API</a>
+      <a href="observability.html">Observability</a>
+      <a href="vision.html">Vision</a>
+      <a class="gh-cta" href="https://github.com/mdostal/mnemosyne">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<div class="page-header">
+  <div class="wrap">
+    <div>
+      <div class="breadcrumb"><a href="../index.html">Home</a> / Docs / Architecture</div>
+      <h1>Architecture</h1>
+    </div>
+  </div>
+</div>
+
+<div class="doc-content">
+
+<p>Mnemosyne is a <strong>library/service</strong> other Pantheon gods call to <code>recall()</code> and <code>remember()</code> — it does not plan, orchestrate, or route work itself. It fills the memory capability slot in Pantheon: one god per capability, ABI-swappable, owns its own memory, runs standalone, standard interface.</p>
+
+<h2>The layer stack</h2>
+
+<p>Memory is organized as an ordered, escalating stack — meta (broad) to file (raw). A recall walks the layers and merges/ranks hits <strong>with provenance</strong>; a write routes to the correct layer(s) and keeps indexes coherent.</p>
+
+<pre>meta        (hive Obsidian vault — Consus knowledge home / canonical truth)
+  → enterprise   (org-wide knowledge + standards, promoted from approved CBAs)
+    → project    (per-project working memory, decisions, context)
+      → code-graph   (typed impact graph: depends_on / cites / implements)
+        → vector     (Qdrant Cloud — default backend, semantic recall)
+          → file     (raw grep — loud-failure floor)</pre>
+
+<p>Backends are <strong>pluggable</strong>: Qdrant is the <em>default</em> vector backend but the slot is swappable (any OpenAI-compatible embeddings / alternate vector store); Obsidian is the default meta store but the meta layer is a contract, not a hard dependency. Slot config is owned by <strong>Vesta</strong> — see <a href="vision.html">Vision</a> for how the A/B/metrics story plays out here.</p>
+
+<h2>Component diagram</h2>
+
+<div class="diagram">
+  <pre class="mermaid">
+flowchart TB
+  subgraph pantheon["Pantheon gods (callers)"]
+    minerva["Minerva<br/>planner"]
+    argus["Argus<br/>metrics"]
+    swarm["swarm agents"]
+  end
+
+  subgraph mnemosyne["Mnemosyne — memory god"]
+    api["recall(query, scope, intent)<br/>remember(content, scope, layer?)"]
+    router["layer router + escalation<br/>(narrow↔broad, merge + rank)"]
+    prov["provenance stamping<br/>(7 fields per hit)"]
+    idx["continuous indexing<br/>(Multica-native schedule)"]
+    api --> router --> prov
+  end
+
+  subgraph layers["Layer stack (pluggable slots)"]
+    meta["meta — Obsidian vault"]
+    ent["enterprise"]
+    proj["project"]
+    cg["code-graph"]
+    vec["vector — Qdrant Cloud"]
+    file["file — grep (loud floor)"]
+  end
+
+  minerva --> api
+  argus --> api
+  swarm --> api
+
+  router --> meta
+  router --> ent
+  router --> proj
+  router --> cg
+  router --> vec
+  router --> file
+
+  idx -.keeps fresh.-> vec
+  idx -.keeps fresh.-> cg
+  idx -.keeps fresh.-> meta
+
+  vec -->|wraps| sm[("swarm-memory<br/>+ Qdrant Cloud")]
+  cg -->|wraps| sm
+
+  api -.decision + metric record.-> argus
+
+  consus["Consus / Janus<br/>(read model: browse layers,<br/>trace provenance, spot stale scopes)"] --> api
+  </pre>
+</div>
+
+<h2>Request flow — a <code>recall()</code> call</h2>
+
+<div class="diagram">
+  <pre class="mermaid">
+sequenceDiagram
+  participant God as Calling god (e.g. Minerva)
+  participant Client as MnemosyneClient
+  participant Router as Layer router
+  participant Layer as Layer adapter(s)
+  participant Obs as Observability (logger + metrics)
+
+  God->>Client: recall(query, scope, intent)
+  Client->>Obs: recall_start(query, scope, intent)
+  Client->>Router: resolve layer order (narrow↔broad)
+  loop each candidate layer
+    Router->>Layer: query layer
+    Layer-->>Router: hits | degraded
+    Router->>Obs: layer_query(layer, duration_ms, ok)
+    alt layer unavailable/degraded
+      Router->>Obs: layer_degraded(layer, reason)
+    end
+  end
+  Router->>Router: merge + rank hits, stamp provenance
+  Router-->>Client: RecallSuccess(hits, layers_queried, layers_skipped, degraded)
+  Client->>Obs: recall_end(duration_ms, hit_count, ok)
+  Client-->>God: result
+  </pre>
+</div>
+
+<p>Every hit carries the mandatory 7-field provenance record (<code>layer</code>, <code>source</code>, <code>chunk_span</code>, <code>index_timestamp</code>, <code>content_hash</code>, <code>embedder</code>, <code>retrieval_time</code>); a layer that cannot supply a field returns it explicitly as <code>null</code>, never omits it. A degraded or unreachable layer is flagged in the response — recall never silently falls back without saying so (the <strong>loud failure</strong> contract).</p>
+
+<h2>Two services, two ports</h2>
+
+<p>Mnemosyne currently runs as two separate processes:</p>
+
+<table>
+  <thead>
+    <tr><th>Service</th><th>Entry point</th><th>Port</th><th>Wraps</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Production recall/remember service</td>
+      <td><code>src/server.mjs</code></td>
+      <td><code>:8477</code></td>
+      <td><code>swarm-memory</code> engine over remote Qdrant Cloud</td>
+    </tr>
+    <tr>
+      <td>MnemosyneClient HTTP API</td>
+      <td><code>lib/mnemosyne/server.ts</code></td>
+      <td><code>:3141</code></td>
+      <td>MnemosyneClient (code-graph/vector/file routing)</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>See <a href="http-api.html">HTTP API</a> for the client-API request/response contract.</p>
+
+<h2>How it fits in Pantheon</h2>
+
+<ul>
+  <li><strong>Host / framework:</strong> <a href="https://github.com/mdostal/pantheon-v2">pantheon-v2</a> — the core host that assembles gods behind shared contracts.</li>
+  <li><strong>Substrate:</strong> work is planned and executed on <a href="https://github.com/firefly-events/multica">Multica</a> with the <a href="https://firefly-events.github.io/plugin-hive/">plugin-hive</a> SDLC. Continuous indexing schedules are Multica-native (no localized cron).</li>
+  <li><strong>Sibling gods it talks to:</strong> <strong>Minerva</strong> (planner) and swarm agents are the primary recall callers; <strong>Consus</strong> / <strong>Janus</strong> provide the human read model; <strong>Vesta</strong> owns which backend fills each layer slot; <strong>Argus</strong> / <strong>Metis</strong> receive the decision + metric records.</li>
+  <li><strong>Builds on:</strong> <a href="https://github.com/mdostal/swarm-memory">swarm-memory</a> (Qdrant-backed semantic memory + code/docs impact graph) — adopted/wrapped as the vector and code-graph layers, not rewritten.</li>
+</ul>
+
+<h2>Related docs</h2>
+
+<ul>
+  <li><a href="http-api.html">HTTP API</a> — the MnemosyneClient HTTP API contract</li>
+  <li><a href="observability.html">Observability</a> — structured log events + metrics emitted per recall/remember</li>
+  <li><a href="vision.html">Vision</a> — current state, near-term goals, long-term pluggable-backend vision</li>
+</ul>
+
+</div>
+
+<footer>
+  <div class="wrap">
+    <p>
+      <a href="https://github.com/mdostal/mnemosyne">mdostal/mnemosyne</a> ·
+      MIT License ·
+      Part of the <a href="https://github.com/mdostal/pantheon-v2">Pantheon</a>
+    </p>
+  </div>
+</footer>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: "dark",
+    themeVariables: {
+      background: "#161310",
+      primaryColor: "#1c1814",
+      primaryTextColor: "#ede6d8",
+      primaryBorderColor: "#e0a72e",
+      lineColor: "#a89c87",
+      secondaryColor: "#161310",
+      tertiaryColor: "#0d0b08"
+    }
+  });
+</script>
+</body>
+</html>

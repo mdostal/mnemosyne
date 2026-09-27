@@ -6,180 +6,7 @@
 <title>Mnemosyne — the Pantheon's Memory god</title>
 <meta name="description" content="Mnemosyne unifies every memory scope the Pantheon swarm has behind one recall/remember API, so memory-over-find becomes the default retrieval path.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%A0%3C/text%3E%3C/svg%3E">
-<style>
-  :root{
-    --bg:#0d0b08;
-    --bg-raised:#161310;
-    --bg-card:#1c1814;
-    --border:#332c22;
-    --amber:#e0a72e;
-    --amber-bright:#f5c451;
-    --text:#ede6d8;
-    --text-dim:#a89c87;
-    --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  }
-  *{box-sizing:border-box}
-  html{scroll-behavior:smooth}
-  body{
-    margin:0;
-    background:var(--bg);
-    color:var(--text);
-    font-family:var(--sans);
-    line-height:1.6;
-  }
-  a{color:var(--amber-bright)}
-  a:hover{color:#fff}
-  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
-
-  nav{
-    position:sticky;top:0;z-index:10;
-    background:rgba(13,11,8,.92);
-    backdrop-filter:blur(6px);
-    border-bottom:1px solid var(--border);
-  }
-  nav .wrap{display:flex;align-items:center;justify-content:space-between;height:64px}
-  .brand{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:.02em;color:var(--text);text-decoration:none}
-  .brand .mark{color:var(--amber-bright);font-size:1.3em}
-  nav .links{display:flex;gap:24px;font-size:.92rem}
-  nav .links a{color:var(--text-dim);text-decoration:none}
-  nav .links a:hover{color:var(--amber-bright)}
-  .gh-cta{
-    border:1px solid var(--amber);
-    color:var(--amber-bright) !important;
-    padding:6px 14px;
-    border-radius:6px;
-  }
-
-  header.hero{
-    padding:96px 0 72px;
-    text-align:center;
-    background:
-      radial-gradient(ellipse 60% 50% at 50% -10%, rgba(224,167,46,.14), transparent 60%);
-  }
-  .eyebrow{
-    display:inline-block;
-    font-family:var(--mono);
-    font-size:.78rem;
-    letter-spacing:.12em;
-    text-transform:uppercase;
-    color:var(--amber);
-    border:1px solid var(--border);
-    background:var(--bg-raised);
-    padding:5px 12px;
-    border-radius:999px;
-    margin-bottom:22px;
-  }
-  h1{
-    font-size:clamp(2.2rem,5vw,3.4rem);
-    margin:0 0 18px;
-    letter-spacing:-.01em;
-  }
-  h1 .accent{color:var(--amber-bright)}
-  .tagline{
-    max-width:640px;margin:0 auto 32px;
-    font-size:1.15rem;color:var(--text-dim);
-  }
-  .hero-ctas{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-bottom:20px}
-  .btn{
-    display:inline-flex;align-items:center;gap:8px;
-    padding:11px 22px;border-radius:8px;
-    font-weight:600;font-size:.95rem;text-decoration:none;
-    border:1px solid transparent;
-  }
-  .btn-primary{background:var(--amber);color:#1a1305}
-  .btn-primary:hover{background:var(--amber-bright);color:#1a1305}
-  .btn-ghost{border-color:var(--border);color:var(--text) !important}
-  .btn-ghost:hover{border-color:var(--amber)}
-  .hero-note{font-family:var(--mono);font-size:.82rem;color:var(--text-dim)}
-
-  section{padding:64px 0;border-top:1px solid var(--border)}
-  .kicker{
-    font-family:var(--mono);color:var(--amber);
-    font-size:.8rem;letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px;
-  }
-  h2{font-size:1.9rem;margin:0 0 14px}
-  .lede{color:var(--text-dim);max-width:740px;margin-bottom:36px}
-
-  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
-  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
-  @media (max-width:760px){.grid3{grid-template-columns:1fr}.grid2{grid-template-columns:1fr}}
-
-  .card{
-    background:var(--bg-card);
-    border:1px solid var(--border);
-    border-radius:10px;
-    padding:22px;
-  }
-  .card .num{font-family:var(--mono);color:var(--amber);font-size:.85rem;margin-bottom:10px}
-  .card h3{margin:0 0 8px;font-size:1.05rem}
-  .card p{margin:0;color:var(--text-dim);font-size:.94rem}
-
-  .layer-stack{
-    font-family:var(--mono);
-    background:var(--bg-raised);
-    border:1px solid var(--border);
-    border-radius:10px;
-    padding:22px 26px;
-    font-size:.92rem;
-    color:var(--text-dim);
-    white-space:pre;
-    overflow-x:auto;
-  }
-  .layer-stack .step{color:var(--text)}
-  .layer-stack .step.meta{color:var(--amber-bright)}
-
-  .diagram{
-    background:var(--bg-raised);
-    border:1px solid var(--border);
-    border-radius:10px;
-    padding:24px;
-    overflow-x:auto;
-  }
-  .diagram .mermaid{display:flex;justify-content:center}
-
-  pre{
-    background:#0a0806;
-    border:1px solid var(--border);
-    border-radius:8px;
-    padding:16px 18px;
-    overflow-x:auto;
-    font-family:var(--mono);
-    font-size:.87rem;
-    color:#e8dcc4;
-  }
-  code{font-family:var(--mono)}
-  :not(pre) > code{
-    background:var(--bg-raised);
-    border:1px solid var(--border);
-    padding:1px 6px;border-radius:4px;font-size:.9em;
-  }
-
-  .role-list{list-style:none;margin:0;padding:0}
-  .role-list li{
-    display:flex;gap:14px;padding:14px 0;
-    border-bottom:1px solid var(--border);
-  }
-  .role-list li:last-child{border-bottom:none}
-  .role-list b{color:var(--amber-bright);min-width:140px;flex-shrink:0}
-  .role-list span{color:var(--text-dim)}
-
-  .support{
-    text-align:center;
-    background:radial-gradient(ellipse 70% 100% at 50% 100%, rgba(224,167,46,.12), transparent 70%);
-  }
-  .support .btn{margin:4px}
-
-  footer{
-    border-top:1px solid var(--border);
-    padding:36px 0;
-    text-align:center;
-    color:var(--text-dim);
-    font-size:.86rem;
-  }
-  footer a{color:var(--text-dim)}
-  footer a:hover{color:var(--amber-bright)}
-</style>
+<link rel="stylesheet" href="assets/mnemosyne.css">
 </head>
 <body>
 
@@ -190,6 +17,7 @@
       <a href="#architecture">Architecture</a>
       <a href="#quickstart">Quickstart</a>
       <a href="#pantheon">Role in Pantheon</a>
+      <a href="reference/index.html">Docs</a>
       <a href="#support">Support</a>
       <a class="gh-cta" href="https://github.com/mdostal/mnemosyne">GitHub</a>
     </div>
@@ -264,7 +92,7 @@
     <h2>Component &amp; flow</h2>
     <p class="lede">
       Full diagrams (including the <code>recall()</code> sequence flow) live in
-      <a href="https://github.com/mdostal/mnemosyne/blob/main/docs/architecture.md">docs/architecture.md</a>.
+      <a href="reference/architecture.html">docs/reference/architecture</a>.
     </p>
     <div class="diagram">
       <pre class="mermaid">
@@ -331,7 +159,7 @@ npm run test:e2e      # Minerva-style end-to-end integration test
 npm start              # run the production recall/remember service (:8477)</code></pre>
     <p class="lede" style="margin-top:20px">
       See <a href="https://github.com/mdostal/mnemosyne#quickstart">README.md</a>
-      for the full command reference, <code>docs/http-api.md</code> for the
+      for the full command reference, <a href="reference/http-api.html">HTTP API docs</a> for the
       <code>MnemosyneClient</code> HTTP API, and <code>hooks/README.md</code> to
       wire the pre-recall/post-remember hooks into an agent runner.
     </p>

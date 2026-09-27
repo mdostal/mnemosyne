@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Observability — Mnemosyne Docs</title>
+<meta name="description" content="Mnemosyne structured log events and metrics emitted per recall/remember operation.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%A0%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="../assets/mnemosyne.css">
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="../index.html"><span class="mark">◈</span> Mnemosyne</a>
+    <div class="links">
+      <a href="architecture.html">Architecture</a>
+      <a href="http-api.html">HTTP API</a>
+      <a href="observability.html" style="color:var(--amber-bright)">Observability</a>
+      <a href="vision.html">Vision</a>
+      <a class="gh-cta" href="https://github.com/mdostal/mnemosyne">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<div class="page-header">
+  <div class="wrap">
+    <div>
+      <div class="breadcrumb"><a href="../index.html">Home</a> / Docs / Observability</div>
+      <h1>Observability Events</h1>
+    </div>
+  </div>
+</div>
+
+<div class="doc-content">
+
+<p>Mnemosyne emits structured JSON logs through <code>src/observability/logger.ts</code> and operation metrics through <code>src/observability/metrics.ts</code>.</p>
+
+<h2>Recall</h2>
+
+<h3><code>recall_start</code></h3>
+<ul>
+  <li><code>query</code> — original caller query</li>
+  <li><code>scope</code> — requested memory scope</li>
+  <li><code>intent</code> — resolved recall intent</li>
+</ul>
+
+<h3><code>layer_query</code></h3>
+<ul>
+  <li><code>layer</code> — queried memory layer</li>
+  <li><code>scope</code> — requested memory scope</li>
+  <li><code>duration_ms</code> — elapsed time spent in the layer adapter</li>
+  <li><code>ok</code> — whether the layer call returned a successful recall result</li>
+</ul>
+
+<h3><code>layer_degraded</code></h3>
+<ul>
+  <li><code>layer</code> — degraded, skipped, or failed layer</li>
+  <li><code>scope</code> — requested memory scope</li>
+  <li><code>reason</code> — machine-readable degradation reason</li>
+  <li><code>detail</code> — optional human-readable detail</li>
+</ul>
+
+<h3><code>recall_end</code></h3>
+<ul>
+  <li><code>duration_ms</code> — elapsed recall operation time</li>
+  <li><code>hit_count</code> — returned hit count, or <code>0</code> for failed recalls</li>
+  <li><code>layers_queried</code> — layers reported as queried, or <code>[]</code> for pre-dispatch failures</li>
+  <li><code>scope</code> — requested memory scope</li>
+  <li><code>intent</code> — resolved recall intent</li>
+  <li><code>ok</code> — whether recall succeeded</li>
+  <li><code>error_code</code> — present when recall failed with a code</li>
+  <li><code>error_layer</code> — present when recall failed</li>
+</ul>
+
+<h2>Remember</h2>
+
+<h3><code>remember_start</code></h3>
+<ul>
+  <li><code>scope</code> — requested memory scope</li>
+  <li><code>layer</code> — resolved target layer</li>
+  <li><code>content_hash</code> — sha256 hash of the content text</li>
+</ul>
+
+<h3><code>remember_end</code></h3>
+<ul>
+  <li><code>duration_ms</code> — elapsed remember operation time</li>
+  <li><code>layer</code> — resolved target layer</li>
+  <li><code>scope</code> — requested memory scope</li>
+  <li><code>ok</code> — whether remember succeeded</li>
+</ul>
+
+<h2>Metrics</h2>
+
+<ul>
+  <li><code>recall_duration_ms</code> — histogram recorded once per <code>recall()</code> call.</li>
+  <li><code>remember_duration_ms</code> — histogram recorded once per <code>remember()</code> call.</li>
+  <li><code>layer_degraded_total</code> — counter incremented for each detected degradation, skipped layer, or layer failure.</li>
+</ul>
+
+</div>
+
+<footer>
+  <div class="wrap">
+    <p>
+      <a href="https://github.com/mdostal/mnemosyne">mdostal/mnemosyne</a> ·
+      MIT License ·
+      Part of the <a href="https://github.com/mdostal/pantheon-v2">Pantheon</a>
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>
