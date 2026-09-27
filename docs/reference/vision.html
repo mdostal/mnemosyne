@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vision — Mnemosyne Docs</title>
+<meta name="description" content="Where Mnemosyne is today, its near-term goals, and the long-term pluggable-backend A/B vision.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%A0%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="../assets/mnemosyne.css">
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="../index.html"><span class="mark">◈</span> Mnemosyne</a>
+    <div class="links">
+      <a href="architecture.html">Architecture</a>
+      <a href="http-api.html">HTTP API</a>
+      <a href="observability.html">Observability</a>
+      <a href="vision.html" style="color:var(--amber-bright)">Vision</a>
+      <a class="gh-cta" href="https://github.com/mdostal/mnemosyne">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<div class="page-header">
+  <div class="wrap">
+    <div>
+      <div class="breadcrumb"><a href="../index.html">Home</a> / Docs / Vision</div>
+      <h1>Mnemosyne — Vision</h1>
+    </div>
+  </div>
+</div>
+
+<div class="doc-content">
+
+<p>Where the Memory god is, where it's going, and where it grows to.</p>
+
+<p>The one-line trajectory:</p>
+
+<blockquote>
+  <strong>From a live vector-recall backend → a unified, provenance-tracked memory API → a benchmarked, A/B-tested stack of multiple memory models spanning the full layered hierarchy.</strong>
+</blockquote>
+
+<h2>① Current — where it is today</h2>
+
+<p><strong>Phase 1 v1 is implemented and running.</strong> This is no longer a scaffold — a real service wraps the layer stack end to end:</p>
+
+<ul>
+  <li><strong><code>MnemosyneClient</code></strong> (<code>lib/mnemosyne/</code>) — the <code>recall()</code>/<code>remember()</code> library surface other Pantheon gods import, with code-graph, vector, and file layer adapters, layer escalation, and full provenance stamping.</li>
+  <li><strong>Two running services</strong> — <code>src/server.mjs</code> (<code>:8477</code>, wraps <code>swarm-memory</code> over Qdrant Cloud) and the <code>MnemosyneClient</code> HTTP API (<code>lib/mnemosyne/server.ts</code>, <code>:3141</code>, see <a href="http-api.html">HTTP API</a>).</li>
+  <li><strong>Agent-loop hooks</strong> (<code>hooks/</code>) — <code>pre-recall</code> / <code>post-remember</code>, wired into Claude Code today, runner-neutral by design so Codex/Kimi/other runners can read the same canonical bundle.</li>
+  <li><strong>Observability</strong> (<code>src/observability/</code>) — structured <code>recall_start</code> / <code>layer_query</code> / <code>layer_degraded</code> / <code>recall_end</code> / <code>remember_start</code> / <code>remember_end</code> events plus <code>recall_duration_ms</code>, <code>remember_duration_ms</code>, and <code>layer_degraded_total</code> metrics — see <a href="observability.html">Observability</a>.</li>
+  <li><strong>Loud-failure + provenance contracts enforced</strong> — a degraded/unavailable layer is flagged explicitly, never silently skipped; every hit carries the full 7-field provenance record.</li>
+  <li><strong>A real test suite</strong> — <code>npm test</code> runs bundle/inject/write-through/health-drift/code-graph/reindex/vector/http-api/review-auto-merge coverage plus a vitest contract suite; <code>npm run test:e2e</code> runs the Minerva-style end-to-end integration test.</li>
+</ul>
+
+<p>What is still explicitly deferred (see <a href="architecture.html">Architecture</a> for the current component/flow diagrams):</p>
+
+<ul>
+  <li>The <strong>meta layer</strong> (Obsidian vault) and <strong>enterprise</strong> layer routing are contracted but not yet wired end-to-end — recall/remember today primarily exercise the code-graph/vector/file layers.</li>
+  <li><strong>Continuous indexing</strong> as a Multica-native scheduled job (indexing today runs via explicit <code>reindex</code> calls, not an always-on schedule).</li>
+  <li><strong>Consus/Janus read model</strong> — browsing layers and tracing provenance in the UI is not built yet.</li>
+  <li><strong>Argus/Metis decision + metric ingestion</strong> — observability emits the events and metrics locally; wiring them into Argus/Metis as the receiving god is next.</li>
+</ul>
+
+<h2>② Goals — near-term next steps</h2>
+
+<ol>
+  <li><strong>Meta + enterprise layer wiring.</strong> Bring the Obsidian vault into the live escalation path as the top (meta) layer, and stand up the enterprise scope so cross-project standards/CBAs are recallable, not just project-local memory.</li>
+  <li><strong>Continuous indexing.</strong> Move indexing off explicit <code>reindex</code> calls onto a Multica-native schedule (event- or interval-driven, no localized cron) so vector + code-graph + vault indexes stay fresh automatically.</li>
+  <li><strong>Argus/Metis integration.</strong> Route every <code>recall</code>/<code>remember</code> decision + metric record to Argus/Metis, matching the pattern every other Pantheon god follows.</li>
+  <li><strong>Consus/Janus read model.</strong> A minimal view that lets a human browse layers, trace a recall's provenance, and spot stale scopes.</li>
+  <li><strong>First multi-layer god integration, proven.</strong> ≥1 other god (Minerva is the natural first) using the unified API across ≥3 layers, with recall shown to beat <code>find</code>/<code>grep</code> on token cost for a representative query set.</li>
+</ol>
+
+<p>Near-term success signals: one recall/write API in use by ≥1 other god spanning ≥3 layers; provenance on every hit (already true for the layers that are wired); memory browsable in Consus/Janus with layer + freshness visibility.</p>
+
+<h2>③ Long-term vision — where it grows to</h2>
+
+<p><strong>Multiple memory models, A/B-tested and solidified.</strong> The layer slots are pluggable by design (Qdrant default + swappable vector store; Obsidian default + swappable meta store). The long game is to run <strong>competing memory backends head-to-head</strong> — different vector stores, different embedders, different graph/store strategies behind the <em>same</em> <code>recall</code>/<code>remember</code> contract — measure them on the same query sets (recall quality, token cost, latency, freshness), and <strong>solidify the winners per slot</strong>. Memory stops being a single fixed engine and becomes a benchmarked marketplace of interchangeable models.</p>
+
+<p><strong>The full layered memory stack, first-class and coherent:</strong></p>
+
+<pre>meta → enterprise → project → code-graph → vector → file</pre>
+
+<p>Every layer continuously indexed, every recall escalating narrow↔broad with merged, ranked, provenance-stamped hits — so "where is X?" has exactly one answer, and "what breaks if I change this?" is a graph query, not a guess.</p>
+
+<p><strong>Platform-wide direction (why the pluggability matters):</strong> across the whole Pantheon, everything is <strong>swappable</strong> — you can toggle any language, model, plugin, or god on/off and <strong>compare metrics at every step</strong>. Mnemosyne is memory's expression of that principle: the layer slots are ABI-swappable, Vesta owns which backend fills each slot, and Argus/Metis capture the decision + metric records so an A/B swap is a config change with a measured before/after — not a rewrite.</p>
+
+<p>Where it ends up: memory browsable and traceable in Consus/Janus (layers, freshness, provenance, stale-scope detection), continuously indexed, backend-benchmarked, and the obvious default retrieval path for every agent in the swarm.</p>
+
+<h2>Good first contributions</h2>
+
+<ul>
+  <li><strong>Meta-layer adapter</strong> — wire the Obsidian vault into the layer router behind the existing layer-adapter interface (see <code>lib/mnemosyne/layers/</code>).</li>
+  <li><strong>Enterprise-scope routing</strong> — extend scope resolution so <code>enterprise</code> queries reach the right cross-project collection.</li>
+  <li><strong>Continuous indexing</strong> — replace explicit <code>reindex</code> invocation with a Multica-native scheduled trigger.</li>
+  <li><strong>Argus/Metis emitter</strong> — forward the existing observability events/metrics to Argus/Metis instead of (only) local structured logs.</li>
+  <li><strong>Backend adapter interface</strong> — sketch a second vector-backend driver behind the pluggable interface so Qdrant is <em>a</em> driver, not <em>the</em> driver (sets up the long-term A/B goal).</li>
+  <li><strong>Docs &amp; diagrams</strong> — extend <a href="architecture.html">Architecture</a>, or document the escalation semantics (narrow↔broad merge/rank) in more depth.</li>
+</ul>
+
+<p>New here? Read <a href="https://github.com/mdostal/mnemosyne/blob/main/idea-brief.md"><code>idea-brief.md</code></a> first (the source-of-truth design brief), then <a href="architecture.html">Architecture</a> for the current component/flow diagrams. Work follows the Pantheon SDLC via <a href="https://firefly-events.github.io/plugin-hive/">plugin-hive</a>; the host is <a href="https://github.com/mdostal/pantheon-v2">pantheon-v2</a>.</p>
+
+</div>
+
+<footer>
+  <div class="wrap">
+    <p>
+      <a href="https://github.com/mdostal/mnemosyne">mdostal/mnemosyne</a> ·
+      MIT License ·
+      Part of the <a href="https://github.com/mdostal/pantheon-v2">Pantheon</a>
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>
