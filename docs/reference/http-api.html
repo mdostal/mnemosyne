@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HTTP API — Mnemosyne Docs</title>
+<meta name="description" content="MnemosyneClient HTTP API reference: /health, /recall, /remember endpoints, request/response shapes, and error codes.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%A0%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="../assets/mnemosyne.css">
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="../index.html"><span class="mark">◈</span> Mnemosyne</a>
+    <div class="links">
+      <a href="architecture.html">Architecture</a>
+      <a href="http-api.html" style="color:var(--amber-bright)">HTTP API</a>
+      <a href="observability.html">Observability</a>
+      <a href="vision.html">Vision</a>
+      <a class="gh-cta" href="https://github.com/mdostal/mnemosyne">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<div class="page-header">
+  <div class="wrap">
+    <div>
+      <div class="breadcrumb"><a href="../index.html">Home</a> / Docs / HTTP API</div>
+      <h1>MnemosyneClient HTTP API</h1>
+    </div>
+  </div>
+</div>
+
+<div class="doc-content">
+
+<p>A thin REST wrapper around <a href="https://github.com/mdostal/mnemosyne/blob/main/lib/mnemosyne/client.ts"><code>MnemosyneClient</code></a> for external, non-TypeScript consumers (CLI tools, non-TS agents). Every request is a straight pass-through to the client library — this service does transport only, no memory logic of its own.</p>
+
+<blockquote>
+  <strong>Not the same service as <code>src/server.mjs</code>.</strong> <code>src/server.mjs</code> (<code>:8477</code>) is the production service wrapping the swarm-memory/Qdrant engine. This API (<code>lib/mnemosyne/server.ts</code>, default <code>:3141</code>) wraps the newer <code>MnemosyneClient</code> (code-graph/vector/file routing). They run as separate processes on separate ports and do not share routes.
+</blockquote>
+
+<h2>Run</h2>
+
+<pre><code>npm run start:client-api
+# or
+MNEMOSYNE_PORT=3141 MNEMOSYNE_ROOT_DIR=. bin/mnemosyne-client-api</code></pre>
+
+<ul>
+  <li><code>MNEMOSYNE_PORT</code> — port to listen on (default <code>3141</code>).</li>
+  <li><code>MNEMOSYNE_ROOT_DIR</code> — directory the file layer searches (default <code>process.cwd()</code>).</li>
+</ul>
+
+<p>No authentication — localhost-only for this slice; auth is future work.</p>
+
+<h2>Endpoints</h2>
+
+<h3><code>GET /health</code></h3>
+
+<p>Layer availability status.</p>
+
+<pre><code>curl -s http://127.0.0.1:3141/health</code></pre>
+
+<pre><code>{
+  "ok": true,
+  "layers": [
+    { "layer": "file", "available": true, "root_directory": "/path/to/root" }
+  ]
+}</code></pre>
+
+<p>Returns <code>503</code> with <code>ok: false</code> when a layer is unavailable (e.g. the root directory does not exist).</p>
+
+<h3><code>POST /recall</code></h3>
+
+<pre><code>curl -s -X POST http://127.0.0.1:3141/recall \
+  -H 'content-type: application/json' \
+  -d '{"query": "provenance", "scope": "project"}'</code></pre>
+
+<p>Body:</p>
+
+<table>
+  <thead>
+    <tr><th>field</th><th>type</th><th>required</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>query</code></td><td><code>string</code></td><td>yes</td></tr>
+    <tr><td><code>scope</code></td><td><code>"project" | "enterprise" | "meta"</code></td><td>yes</td></tr>
+    <tr><td><code>intent</code></td><td><code>"narrow" | "broad"</code></td><td>no</td></tr>
+  </tbody>
+</table>
+
+<p>Returns the client library's <code>RecallResult</code> JSON verbatim — <code>RecallSuccess</code> on <code>ok: true</code> with <code>hits</code>, <code>layers_queried</code>, <code>layers_skipped</code>, <code>escalated</code>, <code>degraded</code>; <code>RecallFailure</code> on <code>ok: false</code> with a structured <code>error</code>. See <a href="https://github.com/mdostal/mnemosyne/blob/main/lib/mnemosyne/interfaces.ts"><code>interfaces.ts</code></a> for the full contract.</p>
+
+<h3><code>POST /remember</code></h3>
+
+<pre><code>curl -s -X POST http://127.0.0.1:3141/remember \
+  -H 'content-type: application/json' \
+  -d '{"content": {"text": "decision: use file layer first"}, "scope": "project"}'</code></pre>
+
+<p>Body:</p>
+
+<table>
+  <thead>
+    <tr><th>field</th><th>type</th><th>required</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>content.text</code></td><td><code>string</code></td><td>yes</td></tr>
+    <tr><td><code>content.metadata</code></td><td><code>object</code></td><td>no</td></tr>
+    <tr><td><code>scope</code></td><td><code>"project" | "enterprise" | "meta"</code></td><td>yes</td></tr>
+    <tr><td><code>layer</code></td><td><code>"meta" | "enterprise" | "project" | "code-graph" | "vector" | "file"</code></td><td>no</td></tr>
+  </tbody>
+</table>
+
+<p>Returns the client library's <code>RememberResult</code> JSON verbatim. As of this story <code>remember()</code> is a stub in the client: it always succeeds and returns provenance for the resolved layer, but does not persist content yet.</p>
+
+<h2>Errors</h2>
+
+<p>Invalid input (missing/malformed <code>query</code>, <code>scope</code>, <code>content.text</code>, or an unparseable JSON body) returns <code>400</code> with a structured error:</p>
+
+<pre><code>{ "error": { "code": "invalid_scope", "message": "\"scope\" is required and must be one of: project, enterprise, meta" } }</code></pre>
+
+<p>Unknown routes return <code>404</code>; unexpected failures return <code>500</code> — both with the same <code>{ "error": { "code", "message" } }</code> shape.</p>
+
+<h2>Tests</h2>
+
+<pre><code>npm run test:http-api</code></pre>
+
+<p>Spawns the service against a throwaway root directory with known content and exercises every route (including the 400 paths) over real HTTP.</p>
+
+</div>
+
+<footer>
+  <div class="wrap">
+    <p>
+      <a href="https://github.com/mdostal/mnemosyne">mdostal/mnemosyne</a> ·
+      MIT License ·
+      Part of the <a href="https://github.com/mdostal/pantheon-v2">Pantheon</a>
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>
