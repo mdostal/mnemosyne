@@ -27,6 +27,7 @@
     "test:git-hooks": "node test/git-hooks.mjs",
     "test:install-git-hooks": "node test/install-git-hooks.mjs",
     "test:lifecycle-compliance-audit": "node test/lifecycle-compliance-audit.mjs",
+    "test:health-scopes": "node test/health-scopes.mjs",
     "test:write-through": "node test/write-through.mjs",
     "test:code-graph": "node test/code-graph.mjs",
     "start:client-api": "tsx lib/mnemosyne/server.ts",
