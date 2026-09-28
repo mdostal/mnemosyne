@@ -7,7 +7,8 @@
 //   GET  /                 -> service info JSON (programmatic callers) OR a
 //                              302 to /ui (browser navigations — see below)
 //   GET  /ui, /ui/*        -> static standalone UI shell (zero-dep, no build step)
-//   GET  /health           -> engine self-test (Qdrant/embedder/graph)
+//   GET  /health           -> engine self-test (Qdrant/embedder/graph) + per-scope
+//                             collection existence (status: "degraded" on a missing one)
 //   GET  /healthz          -> liveness alias (always 200 if the process is up)
 //   GET  /scopes           -> configured scopes + escalation ladders
 //   GET  /config           -> read-only effective config (qdrant_url, embedder, scopes)
@@ -23,6 +24,11 @@
 //                   git context (branch/commit) a write's flight status is
 //                   auto-detected from; defaults to this process's own cwd.
 //   POST /lanes   {name, collection, ladder?} -> add-only config.toml write
+//   GET  /note    ?source=<note>&chunk=&lines=a-b  (alias: GET /notes/:source)
+//                    -> PANT-838: the stored note text + provenance for a
+//                       `mnemosyne://note/<source>` recall ref. source is a
+//                       bare file name in the notes dir; any path segment /
+//                       traversal is a 400, an unknown note a 404.
 //   GET  /search  ?q=&scope=&mode=recall|grep&hits=&escalate=&min_score=&radius=
 //                    -> thin dispatcher to recall()/grep() for the UI's Search panel
 //   GET  /graph/stats            -> graph size + origin breakdown (swarm-memory graph stats)
@@ -68,7 +74,7 @@
 import http from "node:http";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   health,
@@ -93,7 +99,9 @@ import {
   graphifyImpactAction,
   graphifyDepsAction,
 } from "../bin/graphify-bridge.mjs";
-import { collectionExists } from "./collection-exists.mjs";
+import { readNote } from "./refs.mjs";
+import { collectionExists, listCollections } from "./collection-exists.mjs";
+import { createScopeHealthCheck, healthStatus } from "./scope-health.mjs";
 import {
   createReindexJobs,
   normalizeRepo,
@@ -103,9 +111,20 @@ import {
 } from "./reindex-jobs.mjs";
 
 const PORT = Number(process.env.PORT || 8477);
-const SERVICE = { god: "mnemosyne", role: "memory", version: "0.1.0" };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// The deployed build's real version, so /health and / say which build is live.
+// The desktop bundle ships package.json as a resource (src-tauri/tauri.conf.json);
+// if it's ever missing, report "unknown" rather than refuse to start.
+function readPackageVersion() {
+  try {
+    return JSON.parse(readFileSync(path.resolve(__dirname, "..", "package.json"), "utf8")).version || "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+const PACKAGE_VERSION = readPackageVersion();
+const SERVICE = { god: "mnemosyne", role: "memory", version: PACKAGE_VERSION };
 const UI_DIR = path.resolve(__dirname, "..", "ui");
 
 const STATIC_CONTENT_TYPES = {
@@ -169,6 +188,14 @@ function readJson(req) {
   });
 }
 
+function safeDecode(s) {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    throw Object.assign(new Error("invalid percent-encoding in path"), { status: 400 });
+  }
+}
+
 /**
  * Builds the HTTP server without listening. `overrides` replaces the reindex
  * wiring (tests inject a stubbed reindex() and their own roots/repo map);
@@ -178,6 +205,12 @@ export function createMnemosyneServer(overrides = {}) {
   const reindexRoots = overrides.reindexRoots || parseReindexRoots(process.env.MNEMOSYNE_REINDEX_ROOTS);
   const repoScopes = overrides.repoScopes || parseRepoScopes(process.env.MNEMOSYNE_REPO_SCOPES);
   const resolveScopes = overrides.scopeMap || scopeMap;
+  const engineHealth = overrides.health || health;
+  const checkScopes = createScopeHealthCheck({
+    scopeMap: resolveScopes,
+    listCollections: overrides.listCollections || listCollections,
+    maxAgeMs: Number(process.env.MNEMOSYNE_SCOPE_CHECK_MAX_AGE_MS || 5 * 60_000),
+  });
   const reindexJobs = createReindexJobs({
     reindex: overrides.reindex || reindex,
     collectionExists: overrides.collectionExists === undefined ? collectionExists : overrides.collectionExists,
@@ -231,7 +264,7 @@ export function createMnemosyneServer(overrides = {}) {
             "Pantheon memory god — thin service wrapping the swarm-memory engine over the Qdrant SSOT.",
           endpoints: {
             "GET /ui": "standalone UI shell (browser)",
-            "GET /health": "engine self-test (Qdrant + embedder + graph)",
+            "GET /health": "engine self-test (Qdrant + embedder + graph) + per-scope collection existence; status ok|degraded|checking",
             "GET /healthz": "liveness alias (always 200) for external checkers",
             "GET /scopes": "configured scopes + escalation ladders",
             "GET /config": "read-only effective config (qdrant_url, embedder, default_scope, fallback_collection)",
@@ -239,6 +272,7 @@ export function createMnemosyneServer(overrides = {}) {
             "POST /remember": "{text, scope?, tag?} -> write-back (index into scope collection)",
             "POST /grep": "{query, scope?, hits?, escalate?, radius?} -> KEYWORD hits (exact-string, no embedder)",
             "POST /lanes": "{name, collection, ladder?} -> add-only atomic write of a new scope to config.toml",
+            "GET /note": "?source=<note>&chunk=&lines=a-b -> stored note text + provenance for a mnemosyne://note/<source> ref (alias GET /notes/:source)",
             "GET /search": "?q=&scope=&mode=recall|grep&hits=&escalate=&min_score=&radius= -> dispatches to recall()/grep()",
             "GET /graph/stats": "graph size + origin breakdown (swarm-memory graph stats)",
             "GET /graph/edges": "?node= -> list edges, optionally touching `node` (READ-ONLY)",
@@ -258,9 +292,12 @@ export function createMnemosyneServer(overrides = {}) {
         return await serveUiAsset(res, url.pathname);
       }
 
+      // `ok` (and the 200/503) is engine liveness only. `status` also folds
+      // in whether every configured scope's collection exists — "degraded"
+      // with `missing_scopes` when one doesn't — see scope-health.mjs.
       if (route === "GET /health") {
-        const h = await health();
-        return send(res, h.ok ? 200 : 503, { ...SERVICE, ...h });
+        const [h, sc] = await Promise.all([engineHealth(), checkScopes()]);
+        return send(res, h.ok ? 200 : 503, { ...SERVICE, ...h, status: healthStatus(h.ok, sc), ...sc });
       }
 
       // Liveness alias: process-up check only, no CLI shell-out. Deliberately
@@ -286,6 +323,20 @@ export function createMnemosyneServer(overrides = {}) {
           scopes: m.scopes,
           ladder: m.ladder,
         });
+      }
+
+      if (route === "GET /note" || (req.method === "GET" && url.pathname.startsWith("/notes/"))) {
+        // The alias segment is decoded first so an encoded "%2F"/"%2E%2E" still
+        // hits readNote()'s bare-file-name validation and is rejected (400).
+        const source =
+          route === "GET /note"
+            ? url.searchParams.get("source")
+            : safeDecode(url.pathname.slice("/notes/".length));
+        const note = await readNote(source, {
+          chunk: url.searchParams.get("chunk"),
+          lines: url.searchParams.get("lines"),
+        });
+        return send(res, 200, { ...note, took_ms: Date.now() - t0 });
       }
 
       if (route === "GET /search") {

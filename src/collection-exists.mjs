@@ -68,3 +68,59 @@ export async function collectionExists(name, { exec = execFileAsync, command = P
   }
   return parsed.exists === true;
 }
+
+// One read-only inventory pass for GET /health's per-scope check: a single
+// collections listing decides existence for every scope at once; point
+// counts are then read (same subprocess) only for the requested collections
+// that exist, since Qdrant's listing carries names only. A count that can't
+// be read comes back null rather than failing the whole listing.
+const LIST_COLLECTIONS_SCRIPT = [
+  "import json, sys",
+  "from mnemosyne.inventory.qdrant_inventory import (",
+  "    QdrantInventoryError,",
+  "    build_qdrant_client,",
+  "    extract_collection_metadata,",
+  "    list_collection_names,",
+  "    load_qdrant_url,",
+  "    read_qdrant_key,",
+  ")",
+  "wanted = sys.argv[1:]",
+  "try:",
+  "    key = read_qdrant_key()",
+  "    url = load_qdrant_url()",
+  "    client = build_qdrant_client(url, key)",
+  "    names = list_collection_names(client)",
+  "except QdrantInventoryError as exc:",
+  "    print(str(exc), file=sys.stderr)",
+  "    sys.exit(1)",
+  "points = {}",
+  "for name in sorted(set(wanted) & set(names)):",
+  "    try:",
+  "        points[name] = extract_collection_metadata(client, name).entry_count",
+  "    except Exception:",
+  "        points[name] = None",
+  'print(json.dumps({"names": names, "points": points}))',
+].join("\n");
+
+/**
+ * Lists every Qdrant collection name, plus point counts for the `wanted`
+ * collections that exist: `{names: string[], points: {[name]: number|null}}`.
+ * Throws (loudly) when Qdrant can't be read — never "nothing exists".
+ */
+export async function listCollections(wanted = [], { exec = execFileAsync, command = PYTHON_BIN, cwd = REPO_ROOT } = {}) {
+  let stdout;
+  try {
+    const result = await exec(command, ["-c", LIST_COLLECTIONS_SCRIPT, ...wanted], { cwd });
+    stdout = result.stdout;
+  } catch (e) {
+    const detail = (e && e.stderr && String(e.stderr).trim()) || (e && e.message) || String(e);
+    throw new Error(`could not list Qdrant collections: ${detail}`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    throw new Error(`Qdrant collections listing returned output that could not be parsed as JSON: ${stdout.slice(0, 200)}`);
+  }
+  return { names: Array.isArray(parsed.names) ? parsed.names : [], points: parsed.points || {} };
+}

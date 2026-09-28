@@ -83,7 +83,8 @@ function stableCachePrefix(meta = {}) {
     "## Mnemosyne Memory Injection",
     "This prefix is stable for this repo scope, shared scope, and role. Keep it byte-identical across ticket runs so provider prompt caches can reuse it.",
     "Layout: [stable cached prefix] + [small variable memory delta] + [ticket]. The variable delta starts after the cache breakpoint marker.",
-    "Memory contract: use recalled memory as pointers with provenance, not as full source files. Open referenced files or call memory tools only when the pointer is relevant.",
+    "Memory contract: use recalled memory as pointers with provenance, not as full source files. Resolve a pointer only when it is relevant.",
+    `Pointer refs: mnemosyne://note/<source> -> GET ${url}/note?source=<source> returns the note text. repo:<scope>:<path> -> open <path> relative to that repo's checkout.`,
     `Primary scope: ${scope}. Shared/global scope: ${sharedScope}. Memory tools: POST ${url}/recall and POST ${url}/remember.`,
   ].join("\n");
 }
@@ -128,8 +129,38 @@ export function flattenHits(recallResult) {
   return out;
 }
 
-function renderHit(h, index) {
-  const src = h.source || h.location || h.full_path || "(unknown)";
+// PANT-838: hits point at a host-independent `ref` (stamped server-side by
+// src/refs.mjs), never at a Mnemosyne-host path like /root/.local/share/...
+// that a runner container can't open. Fallback for a server that predates
+// `ref`: a note path still maps to its note ref; anything else shows no path.
+const NOTE_REF_PREFIX = "mnemosyne://note/";
+const NOTE_PATH_RE = /[\\/]mnemosyne[\\/]notes[\\/]([^\\/]+)$/;
+
+function baseName(p) {
+  return String(p).split(/[\\/]/).filter(Boolean).pop() || String(p);
+}
+
+function isAbsolutePath(p) {
+  return /^([\\/]|[A-Za-z]:[\\/])/.test(String(p));
+}
+
+export function hitRef(h) {
+  if (h.ref) return h.ref;
+  for (const p of [h.full_path, h.location, h.source]) {
+    const m = p ? NOTE_PATH_RE.exec(String(p)) : null;
+    if (m) return NOTE_REF_PREFIX + m[1];
+  }
+  return null;
+}
+
+function hitLabel(h) {
+  const src = h.source || h.location || h.full_path;
+  if (!src) return "(unknown)";
+  return isAbsolutePath(src) ? baseName(src) : src;
+}
+
+function renderHit(h, index, meta = {}) {
+  const src = hitLabel(h);
   const range = lineRange(h);
   const conf =
     h.match_type === "keyword"
@@ -143,19 +174,25 @@ function renderHit(h, index) {
   candidate.push(`${index + 1}. [${h.layer} · ${conf}] ${src}${range ? " " + range : ""}`);
   const ex = trimExcerpt(h.text);
   if (ex) candidate.push(`   > ${ex}`);
-  if (h.full_path) candidate.push(`   -> ${h.full_path}`);
+  const ref = hitRef(h);
+  if (ref && ref.startsWith(NOTE_REF_PREFIX)) {
+    const source = ref.slice(NOTE_REF_PREFIX.length);
+    candidate.push(`   -> ${ref} (GET ${meta.url || MNEMOSYNE_URL_PLACEHOLDER}/note?source=${encodeURIComponent(source)})`);
+  } else if (ref) {
+    candidate.push(`   -> ${ref}`);
+  }
   return candidate.join("\n");
 }
 
 // Fill `shown` from `segmentHits`, spending at most `segmentBudget` tokens on
 // this segment (the first hit in a segment is always kept, even if it alone
 // exceeds the segment budget, so a segment with hits is never shown empty).
-function fillSegment(segmentHits, segmentBudget, max, shown) {
+function fillSegment(segmentHits, segmentBudget, max, shown, meta) {
   let segmentTokens = 0;
   let skipped = 0;
   for (const h of segmentHits) {
     if (shown.length >= max) break;
-    const candidateText = renderHit(h, shown.length);
+    const candidateText = renderHit(h, shown.length, meta);
     const candidateTokens = estimateTokens(candidateText);
     if (segmentTokens > 0 && segmentTokens + candidateTokens > segmentBudget) {
       skipped++;
@@ -184,9 +221,9 @@ function formatPriorMemoryDelta(recallResult, meta = {}) {
   const lowLevelHits = hits.filter((h) => !isHighLevel(h));
 
   const shown = [];
-  const highLevelResult = fillSegment(highLevelHits, highLevelBudget, max, shown);
+  const highLevelResult = fillSegment(highLevelHits, highLevelBudget, max, shown, meta);
   const lowLevelBudget = Math.max(tokenBudget - highLevelResult.segmentTokens, 0);
-  const lowLevelResult = fillSegment(lowLevelHits, lowLevelBudget, max, shown);
+  const lowLevelResult = fillSegment(lowLevelHits, lowLevelBudget, max, shown, meta);
 
   const highLevelTokens = highLevelResult.segmentTokens;
   const estimatedTokens = highLevelTokens + lowLevelResult.segmentTokens;
@@ -222,7 +259,7 @@ function formatPriorMemoryDelta(recallResult, meta = {}) {
     `## Prior Memory Delta (Mnemosyne recall — ${shown.length} hit${shown.length === 1 ? "" : "s"}${meta.escalate ? ", escalated" : ""})`
   );
   lines.push(
-    `These are POINTERS with line ranges — not whole files. Open the file or call memory tools for full detail only when the pointer is relevant.`
+    `These are POINTERS with line ranges — not whole files. Resolve a hit's ref (see Pointer refs above) for full detail only when the pointer is relevant.`
   );
   lines.push("");
   lines.push(...shown);

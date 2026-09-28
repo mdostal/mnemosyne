@@ -386,5 +386,60 @@ ok(!nullScore.memoryDelta.includes("score ?"), "null-score hits never render as 
 ok(/\[top · keyword\] a\.md/.test(nullScore.memoryDelta), "null-score hit without match_type renders as keyword");
 ok(/\[top · both\] b\.md/.test(nullScore.memoryDelta), "null-score hit renders its match_type");
 
+// PANT-838: the injected bundle points at resolvable refs, never at the
+// Mnemosyne host's container-local paths (/root/.local/share/...).
+const containerPathRecall = {
+  total_hits: 3,
+  scopes: [
+    {
+      scope: "top",
+      hits: [
+        {
+          // server-stamped ref (current server)
+          score: 0.8,
+          text: "FFE-1 root cause note.",
+          source: "2026-09-13T02-53-11-339Z-FFE-1.md",
+          full_path: "/root/.local/share/mnemosyne/notes/2026-09-13T02-53-11-339Z-FFE-1.md",
+          ref: "mnemosyne://note/2026-09-13T02-53-11-339Z-FFE-1.md",
+          chunk_index: 0,
+        },
+        {
+          // no ref (older server): note path still maps to a note ref
+          score: 0.7,
+          text: "Post-merge cleanup process.",
+          source: "/root/.local/share/mnemosyne/notes/2026-09-12T15-29-07-036Z-process.md",
+          full_path: "/root/.local/share/mnemosyne/notes/2026-09-12T15-29-07-036Z-process.md",
+          chunk_index: 1,
+        },
+        {
+          score: 0.6,
+          text: "Repo-indexed doc.",
+          source: "guide.md",
+          full_path: "/root/work/mnemosyne/docs/guide.md",
+          ref: "repo:top:docs/guide.md",
+          chunk_span: [3, 9],
+        },
+      ],
+    },
+  ],
+};
+const refBundle = buildMemoryBundle(containerPathRecall, { ...meta, url: "http://mnemosyne:8477", max: 6, tokenBudget: 2000 });
+ok(!refBundle.text.includes("/root/"), "injected bundle contains no /root/ container paths");
+ok(
+  refBundle.memoryDelta.includes(
+    "-> mnemosyne://note/2026-09-13T02-53-11-339Z-FFE-1.md (GET http://mnemosyne:8477/note?source=2026-09-13T02-53-11-339Z-FFE-1.md)"
+  ),
+  "note hit renders its mnemosyne://note ref with the GET /note fetch hint"
+);
+ok(
+  refBundle.memoryDelta.includes("-> mnemosyne://note/2026-09-12T15-29-07-036Z-process.md"),
+  "a ref-less note hit (older server) still renders a note ref, not its absolute path"
+);
+ok(refBundle.memoryDelta.includes("-> repo:top:docs/guide.md"), "repo hit renders its repo:<scope>:<path> ref");
+ok(
+  refBundle.cacheablePrefix.includes("GET http://mnemosyne:8477/note?source=<source>"),
+  "stable prefix tells agents how to resolve mnemosyne://note refs"
+);
+
 console.log(fails ? `\n${fails} check(s) failed` : "\nall bundle checks passed");
 process.exit(fails ? 1 : 0);
