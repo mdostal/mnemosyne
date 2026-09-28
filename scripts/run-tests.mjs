@@ -57,8 +57,10 @@ const CHECKS = {
     return r.status === 0 ? null : "Playwright chromium not installed; run `npx playwright install chromium`";
   },
   "python-yaml": () => {
-    const r = spawnSync("python3", ["-c", "import yaml"], { stdio: "ignore" });
-    return r.status === 0 ? null : "python3 with PyYAML not available (used by mnemosyne/placement_engine.py)";
+    // -s ignores the per-user site-packages: these tests point HOME at a temp
+    // dir, so a `pip install --user` PyYAML is invisible to them.
+    const r = spawnSync("python3", ["-s", "-c", "import yaml"], { stdio: "ignore" });
+    return r.status === 0 ? null : "python3 with a system-wide PyYAML not available (used by mnemosyne/placement_engine.py)";
   },
   // install.sh runs a real `npm install`, and better-sqlite3's install step is
   // `node-gyp rebuild`, which needs make + a C++ compiler.
