@@ -25,7 +25,10 @@ real service wraps the layer stack end to end:
 - **Observability** (`src/observability/`) — structured `recall_start` /
   `layer_query` / `layer_degraded` / `recall_end` / `remember_start` /
   `remember_end` events plus `recall_duration_ms`, `remember_duration_ms`,
-  and `layer_degraded_total` metrics — see [`docs/observability.md`](./observability.md).
+  and `layer_degraded_total` metrics from the `MnemosyneClient` library path
+  (held in-process, not served over HTTP). The deployed `:8477` service has its
+  own `GET /metrics` (Prometheus) with request counters by scope and outcome.
+  See [`docs/observability.md`](./observability.md).
 - **Loud-failure + provenance contracts enforced** — a degraded/unavailable
   layer is flagged explicitly, never silently skipped; every hit carries the
   full 7-field provenance record.

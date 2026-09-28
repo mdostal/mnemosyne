@@ -37,6 +37,7 @@
     "test:contracts": "vitest run lib/mnemosyne lib/minerva benchmarks src/planning src/config src/runners",
     "typecheck": "tsc --noEmit",
     "test:http-api": "node test/http-api.mjs",
+    "test:metrics-route": "node test/metrics-route.mjs",
     "test:single-layer-config": "node test/single-layer-config.mjs",
     "test:recall-status-filtering": "node test/recall-status-filtering.mjs",
     "test:layer1-mandate-hook": "node test/layer1-mandate-hook.mjs",

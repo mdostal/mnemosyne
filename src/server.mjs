@@ -59,6 +59,10 @@
 //                     via MNEMOSYNE_REPO_SCOPES and starts a reindex job (the
 //                     event-driven entry point Pantheon calls on merge; 422
 //                     for an unmapped repo). See src/reindex-jobs.mjs.
+//   GET  /metrics  ?format=json -> in-process request metrics for /recall,
+//                     /remember, /grep, /reindex by scope + outcome, in the
+//                     Prometheus text format (JSON with ?format=json). See
+//                     src/observability/http-metrics.mjs and docs/observability.md.
 //
 // GET / content negotiation: no consumer in this repo (hooks/lib/mnemo-client.mjs,
 // test/smoke.mjs, lib/mnemosyne/client.ts) depends on GET /'s bare path today, and
@@ -113,8 +117,18 @@ import {
   parseRepoScopes,
   resolveAllowedDirectory,
 } from "./reindex-jobs.mjs";
+import { createHttpMetrics } from "./observability/http-metrics.mjs";
 
 const PORT = Number(process.env.PORT || 8477);
+
+// Routes metered by GET /metrics. Keyed by route so the finish hook below can
+// meter every outcome, including errors thrown before a handler reads its body.
+const METERED_ROUTES = {
+  "POST /recall": "recall",
+  "POST /remember": "remember",
+  "POST /grep": "grep",
+  "POST /reindex": "reindex",
+};
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // The deployed build's real version, so /health and / say which build is live.
@@ -247,6 +261,22 @@ export function createMnemosyneServer(overrides = {}) {
     collectionExists: overrides.collectionExists === undefined ? collectionExists : overrides.collectionExists,
     maxJobs: overrides.maxJobs || Number(process.env.MNEMOSYNE_REINDEX_JOB_HISTORY) || undefined,
   });
+  // Pull-based, in-process only: counters reset on restart and nothing is
+  // pushed anywhere.
+  const httpMetrics = overrides.httpMetrics || createHttpMetrics();
+
+  // true/false when the configured scope map could be read, undefined when it
+  // couldn't (the metric is then left untouched rather than guessed). Never
+  // throws: metering must not change a request's outcome.
+  async function isScopeMissing(scope) {
+    if (scope == null || String(scope).trim() === "") return false;
+    try {
+      const m = await resolveScopes();
+      return !Object.prototype.hasOwnProperty.call(m.scopes, String(scope));
+    } catch {
+      return undefined;
+    }
+  }
 
   // Shared by POST /reindex and POST /events/repo-merged: resolve the scope's
   // collection (400 if unknown), gate the directory on the allowed roots
@@ -260,7 +290,18 @@ export function createMnemosyneServer(overrides = {}) {
       throw err;
     }
     const directory = await resolveAllowedDirectory(requestedDirectory, reindexRoots);
-    const { job, deduplicated } = reindexJobs.start({ scope, collection, directory, trigger });
+    const { job, deduplicated, done } = reindexJobs.start({ scope, collection, directory, trigger });
+    // Count each run once, when it finishes (a deduplicated call joined a run
+    // that's already counted). `done` never rejects.
+    if (!deduplicated) {
+      done.then(() => {
+        const finished = reindexJobs.get(job.job_id);
+        httpMetrics.observeReindexRun({
+          scope,
+          ok: finished?.status === "succeeded" && finished.errors.length === 0,
+        });
+      });
+    }
     return {
       job_id: job.job_id,
       scope: job.scope,
@@ -274,10 +315,16 @@ export function createMnemosyneServer(overrides = {}) {
     const url = new URL(req.url, `http://localhost:${PORT}`);
     const route = `${req.method} ${url.pathname}`;
     const t0 = Date.now();
+    // Filled in by the metered handlers below as they learn scope/hits.
+    const meter = {};
     // Lightweight request log — proves what actually reaches the memory god
     // (which consumers route recall/remember THROUGH Mnemosyne vs shelling direct).
     res.on("finish", () => {
       console.log(`[mnemosyne] ${route} -> ${res.statusCode} ${Date.now() - t0}ms`);
+      const op = METERED_ROUTES[route];
+      if (op) {
+        httpMetrics.observe({ op, status: res.statusCode, durationMs: Date.now() - t0, ...meter });
+      }
     });
     trackInFlight(res);
     try {
@@ -316,6 +363,7 @@ export function createMnemosyneServer(overrides = {}) {
             "GET /reindex": "recent reindex jobs, newest first (in memory)",
             "GET /reindex/:job_id": "job status: running|succeeded|failed, files_scanned, files_indexed, errors, started_at, finished_at",
             "POST /events/repo-merged": "{repo, ref} -> maps repo -> scope (MNEMOSYNE_REPO_SCOPES) and starts a reindex job",
+            "GET /metrics": "?format=json -> request counters/histograms by scope + outcome (Prometheus text by default)",
           },
         });
       }
@@ -338,6 +386,18 @@ export function createMnemosyneServer(overrides = {}) {
       // health stays on /health.
       if (route === "GET /healthz") {
         return send(res, 200, { ...SERVICE, alive: true });
+      }
+
+      if (route === "GET /metrics") {
+        if (url.searchParams.get("format") === "json") {
+          return send(res, 200, { ...SERVICE, ...httpMetrics.snapshot() });
+        }
+        const body = httpMetrics.renderPrometheus();
+        res.writeHead(200, {
+          "content-type": "text/plain; version=0.0.4; charset=utf-8",
+          "content-length": Buffer.byteLength(body),
+        });
+        return res.end(body);
       }
 
       if (route === "GET /scopes") {
@@ -407,16 +467,21 @@ export function createMnemosyneServer(overrides = {}) {
 
       if (route === "POST /grep") {
         const b = await readJson(req);
+        meter.scope = b.scope;
+        meter.scopeMissing = await isScopeMissing(b.scope);
         const result = await grep(b.query, b.scope, {
           hits: b.hits,
           escalate: b.escalate,
           radius: b.radius,
         });
+        meter.hits = result.total_hits ?? 0;
         return send(res, 200, { ...result, took_ms: Date.now() - t0 });
       }
 
       if (route === "POST /recall") {
         const b = await readJson(req);
+        meter.scope = b.scope;
+        meter.scopeMissing = await isScopeMissing(b.scope);
         const result = await recall(b.query, b.scope, {
           hits: b.hits,
           escalate: b.escalate,
@@ -429,17 +494,20 @@ export function createMnemosyneServer(overrides = {}) {
           `[mnemosyne] recall q=${JSON.stringify(String(b.query || "").slice(0, 80))} ` +
             `scope=${b.scope || "(default)"} total_hits=${result.total_hits ?? 0}`
         );
+        meter.hits = result.total_hits ?? 0;
         return send(res, 200, { ...result, took_ms: Date.now() - t0 });
       }
 
       if (route === "POST /remember") {
         const b = await readJson(req);
+        meter.scope = b.layer === "code-graph" ? "code-graph" : b.scope;
         if (b.layer === "code-graph") {
           const { CodeGraphLayer } = await import("./layers/code-graph.mjs");
           const graph = new CodeGraphLayer();
           const result = await graph.remember(b.src, b.predicate, b.dst);
           return send(res, 200, { ...result, took_ms: Date.now() - t0 });
         }
+        meter.scopeMissing = await isScopeMissing(b.scope);
         const result = await remember(b.text, b.scope, { tag: b.tag, cwd: b.cwd });
         return send(res, 200, { ...result, took_ms: Date.now() - t0 });
       }
@@ -475,6 +543,7 @@ export function createMnemosyneServer(overrides = {}) {
 
       if (route === "POST /reindex") {
         const b = await readJson(req);
+        meter.scope = b.scope;
         if (!b.scope || !String(b.scope).trim()) {
           const err = new Error("scope is required");
           err.status = 400;
@@ -483,6 +552,7 @@ export function createMnemosyneServer(overrides = {}) {
         // Reindex can take minutes: the request returns 202 with a job_id at
         // once and the caller polls GET /reindex/:job_id for the outcome.
         const directory = b.directory ? String(b.directory) : undefined;
+        meter.scopeMissing = await isScopeMissing(b.scope);
         return send(res, 202, await startReindexJob(String(b.scope), directory, { type: "api" }));
       }
 
