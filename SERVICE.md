@@ -34,7 +34,9 @@ Every memory op runs over the live Qdrant corpus; nothing is stubbed or mocked.
 | `GET /graph/deps/:node` | query params: `depth?`                               | forward closure: what `:node` depends on (`swarm-memory graph deps NODE`) — unknown node returns `[]`, not an error |
 | `POST /index`   | `{collection, paths: [...]}`                                 | **Targeted** reindex, operator-selected: `swarm-memory index <collection> <paths...>` (default pruning, live Qdrant write, synchronous) — see "Operations" below. Distinct from `POST /reindex` below — see "Two reindex paths" |
 | `POST /cache/refresh` | —                                                       | Refresh config cache: clears only `engine.mjs`'s in-memory `_scopeMap` — see "Operations" below |
-| `POST /reindex` | `{scope, directory?}`                                        | **Bulk** (re)index, scope-wide: scans `directory` (default: service's cwd) for `.ts`/`.md`/`.yaml` files and indexes each into `scope`'s collection. Returns `202 {status: "started", scope, directory}` **immediately** — the run itself continues in the background and its outcome (`files_indexed`/`files_scanned`/`errors`) is logged, not returned synchronously. Distinct from `POST /index` above — see "Two reindex paths" |
+| `POST /reindex` | `{scope, directory?}`                                        | **Bulk** (re)index, scope-wide: scans `directory` (default: service's cwd; must be under `MNEMOSYNE_REINDEX_ROOTS`, else `403`) for `.ts`/`.md`/`.yaml` files and indexes each into `scope`'s collection. Returns `202 {job_id, scope, status: "running", directory, deduplicated}` **immediately**; a second call while that scope is running returns the existing `job_id`. Poll `GET /reindex/:job_id` for the outcome. Distinct from `POST /index` above — see "Two reindex paths" |
+| `GET /reindex/:job_id` | —                                                      | Reindex job status: `{status: running\|succeeded\|failed, files_scanned, files_indexed, errors, error, started_at, finished_at, trigger}`; `404` for an unknown job. `GET /reindex` lists retained jobs, newest first (in memory, last 50) |
+| `POST /events/repo-merged` | `{repo, ref}`                                      | Event-driven reindex trigger: maps `repo` → `{scope, directory}` via `MNEMOSYNE_REPO_SCOPES` and starts (or joins) that scope's job; `422` names an unmapped repo. See `docs/http-api.md` |
 
 **`GET /` routing:** no existing consumer (`hooks/lib/mnemo-client.mjs`, `test/smoke.mjs`,
 `lib/mnemosyne/client.ts`) calls the bare `GET /` path, and Node's `fetch()`
@@ -49,7 +51,8 @@ verified against real current consumers, not assumed.
 specific path(s), runs synchronously, returns the CLI's real chunk-count
 output. `POST /reindex` is the bulk/scope-wide action — used for initial
 index builds or recovering a stale index across a whole directory, runs
-async (returns `202` immediately, logs its own outcome). Both wrap
+async as an observable job (returns `202 {job_id}` immediately; outcome via
+`GET /reindex/:job_id`). Both wrap
 `swarm-memory index` with default pruning; neither wipes a collection. Do
 not collapse these into one endpoint — they serve different operator intents
 (surgical vs bulk) and different callers (`/ui` vs `bin/mnemosyne reindex`).
@@ -86,7 +89,15 @@ MNEMOSYNE_URL=http://127.0.0.1:8477 bin/mnemosyne reindex project --dir /path/to
 
 # via the HTTP API directly:
 curl -sX POST localhost:8477/reindex -d '{"scope":"project","directory":"/path/to/project"}'
+curl -s localhost:8477/reindex/<job_id>     # running | succeeded | failed
 ```
+
+`directory` must sit under `MNEMOSYNE_REINDEX_ROOTS` (`:`-separated; unset
+means only the service's cwd), so set it to cover every checkout you reindex,
+including repos passed to `mnemosyne onboard`. A job never creates a missing
+collection; it fails and names the `mnemosyne onboard --create` command
+instead. Jobs, dedup, the `POST /events/repo-merged` trigger and its
+`MNEMOSYNE_REPO_SCOPES` map are documented in `docs/http-api.md`.
 
 ## Run
 
