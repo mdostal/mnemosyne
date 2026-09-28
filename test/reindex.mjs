@@ -4,8 +4,10 @@
 // Verifies:
 //   AC1  reindex(scope) scans a directory for .ts/.md/.yaml files and shells
 //        out to `swarm-memory index <collection> <file>` for each
-//   AC2  POST /reindex returns 202 {status: "started", scope} immediately
-//        (fire-and-forget — does not block on the reindex itself)
+//   AC2  POST /reindex returns 202 {job_id, scope, status: "running"}
+//        immediately (does not block on the reindex itself), and the job's
+//        outcome is observable via GET /reindex/:job_id (PANT-837; the
+//        stubbed-reindex() job contract lives in test/reindex-jobs.mjs)
 //   AC3  reindexing the same scope twice is idempotent: both runs succeed
 //        cleanly with no errors (swarm-memory's own dedupe is trusted; this
 //        suite only proves Mnemosyne never treats a repeat run as an error)
@@ -15,7 +17,7 @@
 //
 // Uses the fake-swarm-memory test double (same fixture as write-through.mjs)
 // so this suite never touches Qdrant.
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -147,11 +149,17 @@ async function makeScanDir() {
   }
 }
 
-// --- AC2: POST /reindex returns immediately (fire-and-forget) --------------
+// --- AC2: POST /reindex returns immediately with an observable job ---------
 {
   const PORT = 31417;
   const BASE = `http://127.0.0.1:${PORT}`;
   const dir = await makeScanDir();
+  // The job's read-only collectionExists() pre-check shells out to
+  // $MNEMOSYNE_PYTHON_BIN; point it at a stub that reports "exists" so this
+  // suite stays off Qdrant.
+  const pyStub = path.join(dir, "fake-python");
+  await writeFile(pyStub, `#!/bin/sh\necho '{"exists": true}'\n`, "utf8");
+  await chmod(pyStub, 0o755);
 
   const child = spawn(process.execPath, [path.join(ROOT, "src", "server.mjs")], {
     cwd: ROOT,
@@ -160,6 +168,9 @@ async function makeScanDir() {
       PORT: String(PORT),
       SWARM_MEMORY_BIN: FIXTURE,
       FAKE_SWARM_MODE: "success",
+      MNEMO_TEST_NODE: process.execPath,
+      MNEMOSYNE_PYTHON_BIN: pyStub,
+      MNEMOSYNE_REINDEX_ROOTS: dir,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -199,7 +210,8 @@ async function makeScanDir() {
     const body = await res.json();
 
     ok(res.status === 202, `AC2: POST /reindex -> 202 (got ${res.status})`);
-    ok(body.status === "started", `AC2: POST /reindex -> {status: "started"} (got ${JSON.stringify(body)})`);
+    ok(body.status === "running" && typeof body.job_id === "string",
+      `AC2: POST /reindex -> {job_id, status: "running"} (got ${JSON.stringify(body)})`);
     ok(body.scope === "personal", `AC2: POST /reindex echoes scope -> got ${body.scope}`);
     ok(elapsedMs < 2000, `AC2: POST /reindex returns immediately, not after the run completes -> took ${elapsedMs}ms`);
 
@@ -211,17 +223,17 @@ async function makeScanDir() {
     });
     ok(missingScope.status === 400, `POST /reindex (missing scope) -> 400 (got ${missingScope.status})`);
 
-    // background run completes and logs its outcome
-    const logDeadline = Date.now() + 5000;
-    let loggedCompletion = false;
-    while (Date.now() < logDeadline) {
-      if (serverOutput.includes("reindex complete")) {
-        loggedCompletion = true;
-        break;
-      }
+    // background run completes and its outcome is readable from the job
+    const jobDeadline = Date.now() + 5000;
+    let job = null;
+    while (Date.now() < jobDeadline) {
+      job = await (await fetch(`${BASE}/reindex/${body.job_id}`)).json();
+      if (job.status !== "running") break;
       await new Promise((r) => setTimeout(r, 100));
     }
-    ok(loggedCompletion, `AC2: background reindex completes and logs its outcome -> ${serverOutput}`);
+    ok(job?.status === "succeeded", `AC2: background reindex job succeeds -> ${JSON.stringify(job)}${job?.status === "succeeded" ? "" : ` ${serverOutput}`}`);
+    ok(job?.files_scanned === 3 && job?.files_indexed === 3,
+      `AC2: job reports the real scan counts (3/3) -> ${job?.files_indexed}/${job?.files_scanned}`);
   } finally {
     child.kill();
     await rm(dir, { recursive: true, force: true });

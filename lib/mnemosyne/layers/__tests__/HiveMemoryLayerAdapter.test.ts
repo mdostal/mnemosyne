@@ -1,12 +1,18 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { HiveMemoryLayerAdapter } from '../HiveMemoryLayerAdapter.js';
 
 const execFileAsync = promisify(execFile);
+
+// The adapter (and the fixture builder below) shell out to the `sqlite3` CLI
+// by design. Hosts without it can't exercise the KG path at all, so those
+// tests skip loudly instead of failing with `spawn sqlite3 ENOENT`.
+const HAS_SQLITE3 = !spawnSync('sqlite3', ['-version']).error;
+const itKg = it.skipIf(!HAS_SQLITE3);
 
 const tempRoots: string[] = [];
 afterEach(async () => {
@@ -45,7 +51,11 @@ async function makeFixtureMemoryFile(root: string, relPath: string, content: str
 }
 
 describe('HiveMemoryLayerAdapter', () => {
-  it('finds a KG triple whose subject matches the query', async () => {
+  beforeAll(() => {
+    if (!HAS_SQLITE3) console.warn('SKIP HiveMemoryLayerAdapter KG tests: sqlite3 binary not found on PATH');
+  });
+
+  itKg('finds a KG triple whose subject matches the query', async () => {
     const root = await makeTempRoot();
     const kgPath = await makeFixtureKg(root, [{ subject: 'mnemosyne-pluggable-layers', predicate: 'decided', object: 'use-sqlite3-cli-not-better-sqlite3' }]);
     const adapter = new HiveMemoryLayerAdapter({ kgPath, memoryDirs: [] });
@@ -60,7 +70,7 @@ describe('HiveMemoryLayerAdapter', () => {
     expect(result.hits[0]?.provenance.source).toContain('mnemosyne-pluggable-layers');
   });
 
-  it('finds a KG triple whose object matches the query', async () => {
+  itKg('finds a KG triple whose object matches the query', async () => {
     const root = await makeTempRoot();
     const kgPath = await makeFixtureKg(root, [{ subject: 'architect', predicate: 'decided', object: 'use-chromadb-for-l3' }]);
     const adapter = new HiveMemoryLayerAdapter({ kgPath, memoryDirs: [] });
@@ -73,7 +83,7 @@ describe('HiveMemoryLayerAdapter', () => {
     expect(result.hits[0]?.content).toContain('use-chromadb-for-l3');
   });
 
-  it('excludes superseded triples (valid_until is set)', async () => {
+  itKg('excludes superseded triples (valid_until is set)', async () => {
     const root = await makeTempRoot();
     const kgPath = await makeFixtureKg(root, [
       { subject: 'old-decision', predicate: 'decided', object: 'target-thing', valid_until: '2026-08-05T00:00:00Z' },
@@ -130,7 +140,7 @@ describe('HiveMemoryLayerAdapter', () => {
     expect(result.hits[0]?.provenance.source).toBe(filePath);
   });
 
-  it('memory dirs missing -> empty result from that source, not an error, and KG still checked', async () => {
+  itKg('memory dirs missing -> empty result from that source, not an error, and KG still checked', async () => {
     const root = await makeTempRoot();
     const kgPath = await makeFixtureKg(root, [{ subject: 'only-in-kg', predicate: 'decided', object: 'findable-only-in-kg' }]);
     const adapter = new HiveMemoryLayerAdapter({ kgPath, memoryDirs: [path.join(root, 'no-such-dir')] });
@@ -153,7 +163,7 @@ describe('HiveMemoryLayerAdapter', () => {
     expect(result.hits).toHaveLength(0);
   });
 
-  it('query matches nothing anywhere -> ok:true, zero hits', async () => {
+  itKg('query matches nothing anywhere -> ok:true, zero hits', async () => {
     const root = await makeTempRoot();
     const kgPath = await makeFixtureKg(root, [{ subject: 'alpha', predicate: 'decided', object: 'beta' }]);
     await makeFixtureMemoryFile(root, 'memories/x.md', 'gamma delta\n');
@@ -166,7 +176,7 @@ describe('HiveMemoryLayerAdapter', () => {
     expect(result.hits).toHaveLength(0);
   });
 
-  it('a SQL-metacharacter-laden query does not break the KG query (injection/escaping safety)', async () => {
+  itKg('a SQL-metacharacter-laden query does not break the KG query (injection/escaping safety)', async () => {
     const root = await makeTempRoot();
     const kgPath = await makeFixtureKg(root, [{ subject: "weird'subject", predicate: 'decided', object: 'x' }]);
     const adapter = new HiveMemoryLayerAdapter({ kgPath, memoryDirs: [] });
