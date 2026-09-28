@@ -12,9 +12,11 @@
 //
 //   node test/hooks.mjs
 //
-// Live round-trip coverage requires the Mnemosyne service on :8477. If /healthz
-// is unreachable, the live corpus portion is skipped instead of failing a local
-// checkout that has not started the service.
+// Live round-trip coverage writes into a real Mnemosyne corpus, so it is
+// opt-in: set MNEMOSYNE_LIVE_TESTS=1 (and MNEMOSYNE_URL if the service isn't
+// on :8477). Agent shells export MNEMOSYNE_URL for their own hooks, so that
+// alone is not consent to write test notes into it. Without the opt-in, or
+// when /healthz is unreachable, the live portion prints a SKIP line.
 
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, unlink } from "node:fs/promises";
@@ -26,6 +28,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const INSTALL = path.join(ROOT, "bin", "mnemosyne-install-hooks");
+const LIVE = process.env.MNEMOSYNE_LIVE_TESTS === "1";
 const LIVE_BASE = process.env.MNEMOSYNE_URL || "http://127.0.0.1:8477";
 
 let fails = 0;
@@ -203,6 +206,10 @@ async function testHighLevelFirstThroughHook() {
 }
 
 async function testLiveStopToUserPromptRoundTrip() {
+  if (!LIVE) {
+    console.log("  SKIP  live hook round-trip (MNEMOSYNE_LIVE_TESTS=1 not set)");
+    return;
+  }
   if (!(await serviceAlive(LIVE_BASE))) {
     console.log(`  SKIP  live hook round-trip (${LIVE_BASE}/healthz unreachable)`);
     return;
