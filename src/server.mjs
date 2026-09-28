@@ -24,6 +24,11 @@
 //                   git context (branch/commit) a write's flight status is
 //                   auto-detected from; defaults to this process's own cwd.
 //   POST /lanes   {name, collection, ladder?} -> add-only config.toml write
+//   GET  /note    ?source=<note>&chunk=&lines=a-b  (alias: GET /notes/:source)
+//                    -> PANT-838: the stored note text + provenance for a
+//                       `mnemosyne://note/<source>` recall ref. source is a
+//                       bare file name in the notes dir; any path segment /
+//                       traversal is a 400, an unknown note a 404.
 //   GET  /search  ?q=&scope=&mode=recall|grep&hits=&escalate=&min_score=&radius=
 //                    -> thin dispatcher to recall()/grep() for the UI's Search panel
 //   GET  /graph/stats            -> graph size + origin breakdown (swarm-memory graph stats)
@@ -94,6 +99,7 @@ import {
   graphifyImpactAction,
   graphifyDepsAction,
 } from "../bin/graphify-bridge.mjs";
+import { readNote } from "./refs.mjs";
 import { collectionExists, listCollections } from "./collection-exists.mjs";
 import { createScopeHealthCheck, healthStatus } from "./scope-health.mjs";
 import {
@@ -182,6 +188,14 @@ function readJson(req) {
   });
 }
 
+function safeDecode(s) {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    throw Object.assign(new Error("invalid percent-encoding in path"), { status: 400 });
+  }
+}
+
 /**
  * Builds the HTTP server without listening. `overrides` replaces the reindex
  * wiring (tests inject a stubbed reindex() and their own roots/repo map);
@@ -258,6 +272,7 @@ export function createMnemosyneServer(overrides = {}) {
             "POST /remember": "{text, scope?, tag?} -> write-back (index into scope collection)",
             "POST /grep": "{query, scope?, hits?, escalate?, radius?} -> KEYWORD hits (exact-string, no embedder)",
             "POST /lanes": "{name, collection, ladder?} -> add-only atomic write of a new scope to config.toml",
+            "GET /note": "?source=<note>&chunk=&lines=a-b -> stored note text + provenance for a mnemosyne://note/<source> ref (alias GET /notes/:source)",
             "GET /search": "?q=&scope=&mode=recall|grep&hits=&escalate=&min_score=&radius= -> dispatches to recall()/grep()",
             "GET /graph/stats": "graph size + origin breakdown (swarm-memory graph stats)",
             "GET /graph/edges": "?node= -> list edges, optionally touching `node` (READ-ONLY)",
@@ -308,6 +323,20 @@ export function createMnemosyneServer(overrides = {}) {
           scopes: m.scopes,
           ladder: m.ladder,
         });
+      }
+
+      if (route === "GET /note" || (req.method === "GET" && url.pathname.startsWith("/notes/"))) {
+        // The alias segment is decoded first so an encoded "%2F"/"%2E%2E" still
+        // hits readNote()'s bare-file-name validation and is rejected (400).
+        const source =
+          route === "GET /note"
+            ? url.searchParams.get("source")
+            : safeDecode(url.pathname.slice("/notes/".length));
+        const note = await readNote(source, {
+          chunk: url.searchParams.get("chunk"),
+          lines: url.searchParams.get("lines"),
+        });
+        return send(res, 200, { ...note, took_ms: Date.now() - t0 });
       }
 
       if (route === "GET /search") {
