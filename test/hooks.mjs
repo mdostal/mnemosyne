@@ -9,6 +9,8 @@
 //   - High-level hits are injected before lower-level hits through the actual
 //     pre-recall hook boundary.
 //   - Scratch note files created by write-through are removed after the test.
+//   - PANT-834: a Multica runner-boilerplate prompt injects no variable hits,
+//     carries the issue uuid as ticket=, and honours MNEMOSYNE_TARGET_REPO.
 //
 //   node test/hooks.mjs
 //
@@ -202,6 +204,140 @@ async function testHighLevelFirstThroughHook() {
   }
 }
 
+// PANT-834 fixture: the verbatim Multica runner prompt. Its semantic recall is
+// what used to inject the same irrelevant top-scope hits into every turn.
+const RUNNER_PROMPT_FIXTURE = path.join(__dirname, "fixtures", "pre-recall", "multica-runner-prompt.txt");
+const RUNNER_ISSUE_ID = "01a0e4d0-4e6e-7c42-91d4-dbd18fe2f508";
+
+// A stub whose /recall ALWAYS returns an off-topic hit (as the live corpus did
+// for boilerplate) and whose /grep finds nothing for the issue uuid.
+function startBoilerplateStub() {
+  const requests = [];
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (d) => (body += d));
+    req.on("end", () => {
+      const input = body ? JSON.parse(body) : {};
+      requests.push({ method: req.method, url: req.url, input });
+      res.setHeader("content-type", "application/json");
+      if (req.method === "POST" && req.url === "/recall") {
+        res.end(JSON.stringify({
+          total_hits: 1,
+          scopes: [{ scope: input.scope, hits: [{
+            source: "docker-disk-cleanup.md",
+            full_path: "/notes/docker-disk-cleanup.md",
+            chunk_span: [0, 2],
+            score: 0.68,
+            text: "OFF-TOPIC Docker VM disk cleanup note",
+          }] }],
+        }));
+        return;
+      }
+      if (req.method === "POST" && req.url === "/grep") {
+        res.end(JSON.stringify({ total_hits: 0, scopes: [] }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: "not found" }));
+    });
+  });
+  return new Promise((resolve, reject) => {
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address();
+      resolve({ server, requests, base: `http://127.0.0.1:${port}` });
+    });
+  });
+}
+
+// Strip any scope/role/repo env the developer's shell may carry so "no env"
+// really means no env.
+function withoutScopeEnv(extra = {}) {
+  const env = { ...process.env };
+  for (const k of ["MNEMOSYNE_TARGET_REPO", "MNEMOSYNE_SCOPE", "MNEMOSYNE_ROLE", "MNEMOSYNE_CWD", "MNEMOSYNE_SHARED_SCOPE"]) {
+    delete env[k];
+  }
+  return { ...env, SWARM_MEMORY_BIN: "/definitely/missing/swarm-memory", ...extra };
+}
+
+async function runPreRecallRaw(inputObj, env) {
+  return new Promise((resolve, reject) => {
+    const p = spawn(process.execPath, [path.join(ROOT, "hooks", "pre-recall.mjs")], { cwd: ROOT, env });
+    let out = "";
+    let err = "";
+    p.stdout.on("data", (d) => (out += d));
+    p.stderr.on("data", (d) => (err += d));
+    p.on("error", reject);
+    p.on("close", (code) => resolve({ code, out, err }));
+    p.stdin.write(JSON.stringify(inputObj));
+    p.stdin.end();
+  });
+}
+
+async function testRunnerBoilerplatePrompt() {
+  const prompt = await readFile(RUNNER_PROMPT_FIXTURE, "utf8");
+  const stub = await startBoilerplateStub();
+  try {
+    // 1) no env: no variable hits, ticket=<uuid>, no semantic recall at all.
+    const res = await runPreRecallRaw(
+      { hook_event_name: "UserPromptSubmit", prompt },
+      withoutScopeEnv({ MNEMOSYNE_URL: stub.base })
+    );
+    ok(res.code === 0, "runner prompt: pre-recall exits 0");
+    const json = parseJson(res.out);
+    const injected = json.hookSpecificOutput?.additionalContext || "";
+    const delta = json.mnemosyne?.variable_memory_delta || "";
+    ok(injected.includes("mnemosyne-cache-prefix-v1"), "runner prompt: stable prefix is still injected");
+    ok(!injected.includes("OFF-TOPIC"), "runner prompt: no off-topic semantic hit injected");
+    ok(!/Prior Memory Delta/.test(delta) && !/^\d+\. \[/m.test(delta), "runner prompt: variable delta carries no hits");
+    ok(delta.includes(`ticket=${RUNNER_ISSUE_ID}`), `runner prompt: delta marker carries ticket=${RUNNER_ISSUE_ID}`);
+    ok(!stub.requests.some((r) => r.url === "/recall"), "runner prompt: semantic /recall is never called on boilerplate");
+    ok(
+      stub.requests.some((r) => r.url === "/grep" && r.input.query === RUNNER_ISSUE_ID),
+      "runner prompt: keyword /grep runs on the extracted issue uuid"
+    );
+
+    // 2) MNEMOSYNE_TARGET_REPO decides the scope over the cwd basename.
+    stub.requests.length = 0;
+    const scoped = await runPreRecallRaw(
+      { hook_event_name: "UserPromptSubmit", prompt },
+      withoutScopeEnv({ MNEMOSYNE_URL: stub.base, MNEMOSYNE_TARGET_REPO: "mdostal/janus" })
+    );
+    const scopedJson = parseJson(scoped.out);
+    const scopedCtx = scopedJson.hookSpecificOutput?.additionalContext || "";
+    ok(scoped.code === 0, "runner prompt + MNEMOSYNE_TARGET_REPO: pre-recall exits 0");
+    ok(/mnemosyne-cache-prefix-v1 scope=janus /.test(scopedCtx), "runner prompt + MNEMOSYNE_TARGET_REPO=mdostal/janus resolves scope=janus");
+    ok(
+      stub.requests.some((r) => r.url === "/grep" && r.input.scope === "janus"),
+      "runner prompt + MNEMOSYNE_TARGET_REPO: keyword recall queries the janus scope"
+    );
+
+    // 3) task text after the preamble still gets semantic recall, minus the
+    //    boilerplate, and a ticket key is picked up for keyword recall.
+    stub.requests.length = 0;
+    const withTask = await runPreRecallRaw(
+      { hook_event_name: "UserPromptSubmit", prompt: `${prompt}\nFix PANT-834 scope resolution for the pre-recall hook.` },
+      withoutScopeEnv({ MNEMOSYNE_URL: stub.base })
+    );
+    const recallReq = stub.requests.find((r) => r.url === "/recall");
+    ok(withTask.code === 0, "runner prompt + task text: pre-recall exits 0");
+    ok(
+      recallReq && recallReq.input.query.startsWith("Fix PANT-834") && !/local coding agent|multica issue get/.test(recallReq.input.query),
+      "runner prompt + task text: semantic query is the task text with boilerplate stripped"
+    );
+    ok(
+      stub.requests.some((r) => r.url === "/grep" && r.input.query === "PANT-834"),
+      "runner prompt + task text: ticket key PANT-834 feeds keyword recall"
+    );
+    ok(
+      (parseJson(withTask.out).mnemosyne?.variable_memory_delta || "").includes(`ticket=PANT-834,${RUNNER_ISSUE_ID}`),
+      "runner prompt + task text: ticket= lists the ticket key then the issue uuid"
+    );
+  } finally {
+    await new Promise((resolve) => stub.server.close(resolve));
+  }
+}
+
 async function testLiveStopToUserPromptRoundTrip() {
   if (!(await serviceAlive(LIVE_BASE))) {
     console.log(`  SKIP  live hook round-trip (${LIVE_BASE}/healthz unreachable)`);
@@ -278,6 +414,7 @@ async function testLiveStopToUserPromptRoundTrip() {
 
 try {
   await testHighLevelFirstThroughHook();
+  await testRunnerBoilerplatePrompt();
   await testLiveStopToUserPromptRoundTrip();
 } finally {
   for (const file of cleanupFiles) {
