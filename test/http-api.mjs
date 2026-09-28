@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
+import { makeScratchGitRepo } from "./fixtures/scratch-git-repo.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -203,8 +204,12 @@ async function main() {
   // import time, so this must be set before the child process starts.
   const fakeHome = await mkdtemp(path.join(tmpdir(), "mnemosyne-http-api-home-"));
 
+  // PANT-831: POST /remember auto-detects flight status from the server's
+  // cwd, so run it inside a scratch repo on a named branch rather than the
+  // (possibly detached-HEAD) checkout. MNEMOSYNE_ROOT_DIR still pins root.
+  const serverRepo = makeScratchGitRepo({ prefix: "mnemosyne-http-api-repo-" });
   const child = spawn(TSX, [SERVER], {
-    cwd: ROOT,
+    cwd: serverRepo.dir,
     env: {
       ...process.env,
       MNEMOSYNE_PORT: String(PORT),
@@ -1123,7 +1128,7 @@ async function main() {
       scope: "project",
     });
     ok(remember.status === 200, `POST /remember -> 200 (got ${remember.status})`);
-    ok(remember.body.ok === true, "POST /remember -> ok:true");
+    ok(remember.body.ok === true, `POST /remember -> ok:true (got ${JSON.stringify(remember.body)})`);
     ok(remember.body.layer === "file", "POST /remember -> layer:file (default)");
     ok(!!remember.body.provenance, "POST /remember -> has provenance");
 
@@ -1141,6 +1146,7 @@ async function main() {
     ok(notFound.status === 404, `GET /nope -> 404 (got ${notFound.status})`);
   } finally {
     child.kill();
+    serverRepo.cleanup();
     await rm(root, { recursive: true, force: true });
     await rm(fakeHome, { recursive: true, force: true });
   }
@@ -1414,8 +1420,12 @@ async function testDraftPersonaApproveRemember() {
   const apiRoot = await mkdtemp(path.join(tmpdir(), "mnemosyne-pu03-api-root-"));
   const apiFakeHome = await mkdtemp(path.join(tmpdir(), "mnemosyne-pu03-api-home-"));
 
+  // PANT-831: the approve route's remember() auto-detects flight status from
+  // this server's cwd, so run it inside a scratch repo on a named branch
+  // rather than the (possibly detached-HEAD) checkout.
+  const swarmRepo = makeScratchGitRepo({ prefix: "mnemosyne-pu03-repo-" });
   const swarmChild = spawn(process.execPath, [REAL_SERVER], {
-    cwd: ROOT,
+    cwd: swarmRepo.dir,
     env: {
       ...process.env,
       PORT: String(swarmPort),
@@ -1613,6 +1623,7 @@ async function testDraftPersonaApproveRemember() {
   } finally {
     swarmChild.kill();
     apiChild.kill();
+    swarmRepo.cleanup();
     await rm(notesDir, { recursive: true, force: true });
     await rm(path.dirname(indexStore), { recursive: true, force: true });
     await rm(apiRoot, { recursive: true, force: true });
