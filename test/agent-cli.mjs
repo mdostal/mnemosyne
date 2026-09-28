@@ -185,6 +185,23 @@ const ok = (c, m) => {
   if (!c) fails++;
 };
 
+// The blocks below that verify against the REAL `claude`/`codex` CLIs can only run where those
+// binaries are installed. CI runners (GitHub Actions ubuntu-latest) have neither, so those blocks
+// print a SKIP line instead of failing; every block that doesn't need a real harness CLI still runs.
+function onPath(name) {
+  return (process.env.PATH ?? "").split(path.delimiter).some((dir) => dir && existsSync(path.join(dir, name)));
+}
+const HAS_CLAUDE = onPath("claude");
+const HAS_CODEX = onPath("codex");
+let skips = 0;
+function needs(bins, label) {
+  const missing = bins.filter((b) => !(b === "claude" ? HAS_CLAUDE : HAS_CODEX));
+  if (missing.length === 0) return true;
+  console.log(`  SKIP  ${label} -- needs the real ${missing.join(" + ")} CLI on PATH`);
+  skips++;
+  return false;
+}
+
 function sha256(buf) {
   return createHash("sha256").update(buf).digest("hex");
 }
@@ -363,7 +380,7 @@ async function main() {
   }
 
   // --- AC-register + AC-skills-full: first-run `agent init` --------------------------------------
-  {
+  if (needs(["claude"], "AC-register + AC-skills-full")) {
     const home = await makeFakeHome();
 
     const first = await runCli(["init"], { home });
@@ -402,7 +419,7 @@ async function main() {
   }
 
   // --- AC-idempotent: a second `agent init` run makes zero redundant writes -----------------------
-  {
+  if (needs(["claude"], "AC-idempotent")) {
     const home = await makeFakeHome();
 
     const first = await runCli(["init"], { home });
@@ -440,7 +457,7 @@ async function main() {
   }
 
   // --- AC-status: status reflects real state before/after, with zero side effects from status itself ---
-  {
+  if (needs(["claude"], "AC-status")) {
     const home = await makeFakeHome();
 
     const statusBefore = await runCli(["status"], { home });
@@ -541,7 +558,7 @@ async function main() {
   }
 
   // --- AC-codex-register: first-run `agent init --harness codex` registers the real MCP server ------
-  {
+  if (needs(["codex"], "AC-codex-register")) {
     const codexHome = await makeFakeCodexHome();
     const home = await makeFakeHome();
 
@@ -565,7 +582,7 @@ async function main() {
   }
 
   // --- AC-codex-idempotent: a second `agent init --harness codex` run makes zero redundant writes ---
-  {
+  if (needs(["codex"], "AC-codex-idempotent")) {
     const codexHome = await makeFakeCodexHome();
     const home = await makeFakeHome();
 
@@ -588,7 +605,7 @@ async function main() {
   }
 
   // --- AC-codex-status: status reflects real Codex state before/after, with zero side effects from status itself ---
-  {
+  if (needs(["codex"], "AC-codex-status")) {
     const codexHome = await makeFakeCodexHome();
     const home = await makeFakeHome();
 
@@ -631,8 +648,12 @@ async function main() {
     // Sanity first: this environment genuinely HAS a real codex CLI on PATH (confirmed
     // independently, not assumed) -- so the "absent" branch below is exercised via a
     // real PATH override, not because codex happens to be missing here.
-    const sanity = await runCli(["status", "--harness", "codex"], { home: await makeFakeHome(), codexHome: await makeFakeCodexHome() });
-    ok(/binary: found/.test(sanity.stdout), `sanity: this machine's real codex CLI is genuinely found via detectBinary() -> ${short(sanity.stdout)}`);
+    // Without codex installed (CI) the override below is still a real "absent" check, so only
+    // the sanity assertion is skipped.
+    if (needs(["codex"], "AC-both-absent-ok sanity (codex genuinely present)")) {
+      const sanity = await runCli(["status", "--harness", "codex"], { home: await makeFakeHome(), codexHome: await makeFakeCodexHome() });
+      ok(/binary: found/.test(sanity.stdout), `sanity: this machine's real codex CLI is genuinely found via detectBinary() -> ${short(sanity.stdout)}`);
+    }
 
     const home = await makeFakeHome();
     const codexHome = await makeFakeCodexHome();
@@ -655,7 +676,7 @@ async function main() {
   }
 
   // --- Dispatcher wiring: `bin/mnemosyne agent ...` reaches the same code (both harnesses) ----------
-  {
+  if (needs(["claude", "codex"], "dispatcher wiring")) {
     const home = await makeFakeHome();
     const codexHome = await makeFakeCodexHome();
 
@@ -839,5 +860,5 @@ try {
   await Promise.all(tempDirs.map((d) => rm(d, { recursive: true, force: true }).catch(() => {})));
 }
 
-console.log(fails ? `\n${fails} check(s) failed` : "\nall agent-cli checks passed");
+console.log(fails ? `\n${fails} check(s) failed` : `\nall agent-cli checks passed${skips ? ` (${skips} block(s) skipped: harness CLI not on PATH)` : ""}`);
 process.exit(fails ? 1 : 0);

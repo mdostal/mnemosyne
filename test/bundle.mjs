@@ -4,6 +4,7 @@ import {
   buildMemoryBundle,
 } from "../hooks/lib/format.mjs";
 import { resolveScope } from "../hooks/lib/scope.mjs";
+import { analyzePrompt, extractTicketIds } from "../hooks/lib/prompt.mjs";
 
 let fails = 0;
 const ok = (condition, message) => {
@@ -292,6 +293,152 @@ ok(
 ok(
   layeredBundle.cacheablePrefix === claudeBundle.cacheablePrefix,
   "layer-priority ranking does not change the stable cache-safe prefix"
+);
+
+// --- PANT-834: scope precedence (env target repo before cwd basename) ---
+
+const SCOPE_ENV = ["MNEMOSYNE_TARGET_REPO", "MNEMOSYNE_SCOPE", "MNEMOSYNE_ROLE", "MNEMOSYNE_CWD"];
+function withScopeEnv(env, fn) {
+  const saved = Object.fromEntries(SCOPE_ENV.map((k) => [k, process.env[k]]));
+  for (const k of SCOPE_ENV) delete process.env[k];
+  Object.assign(process.env, env);
+  try {
+    return fn();
+  } finally {
+    for (const k of SCOPE_ENV) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  }
+}
+const runnerCwd = "/home/node/multica_workspaces/x/pant-834/workdir";
+
+ok(
+  withScopeEnv({}, () => resolveScope({ cwd: runnerCwd })).scope === "top",
+  "unknown cwd basename (workdir) falls back to top"
+);
+ok(
+  withScopeEnv({ MNEMOSYNE_TARGET_REPO: "mdostal/janus" }, () => resolveScope({ cwd: runnerCwd })).scope === "janus",
+  "env MNEMOSYNE_TARGET_REPO resolves an unmapped repo to its own scope"
+);
+ok(
+  withScopeEnv({ MNEMOSYNE_TARGET_REPO: "mdostal/janus" }, () => resolveScope({ cwd: "/src/att" })).scope === "janus",
+  "env MNEMOSYNE_TARGET_REPO wins over a known cwd basename"
+);
+ok(
+  withScopeEnv({ MNEMOSYNE_TARGET_REPO: "mdostal/janus" }, () => resolveScope({ cwd: "/src/att", role: "developer" })).scope === "janus",
+  "env MNEMOSYNE_TARGET_REPO wins over cwd for a developer role too"
+);
+ok(
+  withScopeEnv({ MNEMOSYNE_TARGET_REPO: "mdostal/janus" }, () => resolveScope({ target_repo: "mdostal/heimdall" })).scope === "heimdall",
+  "stdin target_repo wins over env MNEMOSYNE_TARGET_REPO"
+);
+ok(
+  withScopeEnv({ MNEMOSYNE_SCOPE: "att", MNEMOSYNE_TARGET_REPO: "mdostal/janus" }, () => resolveScope({ cwd: "/src/arizona", role: "developer" })).scope === "att",
+  "env MNEMOSYNE_SCOPE wins over target repo and cwd"
+);
+ok(
+  withScopeEnv({ MNEMOSYNE_TARGET_REPO: "mdostal/janus" }, () => resolveScope({ scope: "clients" })).scope === "clients",
+  "stdin scope still wins over everything"
+);
+ok(
+  withScopeEnv({ MNEMOSYNE_TARGET_REPO: "mdostal/janus" }, () => resolveScope({ cwd: "/src/unknown-thing" })).scope === "janus" &&
+    withScopeEnv({}, () => resolveScope({ cwd: "/src/unknown-thing" })).scope === "top",
+  "an unmapped cwd basename never mints a scope; an explicit target repo does"
+);
+
+// --- PANT-834: prompt analysis ---
+
+const runnerPreamble = [
+  "You are running as a local coding agent for a Multica workspace.",
+  "",
+  "Your assigned issue ID is: 01a0e4d0-4e6e-7c42-91d4-dbd18fe2f508",
+  "",
+  "Start by running `multica issue get 01a0e4d0-4e6e-7c42-91d4-dbd18fe2f508 --output json` to understand your task, then complete it.",
+].join("\n");
+const boilerOnly = analyzePrompt(runnerPreamble);
+ok(boilerOnly.query === "" && boilerOnly.boilerplate && !boilerOnly.meaningful, "runner preamble alone strips to an empty, non-meaningful query");
+ok(
+  boilerOnly.identifiers.length === 1 && boilerOnly.identifiers[0] === "01a0e4d0-4e6e-7c42-91d4-dbd18fe2f508",
+  "issue uuid is extracted (once) from the runner preamble"
+);
+const plain = analyzePrompt("fix the login bug");
+ok(plain.query === "fix the login bug" && !plain.boilerplate, "a plain prompt passes through untouched");
+const ids = extractTicketIds("See PANT-834 and FFE-7, not UTF-8 or feat/ro-01; PANT-834 again");
+ok(ids.join(",") === "PANT-834,FFE-7", "ticket keys are extracted and deduped, UTF-8 and lowercase branch names are not");
+
+// --- PANT-834: keyword-only hits render the match type, not a null score ---
+
+const nullScore = buildMemoryBundle(
+  {
+    total_hits: 2,
+    scopes: [{
+      scope: "top",
+      hits: [
+        { source: "a.md", chunk_index: 1, score: null, text: "grep hit with no match_type" },
+        { source: "b.md", chunk_index: 2, score: null, match_type: "both", text: "both-path hit without a score" },
+      ],
+    }],
+  },
+  { scope: "top", role: "dev", ticket: "PANT-834" }
+);
+ok(!nullScore.memoryDelta.includes("score ?"), "null-score hits never render as `score ?`");
+ok(/\[top · keyword\] a\.md/.test(nullScore.memoryDelta), "null-score hit without match_type renders as keyword");
+ok(/\[top · both\] b\.md/.test(nullScore.memoryDelta), "null-score hit renders its match_type");
+
+// PANT-838: the injected bundle points at resolvable refs, never at the
+// Mnemosyne host's container-local paths (/root/.local/share/...).
+const containerPathRecall = {
+  total_hits: 3,
+  scopes: [
+    {
+      scope: "top",
+      hits: [
+        {
+          // server-stamped ref (current server)
+          score: 0.8,
+          text: "FFE-1 root cause note.",
+          source: "2026-09-13T02-53-11-339Z-FFE-1.md",
+          full_path: "/root/.local/share/mnemosyne/notes/2026-09-13T02-53-11-339Z-FFE-1.md",
+          ref: "mnemosyne://note/2026-09-13T02-53-11-339Z-FFE-1.md",
+          chunk_index: 0,
+        },
+        {
+          // no ref (older server): note path still maps to a note ref
+          score: 0.7,
+          text: "Post-merge cleanup process.",
+          source: "/root/.local/share/mnemosyne/notes/2026-09-12T15-29-07-036Z-process.md",
+          full_path: "/root/.local/share/mnemosyne/notes/2026-09-12T15-29-07-036Z-process.md",
+          chunk_index: 1,
+        },
+        {
+          score: 0.6,
+          text: "Repo-indexed doc.",
+          source: "guide.md",
+          full_path: "/root/work/mnemosyne/docs/guide.md",
+          ref: "repo:top:docs/guide.md",
+          chunk_span: [3, 9],
+        },
+      ],
+    },
+  ],
+};
+const refBundle = buildMemoryBundle(containerPathRecall, { ...meta, url: "http://mnemosyne:8477", max: 6, tokenBudget: 2000 });
+ok(!refBundle.text.includes("/root/"), "injected bundle contains no /root/ container paths");
+ok(
+  refBundle.memoryDelta.includes(
+    "-> mnemosyne://note/2026-09-13T02-53-11-339Z-FFE-1.md (GET http://mnemosyne:8477/note?source=2026-09-13T02-53-11-339Z-FFE-1.md)"
+  ),
+  "note hit renders its mnemosyne://note ref with the GET /note fetch hint"
+);
+ok(
+  refBundle.memoryDelta.includes("-> mnemosyne://note/2026-09-12T15-29-07-036Z-process.md"),
+  "a ref-less note hit (older server) still renders a note ref, not its absolute path"
+);
+ok(refBundle.memoryDelta.includes("-> repo:top:docs/guide.md"), "repo hit renders its repo:<scope>:<path> ref");
+ok(
+  refBundle.cacheablePrefix.includes("GET http://mnemosyne:8477/note?source=<source>"),
+  "stable prefix tells agents how to resolve mnemosyne://note refs"
 );
 
 console.log(fails ? `\n${fails} check(s) failed` : "\nall bundle checks passed");

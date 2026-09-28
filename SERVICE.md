@@ -20,7 +20,7 @@ Every memory op runs over the live Qdrant corpus; nothing is stubbed or mocked.
 |-----------------|-------------------------------------------------------------|---------|
 | `GET /`         | —                                                           | service info + endpoints (JSON) for any caller **except** one sending `Accept: text/html` (a browser), which gets a `302` to `GET /ui` instead — see below |
 | `GET /ui`, `GET /ui/*` | —                                                      | standalone UI shell (static HTML/CSS/vanilla JS, zero-dep, no build step) — liveliness, read-only settings, lanes (scopes), and search panels with a manual refresh button |
-| `GET /health`   | —                                                           | engine self-test (`swarm-memory check`): Qdrant + embedder + graph |
+| `GET /health`   | —                                                           | engine self-test (`swarm-memory check`): Qdrant + embedder + graph, plus per-scope collection existence (`status`, `scopes`, `missing_scopes`) and the real `package.json` `version` — see "`GET /health` fields" below |
 | `GET /healthz`  | —                                                           | liveness alias — always 200 if the process is up, so external checkers (Salus/Argus) don't 404 |
 | `GET /scopes`   | —                                                           | scopes → collections + escalation ladders |
 | `GET /config`   | —                                                           | read-only effective config: `qdrant_url`, `embedder` (provider/model), `default_scope`, `fallback_collection`, `scopes`, `ladder` — thin wrapper over `engine.mjs`'s cached `scopeMap()` |
@@ -28,13 +28,62 @@ Every memory op runs over the live Qdrant corpus; nothing is stubbed or mocked.
 | `POST /remember`| `{text, scope?, tag?}`                                       | write-back: persists a note + indexes (upsert, `--no-prune`) it into the scope's collection so it is immediately recallable |
 | `POST /lanes`   | `{name, collection, ladder?}`                                | **add-only** atomic write of a new `[scopes]`/`[ladder]` entry to `~/.config/swarm-memory/config.toml` — see "Lanes / add-lane" below |
 | `GET /search`   | query params: `q`, `scope?`, `mode?` (`recall`\|`grep`, default `recall`), `hits?`, `escalate?`, `min_score?`, `radius?` | thin dispatcher for the `/ui` Search panel — routes straight to `recall()`/`grep()` (no new query logic); invalid `mode` → `400` |
+| `GET /note`     | query params: `source` (bare note file name or `mnemosyne://note/<source>`), `chunk?`, `lines?` (`a-b`); alias `GET /notes/:source` | stored note text + provenance (flight-status header) for a recall hit's `ref`; path segments / `..` → `400`, unknown note → `404` |
 | `GET /graph/stats` | —                                                        | graph size + origin breakdown (`swarm-memory graph stats`): `{nodes, edges, edges_by_origin, db}` |
 | `GET /graph/edges` | query params: `node?`                                    | list edges, or only those touching `node` when given (`swarm-memory graph edges [node]`) |
 | `GET /graph/impact/:node` | query params: `depth?`                             | reverse closure: what is affected if `:node` changes (`swarm-memory graph impact NODE`) — unknown node returns `[]`, not an error |
 | `GET /graph/deps/:node` | query params: `depth?`                               | forward closure: what `:node` depends on (`swarm-memory graph deps NODE`) — unknown node returns `[]`, not an error |
 | `POST /index`   | `{collection, paths: [...]}`                                 | **Targeted** reindex, operator-selected: `swarm-memory index <collection> <paths...>` (default pruning, live Qdrant write, synchronous) — see "Operations" below. Distinct from `POST /reindex` below — see "Two reindex paths" |
 | `POST /cache/refresh` | —                                                       | Refresh config cache: clears only `engine.mjs`'s in-memory `_scopeMap` — see "Operations" below |
-| `POST /reindex` | `{scope, directory?}`                                        | **Bulk** (re)index, scope-wide: scans `directory` (default: service's cwd) for `.ts`/`.md`/`.yaml` files and indexes each into `scope`'s collection. Returns `202 {status: "started", scope, directory}` **immediately** — the run itself continues in the background and its outcome (`files_indexed`/`files_scanned`/`errors`) is logged, not returned synchronously. Distinct from `POST /index` above — see "Two reindex paths" |
+| `POST /reindex` | `{scope, directory?}`                                        | **Bulk** (re)index, scope-wide: scans `directory` (default: service's cwd; must be under `MNEMOSYNE_REINDEX_ROOTS`, else `403`) for `.ts`/`.md`/`.yaml` files and indexes each into `scope`'s collection. Returns `202 {job_id, scope, status: "running", directory, deduplicated}` **immediately**; a second call while that scope is running returns the existing `job_id`. Poll `GET /reindex/:job_id` for the outcome. Distinct from `POST /index` above — see "Two reindex paths" |
+| `GET /reindex/:job_id` | —                                                      | Reindex job status: `{status: running\|succeeded\|failed, files_scanned, files_indexed, errors, error, started_at, finished_at, trigger}`; `404` for an unknown job. `GET /reindex` lists retained jobs, newest first (in memory, last 50) |
+| `POST /events/repo-merged` | `{repo, ref}`                                      | Event-driven reindex trigger: maps `repo` → `{scope, directory}` via `MNEMOSYNE_REPO_SCOPES` and starts (or joins) that scope's job; `422` names an unmapped repo. See `docs/http-api.md` |
+
+### `GET /health` fields
+
+```json
+{
+  "god": "mnemosyne", "role": "memory", "version": "0.16.0",
+  "ok": true,
+  "status": "degraded",
+  "missing_scopes": ["mnemosyne"],
+  "scopes": {
+    "top":       { "collection": "claude_knowledge", "exists": true,  "points": 1204 },
+    "mnemosyne": { "collection": "repo_mnemosyne",   "exists": false, "points": 0 }
+  },
+  "scopes_checked_at": "2026-09-28T01:30:00.000Z",
+  "scopes_checking": false,
+  "engine": "swarm-memory", "drift_count": 0, "last_check": "…"
+}
+```
+
+- **`ok`** is engine liveness only (`swarm-memory check` passed). It alone
+  decides the HTTP code: `200` when true, `503` when false. A missing
+  collection does **not** flip `ok` or the HTTP code.
+- **`status`** is the overall verdict: `"ok"`, `"degraded"` (engine down,
+  any configured scope's collection missing, or the scope check itself
+  failed), or `"checking"` (first scope check since boot still running).
+  Monitors that care about repo memory coverage should read `status`, not
+  `ok`.
+- **`scopes`** maps every configured scope to `{collection, exists, points}`.
+  `points` is the collection's point count (`null` if it couldn't be read,
+  `0` when the collection doesn't exist).
+- **`missing_scopes`** lists the scopes whose collection doesn't exist
+  (sorted). A recall on one of those returns 0 hits, so this is the loud
+  signal for it. Fix with `mnemosyne onboard <path> --collection <name> --create`.
+- **`scope_check_error`** appears (with `scopes`/`missing_scopes` null) when
+  Qdrant couldn't be listed, e.g. missing credentials. That is `degraded`,
+  never read as "nothing is missing".
+- **`version`** comes from `package.json` (also on `GET /` and `GET /healthz`).
+
+Existence comes from one Qdrant collections listing for all scopes, run
+through `src/collection-exists.mjs`'s `listCollections()` (the same read-only
+inventory code as `mnemosyne onboard`); point counts are then read in the
+same subprocess for the configured collections that exist, since Qdrant's
+listing carries names only. The result is cached like drift: `/health` never
+waits on Qdrant, it serves the last result and refreshes in the background
+once it's older than `MNEMOSYNE_SCOPE_CHECK_MAX_AGE_MS` (default 5 min).
+`GET /healthz` is unaffected and always `200`.
 
 **`GET /` routing:** no existing consumer (`hooks/lib/mnemo-client.mjs`, `test/smoke.mjs`,
 `lib/mnemosyne/client.ts`) calls the bare `GET /` path, and Node's `fetch()`
@@ -49,7 +98,8 @@ verified against real current consumers, not assumed.
 specific path(s), runs synchronously, returns the CLI's real chunk-count
 output. `POST /reindex` is the bulk/scope-wide action — used for initial
 index builds or recovering a stale index across a whole directory, runs
-async (returns `202` immediately, logs its own outcome). Both wrap
+async as an observable job (returns `202 {job_id}` immediately; outcome via
+`GET /reindex/:job_id`). Both wrap
 `swarm-memory index` with default pruning; neither wipes a collection. Do
 not collapse these into one endpoint — they serve different operator intents
 (surgical vs bulk) and different callers (`/ui` vs `bin/mnemosyne reindex`).
@@ -86,7 +136,15 @@ MNEMOSYNE_URL=http://127.0.0.1:8477 bin/mnemosyne reindex project --dir /path/to
 
 # via the HTTP API directly:
 curl -sX POST localhost:8477/reindex -d '{"scope":"project","directory":"/path/to/project"}'
+curl -s localhost:8477/reindex/<job_id>     # running | succeeded | failed
 ```
+
+`directory` must sit under `MNEMOSYNE_REINDEX_ROOTS` (`:`-separated; unset
+means only the service's cwd), so set it to cover every checkout you reindex,
+including repos passed to `mnemosyne onboard`. A job never creates a missing
+collection; it fails and names the `mnemosyne onboard --create` command
+instead. Jobs, dedup, the `POST /events/repo-merged` trigger and its
+`MNEMOSYNE_REPO_SCOPES` map are documented in `docs/http-api.md`.
 
 ## Run
 
@@ -139,6 +197,23 @@ file is touched. See `src/engine.mjs`'s `addLane()` and
 `test/add-lane.mjs` / `test/lanes-route.mjs` for the atomic-write logic and
 its test coverage (both run entirely against throwaway fixtures — never the
 real config file).
+
+## Resolvable recall pointers (`ref`, GET /note)
+
+A hit's `full_path` is a path on the Mnemosyne host (e.g.
+`/root/.local/share/mnemosyne/notes/...` inside the container), which an
+agent in another container can't open. `recall()`/`grep()` therefore stamp a
+host-independent `ref` on every hit that has a file identity
+(`src/refs.mjs`):
+
+- `mnemosyne://note/<source>` — a note `remember()` wrote. Fetch it with
+  `GET /note?source=<source>` (whole note; `lines=a-b` slices it).
+- `repo:<scope>:<repo-relative-path>` — a repo-indexed file. Open the path
+  relative to your own checkout of that repo.
+
+Code-graph edge hits carry no `ref`. The injected hook bundle
+(`hooks/lib/format.mjs`) renders the `ref` plus the fetch hint, never the
+absolute host path.
 
 ## Search (GET /search)
 

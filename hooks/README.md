@@ -53,7 +53,7 @@ system/context block. Runner adapters do not reformat or rerank memory.
 - **Role-scoped** (`hooks/lib/scope.mjs`): `orchestrator → top` (all-repo,
   escalates), `architect → repo scope` (escalates), `developer → repo slice`
   (no escalation). Scope can come from `scope`, `target_repo`, `repo`,
-  `repository`, `cwd`, or env. `pre-recall` also queries a small shared/global
+  `repository`, `cwd`, or env — see [Scope resolution](#scope-resolution-and-the-runner-env-contract). `pre-recall` also queries a small shared/global
   scope (`MNEMOSYNE_SHARED_SCOPE`, default `top`) and lets the bundle budget
   decide what survives.
 - **Small variable delta, high-level first.** Hits are sorted by **layer
@@ -69,6 +69,18 @@ system/context block. Runner adapters do not reformat or rerank memory.
   a busy meta layer can't consume the whole budget either. When there are no
   high-level hits, the full budget is available to lower layers (no wasted
   space). Lower-ranked hits are omitted instead of bloating the ticket prompt.
+- **Runner boilerplate is not a query** (`hooks/lib/prompt.mjs`). Agent
+  runners wrap every turn in the same preamble (Multica: "You are running as a
+  local coding agent ... Your assigned issue ID is: `<uuid>` ... Start by
+  running `multica issue get ...`"). Used verbatim, that preamble semantically
+  recalled the same off-topic hits on every turn. `pre-recall` now extracts
+  ticket identifiers (`[A-Z]+-\d+` keys and issue uuids, first 5) for keyword
+  recall, strips known runner lines (`RUNNER_BOILERPLATE`), and when nothing
+  task-specific is left it skips semantic recall. If keyword recall on the ids
+  finds nothing either, the injection is just the stable prefix plus a marker
+  line (`... shown=0 ticket=<ids> skipped=runner-boilerplate`). A prompt with no
+  runner preamble is passed through unchanged. The ids appear as `ticket=` in
+  the variable-memory marker.
 - **Status-aware write-back** (`post-remember.mjs`): every stored note is stamped
   `STATUS: in-progress|reviewed|full-send` + ticket + role, so recall can tell a
   work-in-progress note from full-send truth.
@@ -117,12 +129,35 @@ It emits both the Claude hook payload and the runner-neutral Mnemosyne payload:
 `transcript_path` (Claude Code Stop — pulls the last assistant message) — plus
 optional `scope`, `role`, `status`, `ticket`.
 
+## Scope resolution and the runner env contract
+
+`resolveScope()` (used by both hooks) picks the first of:
+
+1. stdin `scope`
+2. orchestrator role (`orchestrator`/`top`/`queen`) → `MNEMOSYNE_SCOPE` or `top`
+3. env `MNEMOSYNE_SCOPE`
+4. explicit target repo: stdin `target_repo`/`repo`/`repository`, then env
+   `MNEMOSYNE_TARGET_REPO`. Accepts `owner/name`, a GitHub URL or an SSH remote.
+   Mapped through `REPO_SCOPE` when listed there, otherwise the repo name *is*
+   the scope (`mdostal/janus` → `janus`, matching the per-repo live scopes).
+5. cwd basename, **only** when it's listed in `REPO_SCOPE`
+6. `top`
+
+Role then only decides `escalate` (architect yes, developer no).
+
+Runner cwds are generic (Multica's is `.../workdir`), so the cwd rarely says
+which repo a ticket is about. **Runners should set `MNEMOSYNE_TARGET_REPO` from
+the ticket's `target_repo:` line** (or `MNEMOSYNE_SCOPE` to force a scope)
+before invoking the agent. The hooks never look it up themselves: they read
+only stdin and env and never call Multica or GitHub.
+
 ## Env knobs
 
 | Var | Default | Meaning |
 |-----|---------|---------|
 | `MNEMOSYNE_URL` | `http://127.0.0.1:8477` | service base URL |
-| `MNEMOSYNE_SCOPE` | — | force a scope (overrides role→repo mapping) |
+| `MNEMOSYNE_SCOPE` | — | force a scope (overrides target repo and cwd; not stdin `scope`) |
+| `MNEMOSYNE_TARGET_REPO` | — | the ticket's `target_repo` (`owner/name`); resolves scope ahead of the cwd basename |
 | `MNEMOSYNE_ROLE` | — | role when not in stdin (`orchestrator`/`architect`/`developer`) |
 | `MNEMOSYNE_STATUS` | `in-progress` | default write-back status |
 | `MNEMOSYNE_HITS` | `5` | recall hit count |
@@ -141,8 +176,13 @@ node test/hooks.mjs
 ```
 
 `test/bundle.mjs` proves the cache-safe layout, runner-neutral canonical text,
-target-repo scope resolution, keyword-first ordering, and budget capping without
-network dependencies. `test/hooks.mjs` stores a unique token via `post-remember`,
+target-repo scope resolution and precedence, prompt analysis, keyword-first
+ordering, and budget capping without network dependencies. `test/hooks.mjs`
+also runs the verbatim Multica runner prompt
+(`test/fixtures/pre-recall/multica-runner-prompt.txt`) through the hook
+against a stub service. With no env it injects no hits and marks
+`ticket=<uuid>`, and with `MNEMOSYNE_TARGET_REPO=mdostal/janus` it resolves
+`scope=janus`. `test/hooks.mjs` stores a unique token via `post-remember`,
 then recalls it via `pre-recall` and asserts the token + line-range provenance
 land in the injected context — over the **live Qdrant corpus**, in both service
 and CLI-fallback modes.
