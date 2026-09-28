@@ -43,6 +43,10 @@
 //                     .ts/.md/.yaml files and indexes each into `scope`'s
 //                     collection. Async — returns 202 immediately. Distinct from
 //                     POST /index above — see SERVICE.md's "Two reindex paths".
+//   GET  /metrics  ?format=json -> in-process request metrics for /recall,
+//                     /remember, /grep, /reindex by scope + outcome, in the
+//                     Prometheus text format (JSON with ?format=json). See
+//                     src/observability/http-metrics.mjs and docs/observability.md.
 //
 // GET / content negotiation: no consumer in this repo (hooks/lib/mnemo-client.mjs,
 // test/smoke.mjs, lib/mnemosyne/client.ts) depends on GET /'s bare path today, and
@@ -82,9 +86,34 @@ import {
   graphifyImpactAction,
   graphifyDepsAction,
 } from "../bin/graphify-bridge.mjs";
+import { createHttpMetrics } from "./observability/http-metrics.mjs";
 
 const PORT = Number(process.env.PORT || 8477);
 const SERVICE = { god: "mnemosyne", role: "memory", version: "0.1.0" };
+
+// Pull-based, in-process only: counters reset on restart and nothing is
+// pushed anywhere. Keyed by route so the finish hook below can meter every
+// outcome, including errors thrown before a handler reads its body.
+const httpMetrics = createHttpMetrics();
+const METERED_ROUTES = {
+  "POST /recall": "recall",
+  "POST /remember": "remember",
+  "POST /grep": "grep",
+  "POST /reindex": "reindex",
+};
+
+// true/false when the configured scope map could be read, undefined when it
+// couldn't (the metric is then left untouched rather than guessed). Never
+// throws: metering must not change a request's outcome.
+async function isScopeMissing(scope) {
+  if (scope == null || String(scope).trim() === "") return false;
+  try {
+    const m = await scopeMap();
+    return !Object.prototype.hasOwnProperty.call(m.scopes, String(scope));
+  } catch {
+    return undefined;
+  }
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.resolve(__dirname, "..", "ui");
@@ -154,10 +183,16 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const route = `${req.method} ${url.pathname}`;
   const t0 = Date.now();
+  // Filled in by the metered handlers below as they learn scope/hits.
+  const meter = {};
   // Lightweight request log — proves what actually reaches the memory god
   // (which consumers route recall/remember THROUGH Mnemosyne vs shelling direct).
   res.on("finish", () => {
     console.log(`[mnemosyne] ${route} -> ${res.statusCode} ${Date.now() - t0}ms`);
+    const op = METERED_ROUTES[route];
+    if (op) {
+      httpMetrics.observe({ op, status: res.statusCode, durationMs: Date.now() - t0, ...meter });
+    }
   });
   try {
     if (route === "GET /") {
@@ -191,6 +226,7 @@ const server = http.createServer(async (req, res) => {
           "POST /index": "{collection, paths[]} -> TARGETED: swarm-memory index <collection> <paths...> (default pruning, never --no-prune), synchronous",
           "POST /cache/refresh": "clears ONLY the in-memory config cache (local, zero subprocesses, zero external state)",
           "POST /reindex": "{scope, directory?} -> BULK (re)index a directory; runs async, returns immediately",
+          "GET /metrics": "?format=json -> request counters/histograms by scope + outcome (Prometheus text by default)",
         },
       });
     }
@@ -210,6 +246,18 @@ const server = http.createServer(async (req, res) => {
     // health stays on /health.
     if (route === "GET /healthz") {
       return send(res, 200, { ...SERVICE, alive: true });
+    }
+
+    if (route === "GET /metrics") {
+      if (url.searchParams.get("format") === "json") {
+        return send(res, 200, { ...SERVICE, ...httpMetrics.snapshot() });
+      }
+      const body = httpMetrics.renderPrometheus();
+      res.writeHead(200, {
+        "content-type": "text/plain; version=0.0.4; charset=utf-8",
+        "content-length": Buffer.byteLength(body),
+      });
+      return res.end(body);
     }
 
     if (route === "GET /scopes") {
@@ -265,16 +313,21 @@ const server = http.createServer(async (req, res) => {
 
     if (route === "POST /grep") {
       const b = await readJson(req);
+      meter.scope = b.scope;
+      meter.scopeMissing = await isScopeMissing(b.scope);
       const result = await grep(b.query, b.scope, {
         hits: b.hits,
         escalate: b.escalate,
         radius: b.radius,
       });
+      meter.hits = result.total_hits ?? 0;
       return send(res, 200, { ...result, took_ms: Date.now() - t0 });
     }
 
     if (route === "POST /recall") {
       const b = await readJson(req);
+      meter.scope = b.scope;
+      meter.scopeMissing = await isScopeMissing(b.scope);
       const result = await recall(b.query, b.scope, {
         hits: b.hits,
         escalate: b.escalate,
@@ -287,17 +340,20 @@ const server = http.createServer(async (req, res) => {
         `[mnemosyne] recall q=${JSON.stringify(String(b.query || "").slice(0, 80))} ` +
           `scope=${b.scope || "(default)"} total_hits=${result.total_hits ?? 0}`
       );
+      meter.hits = result.total_hits ?? 0;
       return send(res, 200, { ...result, took_ms: Date.now() - t0 });
     }
 
     if (route === "POST /remember") {
       const b = await readJson(req);
+      meter.scope = b.layer === "code-graph" ? "code-graph" : b.scope;
       if (b.layer === "code-graph") {
         const { CodeGraphLayer } = await import("./layers/code-graph.mjs");
         const graph = new CodeGraphLayer();
         const result = await graph.remember(b.src, b.predicate, b.dst);
         return send(res, 200, { ...result, took_ms: Date.now() - t0 });
       }
+      meter.scopeMissing = await isScopeMissing(b.scope);
       const result = await remember(b.text, b.scope, { tag: b.tag, cwd: b.cwd });
       return send(res, 200, { ...result, took_ms: Date.now() - t0 });
     }
@@ -333,6 +389,7 @@ const server = http.createServer(async (req, res) => {
 
     if (route === "POST /reindex") {
       const b = await readJson(req);
+      meter.scope = b.scope;
       if (!b.scope || !String(b.scope).trim()) {
         const err = new Error("scope is required");
         err.status = 400;
@@ -340,16 +397,19 @@ const server = http.createServer(async (req, res) => {
       }
       const scope = String(b.scope);
       const directory = b.directory ? String(b.directory) : undefined;
+      meter.scopeMissing = await isScopeMissing(scope);
       // Fire-and-forget: reindex can take minutes, so the request returns
       // immediately and the run continues (and logs its outcome) in the
       // background — no progress tracking in slice-2 (MVP).
       reindex(scope, { directory })
         .then((result) => {
+          httpMetrics.observeReindexRun({ scope, ok: result.errors.length === 0 });
           console.log(
             `[mnemosyne] reindex complete scope=${scope} files_indexed=${result.files_indexed}/${result.files_scanned} errors=${result.errors.length}`
           );
         })
         .catch((e) => {
+          httpMetrics.observeReindexRun({ scope, ok: false });
           console.error(`[mnemosyne] ERROR reindex: scope=${scope} failed: ${e.message}`);
         });
       return send(res, 202, { status: "started", scope, directory: directory || process.cwd() });
