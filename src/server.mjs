@@ -7,7 +7,8 @@
 //   GET  /                 -> service info JSON (programmatic callers) OR a
 //                              302 to /ui (browser navigations — see below)
 //   GET  /ui, /ui/*        -> static standalone UI shell (zero-dep, no build step)
-//   GET  /health           -> engine self-test (Qdrant/embedder/graph)
+//   GET  /health           -> engine self-test (Qdrant/embedder/graph) + per-scope
+//                             collection existence (status: "degraded" on a missing one)
 //   GET  /healthz          -> liveness alias (always 200 if the process is up)
 //   GET  /scopes           -> configured scopes + escalation ladders
 //   GET  /config           -> read-only effective config (qdrant_url, embedder, scopes)
@@ -68,7 +69,7 @@
 import http from "node:http";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   health,
@@ -93,7 +94,8 @@ import {
   graphifyImpactAction,
   graphifyDepsAction,
 } from "../bin/graphify-bridge.mjs";
-import { collectionExists } from "./collection-exists.mjs";
+import { collectionExists, listCollections } from "./collection-exists.mjs";
+import { createScopeHealthCheck, healthStatus } from "./scope-health.mjs";
 import {
   createReindexJobs,
   normalizeRepo,
@@ -103,9 +105,20 @@ import {
 } from "./reindex-jobs.mjs";
 
 const PORT = Number(process.env.PORT || 8477);
-const SERVICE = { god: "mnemosyne", role: "memory", version: "0.1.0" };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// The deployed build's real version, so /health and / say which build is live.
+// The desktop bundle ships package.json as a resource (src-tauri/tauri.conf.json);
+// if it's ever missing, report "unknown" rather than refuse to start.
+function readPackageVersion() {
+  try {
+    return JSON.parse(readFileSync(path.resolve(__dirname, "..", "package.json"), "utf8")).version || "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+const PACKAGE_VERSION = readPackageVersion();
+const SERVICE = { god: "mnemosyne", role: "memory", version: PACKAGE_VERSION };
 const UI_DIR = path.resolve(__dirname, "..", "ui");
 
 const STATIC_CONTENT_TYPES = {
@@ -178,6 +191,12 @@ export function createMnemosyneServer(overrides = {}) {
   const reindexRoots = overrides.reindexRoots || parseReindexRoots(process.env.MNEMOSYNE_REINDEX_ROOTS);
   const repoScopes = overrides.repoScopes || parseRepoScopes(process.env.MNEMOSYNE_REPO_SCOPES);
   const resolveScopes = overrides.scopeMap || scopeMap;
+  const engineHealth = overrides.health || health;
+  const checkScopes = createScopeHealthCheck({
+    scopeMap: resolveScopes,
+    listCollections: overrides.listCollections || listCollections,
+    maxAgeMs: Number(process.env.MNEMOSYNE_SCOPE_CHECK_MAX_AGE_MS || 5 * 60_000),
+  });
   const reindexJobs = createReindexJobs({
     reindex: overrides.reindex || reindex,
     collectionExists: overrides.collectionExists === undefined ? collectionExists : overrides.collectionExists,
@@ -231,7 +250,7 @@ export function createMnemosyneServer(overrides = {}) {
             "Pantheon memory god — thin service wrapping the swarm-memory engine over the Qdrant SSOT.",
           endpoints: {
             "GET /ui": "standalone UI shell (browser)",
-            "GET /health": "engine self-test (Qdrant + embedder + graph)",
+            "GET /health": "engine self-test (Qdrant + embedder + graph) + per-scope collection existence; status ok|degraded|checking",
             "GET /healthz": "liveness alias (always 200) for external checkers",
             "GET /scopes": "configured scopes + escalation ladders",
             "GET /config": "read-only effective config (qdrant_url, embedder, default_scope, fallback_collection)",
@@ -258,9 +277,12 @@ export function createMnemosyneServer(overrides = {}) {
         return await serveUiAsset(res, url.pathname);
       }
 
+      // `ok` (and the 200/503) is engine liveness only. `status` also folds
+      // in whether every configured scope's collection exists — "degraded"
+      // with `missing_scopes` when one doesn't — see scope-health.mjs.
       if (route === "GET /health") {
-        const h = await health();
-        return send(res, h.ok ? 200 : 503, { ...SERVICE, ...h });
+        const [h, sc] = await Promise.all([engineHealth(), checkScopes()]);
+        return send(res, h.ok ? 200 : 503, { ...SERVICE, ...h, status: healthStatus(h.ok, sc), ...sc });
       }
 
       // Liveness alias: process-up check only, no CLI shell-out. Deliberately

@@ -20,7 +20,7 @@ Every memory op runs over the live Qdrant corpus; nothing is stubbed or mocked.
 |-----------------|-------------------------------------------------------------|---------|
 | `GET /`         | —                                                           | service info + endpoints (JSON) for any caller **except** one sending `Accept: text/html` (a browser), which gets a `302` to `GET /ui` instead — see below |
 | `GET /ui`, `GET /ui/*` | —                                                      | standalone UI shell (static HTML/CSS/vanilla JS, zero-dep, no build step) — liveliness, read-only settings, lanes (scopes), and search panels with a manual refresh button |
-| `GET /health`   | —                                                           | engine self-test (`swarm-memory check`): Qdrant + embedder + graph |
+| `GET /health`   | —                                                           | engine self-test (`swarm-memory check`): Qdrant + embedder + graph, plus per-scope collection existence (`status`, `scopes`, `missing_scopes`) and the real `package.json` `version` — see "`GET /health` fields" below |
 | `GET /healthz`  | —                                                           | liveness alias — always 200 if the process is up, so external checkers (Salus/Argus) don't 404 |
 | `GET /scopes`   | —                                                           | scopes → collections + escalation ladders |
 | `GET /config`   | —                                                           | read-only effective config: `qdrant_url`, `embedder` (provider/model), `default_scope`, `fallback_collection`, `scopes`, `ladder` — thin wrapper over `engine.mjs`'s cached `scopeMap()` |
@@ -37,6 +37,52 @@ Every memory op runs over the live Qdrant corpus; nothing is stubbed or mocked.
 | `POST /reindex` | `{scope, directory?}`                                        | **Bulk** (re)index, scope-wide: scans `directory` (default: service's cwd; must be under `MNEMOSYNE_REINDEX_ROOTS`, else `403`) for `.ts`/`.md`/`.yaml` files and indexes each into `scope`'s collection. Returns `202 {job_id, scope, status: "running", directory, deduplicated}` **immediately**; a second call while that scope is running returns the existing `job_id`. Poll `GET /reindex/:job_id` for the outcome. Distinct from `POST /index` above — see "Two reindex paths" |
 | `GET /reindex/:job_id` | —                                                      | Reindex job status: `{status: running\|succeeded\|failed, files_scanned, files_indexed, errors, error, started_at, finished_at, trigger}`; `404` for an unknown job. `GET /reindex` lists retained jobs, newest first (in memory, last 50) |
 | `POST /events/repo-merged` | `{repo, ref}`                                      | Event-driven reindex trigger: maps `repo` → `{scope, directory}` via `MNEMOSYNE_REPO_SCOPES` and starts (or joins) that scope's job; `422` names an unmapped repo. See `docs/http-api.md` |
+
+### `GET /health` fields
+
+```json
+{
+  "god": "mnemosyne", "role": "memory", "version": "0.16.0",
+  "ok": true,
+  "status": "degraded",
+  "missing_scopes": ["mnemosyne"],
+  "scopes": {
+    "top":       { "collection": "claude_knowledge", "exists": true,  "points": 1204 },
+    "mnemosyne": { "collection": "repo_mnemosyne",   "exists": false, "points": 0 }
+  },
+  "scopes_checked_at": "2026-09-28T01:30:00.000Z",
+  "scopes_checking": false,
+  "engine": "swarm-memory", "drift_count": 0, "last_check": "…"
+}
+```
+
+- **`ok`** is engine liveness only (`swarm-memory check` passed). It alone
+  decides the HTTP code: `200` when true, `503` when false. A missing
+  collection does **not** flip `ok` or the HTTP code.
+- **`status`** is the overall verdict: `"ok"`, `"degraded"` (engine down,
+  any configured scope's collection missing, or the scope check itself
+  failed), or `"checking"` (first scope check since boot still running).
+  Monitors that care about repo memory coverage should read `status`, not
+  `ok`.
+- **`scopes`** maps every configured scope to `{collection, exists, points}`.
+  `points` is the collection's point count (`null` if it couldn't be read,
+  `0` when the collection doesn't exist).
+- **`missing_scopes`** lists the scopes whose collection doesn't exist
+  (sorted). A recall on one of those returns 0 hits, so this is the loud
+  signal for it. Fix with `mnemosyne onboard <path> --collection <name> --create`.
+- **`scope_check_error`** appears (with `scopes`/`missing_scopes` null) when
+  Qdrant couldn't be listed, e.g. missing credentials. That is `degraded`,
+  never read as "nothing is missing".
+- **`version`** comes from `package.json` (also on `GET /` and `GET /healthz`).
+
+Existence comes from one Qdrant collections listing for all scopes, run
+through `src/collection-exists.mjs`'s `listCollections()` (the same read-only
+inventory code as `mnemosyne onboard`); point counts are then read in the
+same subprocess for the configured collections that exist, since Qdrant's
+listing carries names only. The result is cached like drift: `/health` never
+waits on Qdrant, it serves the last result and refreshes in the background
+once it's older than `MNEMOSYNE_SCOPE_CHECK_MAX_AGE_MS` (default 5 min).
+`GET /healthz` is unaffected and always `200`.
 
 **`GET /` routing:** no existing consumer (`hooks/lib/mnemo-client.mjs`, `test/smoke.mjs`,
 `lib/mnemosyne/client.ts`) calls the bare `GET /` path, and Node's `fetch()`

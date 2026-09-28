@@ -132,7 +132,8 @@ jobs are never evicted). A restart forgets them.
 | `MNEMOSYNE_REINDEX_ROOTS` | Directories a reindex may scan, separated by `:` (like `PATH`). A requested `directory` must resolve, after symlinks, to one of these roots or somewhere below one. **Unset: only the service's own cwd is allowed.** |
 | `MNEMOSYNE_REPO_SCOPES` | JSON object mapping repo to `{scope, directory}`, for example `{"mdostal/mnemosyne": {"scope": "project", "directory": "/srv/repos/mnemosyne"}}`. Keys are matched case-insensitively. `https://github.com/…` and `.git` are stripped. A malformed value fails the service at startup. |
 | `MNEMOSYNE_REINDEX_JOB_HISTORY` | How many jobs to keep (default `50`). |
-| `MNEMOSYNE_PYTHON_BIN` | Python used for the read-only collection-existence check (default `python3`). |
+| `MNEMOSYNE_PYTHON_BIN` | Python used for the read-only collection-existence check and `/health`'s collections listing (default `python3`). |
+| `MNEMOSYNE_SCOPE_CHECK_MAX_AGE_MS` | How long `/health` reuses its cached per-scope collection check before refreshing it in the background (default `300000`). |
 
 ### Missing collections
 
@@ -144,6 +145,15 @@ the command that creates it (`mnemosyne onboard <path> --collection <name>
 --create`). Creating infrastructure stays an explicit operator step, never a
 side effect of an event. If the check itself can't run (for example, missing
 Qdrant credentials), the job also fails with that error.
+
+### `GET /health` scope coverage
+
+`GET /health` on `:8477` also reports, per configured scope, whether its
+Qdrant collection exists: `scopes: {<scope>: {collection, exists, points}}`,
+`missing_scopes: [...]` and `status: "ok" | "degraded" | "checking"`. `ok`
+and the `200`/`503` code stay engine liveness only; a missing collection
+makes `status` `"degraded"` without changing either. `version` is read from
+`package.json`. Full field reference: `SERVICE.md`, "`GET /health` fields".
 
 ### `POST /reindex`
 
