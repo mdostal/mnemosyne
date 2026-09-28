@@ -69,6 +69,10 @@
 // every existing and future programmatic caller with no route change required on
 // their end.
 //
+// Request bodies are capped at 4 MB (413 above that). SIGTERM/SIGINT drain
+// in-flight requests for up to MNEMOSYNE_SHUTDOWN_GRACE_MS (default 10s)
+// before exiting 0 — see "Graceful shutdown" at the bottom of this file.
+//
 // PORT env (default 8477).
 
 import http from "node:http";
@@ -169,14 +173,41 @@ function send(res, status, body) {
   res.end(payload);
 }
 
+const MAX_BODY_BYTES = 4 * 1024 * 1024;
+const OVERSIZE_LINGER_MS = 1000;
+
+function payloadTooLarge() {
+  return Object.assign(new Error(`payload too large (limit ${MAX_BODY_BYTES} bytes)`), {
+    status: 413,
+    tooLarge: true,
+  });
+}
+
+// Oversized bodies reject with a 413 and stop being buffered. A declared
+// Content-Length over the limit is refused before a single byte is read;
+// a chunked body is cut off as soon as it crosses the limit. The request
+// itself is destroyed once the 413 has been sent (see the catch below).
 function readJson(req) {
   return new Promise((resolve, reject) => {
-    let buf = "";
-    req.on("data", (c) => {
-      buf += c;
-      if (buf.length > 4 * 1024 * 1024) reject(new Error("payload too large"));
-    });
+    const declared = Number(req.headers["content-length"]);
+    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+      return reject(payloadTooLarge());
+    }
+    const chunks = [];
+    let size = 0;
+    const onData = (c) => {
+      size += c.length;
+      if (size > MAX_BODY_BYTES) {
+        req.off("data", onData);
+        req.pause();
+        chunks.length = 0;
+        return reject(payloadTooLarge());
+      }
+      chunks.push(c);
+    };
+    req.on("data", onData);
     req.on("end", () => {
+      const buf = Buffer.concat(chunks).toString("utf8");
       if (!buf.trim()) return resolve({});
       try {
         resolve(JSON.parse(buf));
@@ -248,6 +279,7 @@ export function createMnemosyneServer(overrides = {}) {
     res.on("finish", () => {
       console.log(`[mnemosyne] ${route} -> ${res.statusCode} ${Date.now() - t0}ms`);
     });
+    trackInFlight(res);
     try {
       if (route === "GET /") {
         // Browser navigation (Accept includes text/html) -> land on the UI shell.
@@ -558,9 +590,75 @@ export function createMnemosyneServer(overrides = {}) {
       return send(res, 404, { error: "not found", route });
     } catch (e) {
       const status = e.status || 500;
+      if (e.tooLarge) {
+        // Don't keep a half-read oversized upload open: destroy the request
+        // once the 413 is on the wire. The rest of the upload is discarded
+        // (never buffered) for a short linger first — closing a socket with
+        // unread bytes makes the kernel RST it, and a client still writing its
+        // body would see EPIPE instead of the 413. (No `connection: close`
+        // header for the same reason: Node would close the socket immediately.)
+        res.on("finish", () => {
+          const linger = setTimeout(() => req.destroy(), OVERSIZE_LINGER_MS);
+          req.once("end", () => {
+            clearTimeout(linger);
+            req.destroy();
+          });
+          req.resume();
+        });
+      }
       return send(res, status, { error: String(e.message || e), route });
     }
   });
+}
+
+// --- Graceful shutdown ------------------------------------------------------
+// On SIGTERM/SIGINT: stop accepting connections, let in-flight requests (e.g.
+// a remember() between writing its note file and finishing the index) run to
+// completion for up to MNEMOSYNE_SHUTDOWN_GRACE_MS, then exit 0 with one
+// structured log line saying whether everything drained.
+const SHUTDOWN_GRACE_MS = Number(process.env.MNEMOSYNE_SHUTDOWN_GRACE_MS || 10_000);
+let inFlight = 0;
+let shuttingDown = null;
+
+function trackInFlight(res) {
+  inFlight += 1;
+  let done = false;
+  const release = () => {
+    if (done) return;
+    done = true;
+    inFlight -= 1;
+    if (shuttingDown && inFlight === 0) shuttingDown.finish(false);
+  };
+  res.on("finish", release);
+  res.on("close", release);
+}
+
+function shutdown(server, signal) {
+  if (shuttingDown) return;
+  const t0 = Date.now();
+  const pendingAtSignal = inFlight;
+  let timer;
+  shuttingDown = {
+    finish(timedOut) {
+      clearTimeout(timer);
+      console.log(
+        JSON.stringify({
+          event: "mnemosyne.shutdown",
+          signal,
+          in_flight_at_signal: pendingAtSignal,
+          in_flight_abandoned: inFlight,
+          timed_out: timedOut,
+          grace_ms: SHUTDOWN_GRACE_MS,
+          duration_ms: Date.now() - t0,
+        })
+      );
+      process.exit(0);
+    },
+  };
+  server.close();
+  server.closeIdleConnections();
+  if (inFlight === 0) return shuttingDown.finish(false);
+  timer = setTimeout(() => shuttingDown.finish(true), SHUTDOWN_GRACE_MS);
 }
 
 // Listen only when run as the entry point (node src/server.mjs, bin/mnemosyne,
@@ -573,7 +671,10 @@ function isDirectRun() {
   }
 }
 if (isDirectRun()) {
-  createMnemosyneServer().listen(PORT, () => {
+  const server = createMnemosyneServer();
+  process.on("SIGTERM", () => shutdown(server, "SIGTERM"));
+  process.on("SIGINT", () => shutdown(server, "SIGINT"));
+  server.listen(PORT, () => {
     // eslint-disable-next-line no-console
     console.log(`[mnemosyne] memory god listening on http://127.0.0.1:${PORT}`);
   });
