@@ -22,7 +22,9 @@ restarts (`mnemosyne_uptime_seconds` shows when that happened).
 Labels:
 
 - `op`: `recall` | `remember` | `grep` | `reindex`. These are the `POST`
-  routes only. `GET /search` (the UI's search panel) isn't metered.
+  routes only. `GET /search` (the UI's search panel) isn't metered, and
+  neither are `POST /events/repo-merged` requests, though the jobs they start
+  show up in `mnemosyne_reindex_runs_total`.
 - `scope`: the `scope` from the request body, or `default` when the caller
   left it out. Callers control this value, so the first 100 distinct scopes
   get their own label and any scope after that is reported as `__other__`.
@@ -31,7 +33,11 @@ Labels:
   missing `query`/`text`/`scope`. For `recall`/`grep`, a 200 with
   `total_hits == 0` is `empty`. Everything else is `ok`. `POST /reindex` is
   `ok` once it returns its 202; how the background run went is counted
-  separately in `mnemosyne_reindex_runs_total`.
+  separately in `mnemosyne_reindex_runs_total`. A second `POST /reindex` for
+  a scope whose job is still running also returns 202 (with the existing
+  `job_id`), so it counts as an `ok` request but doesn't add a run. A
+  `directory` outside `MNEMOSYNE_REINDEX_ROOTS` gets a 403, which counts as
+  `error`.
 
 Series:
 
@@ -39,7 +45,7 @@ Series:
 |---|---|---|---|
 | `mnemosyne_requests_total` | counter | `op`, `scope`, `outcome` | Requests handled |
 | `mnemosyne_request_duration_seconds` | histogram | `op`, `scope`, `outcome` | Route latency. Buckets go from 5ms to 60s |
-| `mnemosyne_reindex_runs_total` | counter | `scope`, `outcome` (`ok`\|`error`) | Background `POST /reindex` runs that finished. `error` means at least one file failed or the whole run threw |
+| `mnemosyne_reindex_runs_total` | counter | `scope`, `outcome` (`ok`\|`error`) | Reindex jobs that finished, counted once per job, whether `POST /reindex` or `POST /events/repo-merged` started them. `error` means the job failed or at least one file failed |
 | `mnemosyne_recall_hits` | gauge | `scope` | `total_hits` from the most recent successful recall on that scope |
 | `mnemosyne_scope_missing` | gauge | `scope` | `1` if the most recent request that named the scope found it missing from the configured scope map (`swarm-memory config`), `0` if it was there. Left unset if the config couldn't be read |
 | `mnemosyne_uptime_seconds` | gauge | — | Seconds since the process's metrics started |

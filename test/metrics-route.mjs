@@ -216,9 +216,10 @@ try {
   const gate = new Promise((r) => (release = r));
   const runs = [];
   const server = createMnemosyneServer({
-    scopeMap: async () => ({ scopes: { personal: "personal_coll", flaky: "flaky_coll" } }),
+    scopeMap: async () => ({ scopes: { personal: "personal_coll", flaky: "flaky_coll", merged: "merged_coll" } }),
     collectionExists: null,
     reindexRoots: [dir],
+    repoScopes: new Map([["mdostal/merged", { scope: "merged", directory: dir }]]),
     reindex: async (scope) => {
       runs.push(scope);
       await gate;
@@ -234,7 +235,13 @@ try {
     ok((await postTo("/reindex", { scope: "personal", directory: dir })) === 202, "reindex personal -> 202");
     ok((await postTo("/reindex", { scope: "personal", directory: dir })) === 202, "second reindex personal joins the running job -> 202");
     ok((await postTo("/reindex", { scope: "flaky", directory: dir })) === 202, "reindex flaky -> 202");
+    ok((await postTo("/events/repo-merged", { repo: "mdostal/merged", ref: "dev" })) === 202, "repo-merged event -> 202");
+    ok((await postTo("/reindex", { scope: "personal", directory: tmpdir() })) === 403, "reindex outside MNEMOSYNE_REINDEX_ROOTS -> 403");
     const running = await scrape();
+    ok(
+      sample(running, 'mnemosyne_requests_total{op="reindex",scope="personal",outcome="error"}') === 1,
+      "the 403 is metered as reindex/personal/error",
+    );
     ok(
       sample(running, 'mnemosyne_requests_total{op="reindex",scope="personal",outcome="ok"}') === 2,
       "both personal reindex requests are metered",
@@ -245,10 +252,10 @@ try {
     let text = "";
     while (Date.now() < deadline) {
       text = await scrape();
-      if (text.includes('mnemosyne_reindex_runs_total{scope="flaky"')) break;
+      if (text.includes('mnemosyne_reindex_runs_total{scope="flaky"') && text.includes('mnemosyne_reindex_runs_total{scope="merged"')) break;
       await new Promise((r) => setTimeout(r, 20));
     }
-    ok(runs.length === 2, `the joined request didn't start a second run (runs: ${runs.join(",")})`);
+    ok(runs.length === 3, `the joined request didn't start a second run (runs: ${runs.join(",")})`);
     ok(
       sample(text, 'mnemosyne_reindex_runs_total{scope="personal",outcome="ok"}') === 1,
       'mnemosyne_reindex_runs_total{scope="personal",outcome="ok"} == 1 (counted once, not per request)',
@@ -257,6 +264,11 @@ try {
       sample(text, 'mnemosyne_reindex_runs_total{scope="flaky",outcome="error"}') === 1,
       'mnemosyne_reindex_runs_total{scope="flaky",outcome="error"} == 1 (a file failed)',
     );
+    ok(
+      sample(text, 'mnemosyne_reindex_runs_total{scope="merged",outcome="ok"}') === 1,
+      "a job started by POST /events/repo-merged is counted as a run",
+    );
+    ok(!text.includes('op="reindex",scope="merged"'), "repo-merged requests aren't metered as reindex requests");
   } finally {
     server.close();
     await rm(dir, { recursive: true, force: true });
