@@ -167,7 +167,9 @@ function renderHit(h, index, meta = {}) {
       ? "keyword-exact"
       : h.score != null
       ? `score ${h.score.toFixed(2)}`
-      : "score ?";
+      : // no similarity score (keyword/grep-only hit): name the match type
+        // instead of rendering a meaningless null score.
+        h.match_type || "keyword";
   const candidate = [];
   candidate.push(`${index + 1}. [${h.layer} · ${conf}] ${src}${range ? " " + range : ""}`);
   const ex = trimExcerpt(h.text);
@@ -226,6 +228,16 @@ function formatPriorMemoryDelta(recallResult, meta = {}) {
   const highLevelTokens = highLevelResult.segmentTokens;
   const estimatedTokens = highLevelTokens + lowLevelResult.segmentTokens;
   const skippedForBudget = highLevelResult.skipped + lowLevelResult.skipped;
+
+  if (meta.skipReason && shown.length === 0) {
+    // Nothing task-specific to recall on (e.g. runner boilerplate only): the
+    // delta is just the marker, so the injection is effectively the stable
+    // prefix and costs no variable tokens.
+    return {
+      text: `<!-- mnemosyne-variable-memory scope=${meta.scope || "?"} role=${meta.role || "?"} total_hits=${recallResult.total_hits ?? 0} shown=0 ticket=${meta.ticket || "-"} skipped=${meta.skipReason} -->`,
+      highLevelTokens: 0,
+    };
+  }
 
   if (shown.length === 0) {
     return {
