@@ -28,6 +28,7 @@ Every memory op runs over the live Qdrant corpus; nothing is stubbed or mocked.
 | `POST /remember`| `{text, scope?, tag?}`                                       | write-back: persists a note + indexes (upsert, `--no-prune`) it into the scope's collection so it is immediately recallable |
 | `POST /lanes`   | `{name, collection, ladder?}`                                | **add-only** atomic write of a new `[scopes]`/`[ladder]` entry to `~/.config/swarm-memory/config.toml` — see "Lanes / add-lane" below |
 | `GET /search`   | query params: `q`, `scope?`, `mode?` (`recall`\|`grep`, default `recall`), `hits?`, `escalate?`, `min_score?`, `radius?` | thin dispatcher for the `/ui` Search panel — routes straight to `recall()`/`grep()` (no new query logic); invalid `mode` → `400` |
+| `GET /note`     | query params: `source` (bare note file name or `mnemosyne://note/<source>`), `chunk?`, `lines?` (`a-b`); alias `GET /notes/:source` | stored note text + provenance (flight-status header) for a recall hit's `ref`; path segments / `..` → `400`, unknown note → `404` |
 | `GET /graph/stats` | —                                                        | graph size + origin breakdown (`swarm-memory graph stats`): `{nodes, edges, edges_by_origin, db}` |
 | `GET /graph/edges` | query params: `node?`                                    | list edges, or only those touching `node` when given (`swarm-memory graph edges [node]`) |
 | `GET /graph/impact/:node` | query params: `depth?`                             | reverse closure: what is affected if `:node` changes (`swarm-memory graph impact NODE`) — unknown node returns `[]`, not an error |
@@ -139,6 +140,23 @@ file is touched. See `src/engine.mjs`'s `addLane()` and
 `test/add-lane.mjs` / `test/lanes-route.mjs` for the atomic-write logic and
 its test coverage (both run entirely against throwaway fixtures — never the
 real config file).
+
+## Resolvable recall pointers (`ref`, GET /note)
+
+A hit's `full_path` is a path on the Mnemosyne host (e.g.
+`/root/.local/share/mnemosyne/notes/...` inside the container), which an
+agent in another container can't open. `recall()`/`grep()` therefore stamp a
+host-independent `ref` on every hit that has a file identity
+(`src/refs.mjs`):
+
+- `mnemosyne://note/<source>` — a note `remember()` wrote. Fetch it with
+  `GET /note?source=<source>` (whole note; `lines=a-b` slices it).
+- `repo:<scope>:<repo-relative-path>` — a repo-indexed file. Open the path
+  relative to your own checkout of that repo.
+
+Code-graph edge hits carry no `ref`. The injected hook bundle
+(`hooks/lib/format.mjs`) renders the `ref` plus the fetch hint, never the
+absolute host path.
 
 ## Search (GET /search)
 

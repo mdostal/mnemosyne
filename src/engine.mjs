@@ -14,6 +14,7 @@ import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { autoDetectWriteContext, detectGitContext, GitContextDetectionError, STATUSES } from "./flight-status.mjs";
 import { filterHitsByStatus } from "./status-filter.mjs";
+import { decorateRefs } from "./refs.mjs";
 
 const execFileP = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -376,7 +377,8 @@ export async function recall(query, scope, opts = {}) {
   const graphHits = await graphLayer.recall(String(query));
   const withGraph = mergeLayerResults(recallResult, graphHits);
   withGraph.layers_attempted = [...recallResult.layers_attempted, "code-graph"];
-  return applyStatusFilter(withGraph, opts);
+  // PANT-838: host-independent `ref` per hit (see refs.mjs).
+  return decorateRefs(await applyStatusFilter(withGraph, opts));
 }
 
 // applyStatusFilter — la-05-recall-status-filtering. Resolves the caller's
@@ -626,7 +628,7 @@ export async function grep(query, scope, opts = {}) {
   }
   
   const total = scopesArr.reduce((n, s) => n + (s.hits ? s.hits.length : 0), 0);
-  return { query: String(query), total_hits: total, scopes: scopesArr, match_mode: "keyword" };
+  return decorateRefs({ query: String(query), total_hits: total, scopes: scopesArr, match_mode: "keyword" });
 }
 
 // --- graph: READ-ONLY impact-graph exploration ------------------------------
