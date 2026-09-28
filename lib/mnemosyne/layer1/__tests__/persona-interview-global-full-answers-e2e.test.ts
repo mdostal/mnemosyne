@@ -74,6 +74,8 @@ import { runPersonaInterview } from '../../../../skills/mnemosyne-persona-interv
 import { writePersonaViaCli } from '../../../../skills/mnemosyne-persona-interview/persona-writer.mjs';
 // eslint-disable-next-line import/extensions
 import { rememberInterviewSource } from '../../../../skills/mnemosyne-persona-interview/persona-remember.mjs';
+// eslint-disable-next-line import/extensions
+import { makeScratchGitRepo, type ScratchGitRepo } from '../../../../test/fixtures/scratch-git-repo.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -126,11 +128,16 @@ async function waitForServer(url: string, timeoutMs = 15_000): Promise<boolean> 
 // pw-13's own under vitest's default parallel file execution.
 let server: ChildProcessByStdio<null, Readable, Readable>;
 let notesDir: string;
+// PANT-831: the server's remember() auto-detects flight status from its cwd,
+// so run it inside a scratch repo on a named branch rather than the
+// (possibly detached-HEAD, e.g. CI) checkout.
+let serverRepo: ScratchGitRepo;
 
 beforeAll(async () => {
   notesDir = await mkdtemp(path.join(tmpdir(), 'mnemosyne-pw14-notes-'));
+  serverRepo = makeScratchGitRepo({ prefix: 'mnemosyne-pw14-repo-' });
   server = spawn(process.execPath, [SERVER_PATH], {
-    cwd: REPO_ROOT,
+    cwd: serverRepo.dir,
     env: {
       ...process.env,
       PORT: String(TEST_PORT),
@@ -162,6 +169,7 @@ afterAll(async () => {
     }
   }
   await rm(notesDir, { recursive: true, force: true }).catch(() => {});
+  serverRepo?.cleanup();
 });
 
 /** Reads the real note file remember() wrote, for independent, on-disk confirmation the write actually landed. Same convention as pw-13's own readNoteFile. */

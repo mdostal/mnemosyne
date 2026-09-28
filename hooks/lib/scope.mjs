@@ -43,20 +43,30 @@ function repoScopeFromValue(value) {
   return REPO_SCOPE[base] || null;
 }
 
+// An EXPLICIT target repo (stdin target_repo/repo/repository or env
+// MNEMOSYNE_TARGET_REPO) that isn't in REPO_SCOPE resolves to its own basename:
+// live scopes are named per repo (janus, heimdall, portunus, ...). A cwd
+// basename never does — runner cwds are generic (`workdir`) and would mint
+// bogus scopes.
+function explicitRepoScope(value) {
+  if (!value) return null;
+  return repoScopeFromValue(value) || normalizeRepoName(value) || null;
+}
+
 // resolveScope(input) -> { scope, escalate, role, reason }
-// Precedence: explicit scope > role+repo mapping > env > default.
+// Precedence:
+//   1) stdin `scope`
+//   2) orchestrator role -> MNEMOSYNE_SCOPE || top
+//   3) env MNEMOSYNE_SCOPE
+//   4) explicit target repo: stdin target_repo/repo/repository, then env
+//      MNEMOSYNE_TARGET_REPO (mapped via REPO_SCOPE, else the repo basename)
+//   5) cwd basename, only when it's a known repo in REPO_SCOPE
+//   6) default -> top
+// Role only decides `escalate` (architect escalates, developer doesn't) for 3-5.
 export function resolveScope(input = {}) {
   const role = String(
     input.role || process.env.MNEMOSYNE_ROLE || ""
   ).toLowerCase();
-  const cwd = input.cwd || process.env.MNEMOSYNE_CWD || process.cwd();
-  const repo =
-    input.target_repo ||
-    input.repo ||
-    input.repository ||
-    process.env.MNEMOSYNE_TARGET_REPO ||
-    cwd;
-  const repoScope = repoScopeFromValue(repo);
 
   // 1) explicit scope always wins
   if (input.scope) {
@@ -68,28 +78,40 @@ export function resolveScope(input = {}) {
     };
   }
 
-  // 2) role-scoped resolution
+  // 2) top orchestrator: broadest — all-repo metadata, escalate up the ladder
   if (role.includes("orch") || role === "top" || role.includes("queen")) {
-    // top orchestrator: broadest — all-repo metadata, escalate up the ladder
     return { scope: process.env.MNEMOSYNE_SCOPE || "top", escalate: true, role, reason: "orchestrator -> top (all-repo, escalate)" };
   }
-  if (role.includes("architect")) {
-    // repo architect: this repo's meta/graph, escalate to shared knowledge
-    return { scope: repoScope || process.env.MNEMOSYNE_SCOPE || "top", escalate: true, role, reason: "architect -> repo scope (escalate)" };
-  }
-  if (role.includes("dev") || role.includes("engineer") || role.includes("developer")) {
-    // developer: just its repo slice; no escalation (narrow context)
-    return { scope: repoScope || process.env.MNEMOSYNE_SCOPE || "top", escalate: false, role, reason: "developer -> repo slice (no escalate)" };
-  }
 
-  // 3) env / repo fallback
+  const isArchitect = role.includes("architect");
+  const isDeveloper = role.includes("dev") || role.includes("engineer") || role.includes("developer");
+  // architect: repo meta/graph, escalate to shared knowledge.
+  // developer: just its repo slice, no escalation (narrow context).
+  const escalate = isArchitect;
+  const roleLabel = (fallback) => role || fallback;
+  const roleNote = isArchitect ? " (architect, escalate)" : isDeveloper ? " (developer, no escalate)" : "";
+
+  // 3) env scope override
   if (process.env.MNEMOSYNE_SCOPE) {
-    return { scope: process.env.MNEMOSYNE_SCOPE, escalate: false, role: role || "env", reason: "env MNEMOSYNE_SCOPE" };
-  }
-  if (repoScope) {
-    return { scope: repoScope, escalate: false, role: role || "repo", reason: "repo-from-cwd" };
+    return { scope: process.env.MNEMOSYNE_SCOPE, escalate, role: roleLabel("env"), reason: `env MNEMOSYNE_SCOPE${roleNote}` };
   }
 
-  // 4) default
-  return { scope: "top", escalate: true, role: role || "default", reason: "default -> top" };
+  // 4) explicit target repo
+  const inputRepo = input.target_repo || input.repo || input.repository;
+  const repo = inputRepo || process.env.MNEMOSYNE_TARGET_REPO;
+  const repoScope = explicitRepoScope(repo);
+  if (repoScope) {
+    const from = inputRepo ? "target_repo" : "env MNEMOSYNE_TARGET_REPO";
+    return { scope: repoScope, escalate, role: roleLabel("repo"), reason: `${from} -> repo scope${roleNote}` };
+  }
+
+  // 5) cwd basename (known repos only)
+  const cwd = input.cwd || process.env.MNEMOSYNE_CWD || process.cwd();
+  const cwdScope = repoScopeFromValue(cwd);
+  if (cwdScope) {
+    return { scope: cwdScope, escalate, role: roleLabel("repo"), reason: `repo-from-cwd${roleNote}` };
+  }
+
+  // 6) default
+  return { scope: "top", escalate: !isDeveloper, role: roleLabel("default"), reason: "default -> top" };
 }

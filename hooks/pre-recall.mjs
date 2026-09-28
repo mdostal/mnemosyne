@@ -10,6 +10,14 @@
 //     { "query": "...", "scope": "att", "role": "developer", "cwd": "..." }
 //     { "task_description": "...", "ticket": "PAN-123" }
 //
+//   Runner boilerplate (e.g. the Multica "You are running as a local coding
+//   agent ..." preamble) is stripped before the query is built, and ticket keys
+//   / issue uuids in the prompt feed keyword recall (see lib/prompt.mjs). If
+//   only boilerplate is left, semantic recall is skipped entirely.
+//
+//   This hook reads ONLY its stdin and env. It never calls Multica or GitHub;
+//   runners pass the target repo via MNEMOSYNE_TARGET_REPO / `target_repo`.
+//
 //   stdout: Claude Code hook JSON that injects context:
 //     {"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"<Prior Memory block>"}}
 //
@@ -19,6 +27,7 @@
 import { recall, grep, MNEMOSYNE_URL } from "./lib/mnemo-client.mjs";
 import { resolveScope } from "./lib/scope.mjs";
 import { buildMemoryBundle, mergeResults } from "./lib/format.mjs";
+import { analyzePrompt, MAX_IDENTIFIERS } from "./lib/prompt.mjs";
 
 function readStdin() {
   return new Promise((resolve) => {
@@ -76,11 +85,17 @@ async function main() {
     input = {};
   }
 
-  const query = String(pickQuery(input)).trim();
-  if (!query) {
+  const rawQuery = String(pickQuery(input)).trim();
+  if (!rawQuery) {
     // nothing to recall on; stay silent, don't break the loop
     process.exit(0);
   }
+
+  const prompt = analyzePrompt(rawQuery);
+  const query = prompt.query;
+  // Only a prompt that HAD runner boilerplate is gated on "meaningful": a short
+  // human prompt still gets semantic recall as before.
+  const skipSemantic = !query || (prompt.boilerplate && !prompt.meaningful);
 
   const { scope, escalate, role, reason } = resolveScope(input);
 
@@ -92,24 +107,56 @@ async function main() {
   const sharedHits = Number(input.shared_hits || process.env.MNEMOSYNE_SHARED_HITS || 2);
   const runner = String(input.runner || process.env.MNEMOSYNE_RUNNER || "generic").toLowerCase();
 
-  // HYBRID recall: semantic (concepts) + keyword (exact IDENTIFIERS only).
-  // Semantic owns the natural-language query. Keyword grep runs only on explicit
-  // identifiers (ticket / story ids, or short token-like queries) — the exact
-  // strings embeddings do NOT encode — giving DETERMINISTIC per-ticket recall.
-  // Keyword-exact hits merge FIRST so a definite identifier match surfaces at top.
-  const semantic = await recall(query, scope, { hits, escalate });
-  const sharedSemantic = includeShared
-    ? await recall(query, sharedScope, { hits: sharedHits, escalate: false })
-    : null;
-
   const identifiers = [];
-  if (input.ticket) identifiers.push(String(input.ticket));
-  if (input.story && input.story !== input.ticket) identifiers.push(String(input.story));
+  const addId = (id) => {
+    const v = String(id || "").trim();
+    if (v && !identifiers.some((x) => x.toLowerCase() === v.toLowerCase())) identifiers.push(v);
+  };
+  addId(input.ticket);
+  addId(input.story);
+  for (const id of prompt.identifiers) addId(id);
   // a bare token-like query (single word, has a digit/dash, no spaces) is itself
   // an identifier worth an exact lookup.
   if (!identifiers.length && /^[\w./-]{6,}$/.test(query) && /[\d-]/.test(query)) {
-    identifiers.push(query);
+    addId(query);
   }
+  identifiers.splice(MAX_IDENTIFIERS);
+  const ticket = identifiers.join(",") || "-";
+
+  const bundleMeta = {
+    scope,
+    sharedScope,
+    escalate,
+    role,
+    url: MNEMOSYNE_URL,
+    max: Number(input.max || 6),
+    tokenBudget: Number(input.token_budget || input.max_tokens || process.env.MNEMOSYNE_MEMORY_TOKEN_BUDGET || 900),
+    ticket,
+    skipReason: skipSemantic ? "runner-boilerplate" : undefined,
+  };
+
+  if (skipSemantic && !identifiers.length) {
+    // Boilerplate only and nothing to look up: stable prefix, no variable hits,
+    // no network.
+    const bundle = buildMemoryBundle({ total_hits: 0, scopes: [] }, bundleMeta);
+    process.stderr.write(
+      `[pre-recall] runner boilerplate only; no recall runner=${runner} scope=${scope} reason="${reason}"\n`
+    );
+    emit(bundle, runner);
+    process.exit(0);
+  }
+
+  // HYBRID recall: semantic (concepts) + keyword (exact IDENTIFIERS only).
+  // Semantic owns the natural-language query. Keyword grep runs only on explicit
+  // identifiers (ticket / story ids, ids found in the prompt, or short
+  // token-like queries) — the exact strings embeddings do NOT encode — giving
+  // DETERMINISTIC per-ticket recall. Keyword-exact hits merge FIRST so a
+  // definite identifier match surfaces at top.
+  const semantic = skipSemantic ? null : await recall(query, scope, { hits, escalate });
+  const sharedSemantic = !skipSemantic && includeShared
+    ? await recall(query, sharedScope, { hits: sharedHits, escalate: false })
+    : null;
+
   const kwResults = [];
   for (const id of identifiers) {
     kwResults.push(await grep(id, scope, { hits: 3, escalate }));
@@ -117,10 +164,17 @@ async function main() {
       kwResults.push(await grep(id, sharedScope, { hits: 2, escalate: false }));
     }
   }
+  // grep hits carry no similarity score; tag them so they rank and render as
+  // keyword-exact rather than as a null score.
+  for (const r of kwResults) {
+    for (const s of r.scopes || []) {
+      for (const h of s.hits || []) h.match_type = h.match_type || "keyword";
+    }
+  }
   // keyword first so exact-identifier chunks win dedup + sort above semantic.
   const result = mergeResults(...kwResults, semantic, sharedSemantic);
   result.total_hits =
-    (semantic.total_hits || 0) +
+    (semantic?.total_hits || 0) +
     (sharedSemantic?.total_hits || 0) +
     kwResults.reduce((n, r) => n + (r.total_hits || 0), 0);
   result.via = [semantic, sharedSemantic, ...kwResults]
@@ -131,30 +185,22 @@ async function main() {
   // If memory is entirely unreachable, stay silent (resilience) rather than
   // injecting an error into the agent's context.
   if (
-    semantic.via === "none" &&
+    (!semantic || semantic.via === "none") &&
     (!sharedSemantic || sharedSemantic.via === "none") &&
     kwResults.every((r) => r.via === "none")
   ) {
     process.stderr.write(
-      `[pre-recall] memory unreachable (${semantic.service_error || ""}); skipping injection\n`
+      `[pre-recall] memory unreachable (${semantic?.service_error || ""}); skipping injection\n`
     );
     process.exit(0);
   }
 
-  const bundle = buildMemoryBundle(result, {
-    scope,
-    sharedScope,
-    escalate,
-    role,
-    url: MNEMOSYNE_URL,
-    max: Number(input.max || 6),
-    tokenBudget: Number(input.token_budget || input.max_tokens || process.env.MNEMOSYNE_MEMORY_TOKEN_BUDGET || 900),
-    ticket: input.ticket || input.story || "-",
-  });
+  const bundle = buildMemoryBundle(result, bundleMeta);
 
   process.stderr.write(
     `[pre-recall] injected runner=${runner} scope=${scope} shared_scope=${includeShared ? sharedScope : "-"} ` +
-      `via=${result.via} total_hits=${result.total_hits ?? 0} reason="${reason}" ` +
+      `via=${result.via} total_hits=${result.total_hits ?? 0} ticket=${ticket} ` +
+      `semantic=${skipSemantic ? "skipped" : "on"} reason="${reason}" ` +
       `delta_tokens≈${bundle.stats.delta_tokens_estimate}\n`
   );
   emit(bundle, runner);

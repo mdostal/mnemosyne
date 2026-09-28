@@ -7,7 +7,8 @@
 //   GET  /                 -> service info JSON (programmatic callers) OR a
 //                              302 to /ui (browser navigations — see below)
 //   GET  /ui, /ui/*        -> static standalone UI shell (zero-dep, no build step)
-//   GET  /health           -> engine self-test (Qdrant/embedder/graph)
+//   GET  /health           -> engine self-test (Qdrant/embedder/graph) + per-scope
+//                             collection existence (status: "degraded" on a missing one)
 //   GET  /healthz          -> liveness alias (always 200 if the process is up)
 //   GET  /scopes           -> configured scopes + escalation ladders
 //   GET  /config           -> read-only effective config (qdrant_url, embedder, scopes)
@@ -23,6 +24,11 @@
 //                   git context (branch/commit) a write's flight status is
 //                   auto-detected from; defaults to this process's own cwd.
 //   POST /lanes   {name, collection, ladder?} -> add-only config.toml write
+//   GET  /note    ?source=<note>&chunk=&lines=a-b  (alias: GET /notes/:source)
+//                    -> PANT-838: the stored note text + provenance for a
+//                       `mnemosyne://note/<source>` recall ref. source is a
+//                       bare file name in the notes dir; any path segment /
+//                       traversal is a 400, an unknown note a 404.
 //   GET  /search  ?q=&scope=&mode=recall|grep&hits=&escalate=&min_score=&radius=
 //                    -> thin dispatcher to recall()/grep() for the UI's Search panel
 //   GET  /graph/stats            -> graph size + origin breakdown (swarm-memory graph stats)
@@ -41,8 +47,18 @@
 //                     cache" in SERVICE.md — never confuse this with data deletion.
 //   POST /reindex {scope, directory?} -> BULK reindex: scans `directory` for
 //                     .ts/.md/.yaml files and indexes each into `scope`'s
-//                     collection. Async — returns 202 immediately. Distinct from
+//                     collection. Async — returns 202 {job_id, scope, status}
+//                     immediately; a second call for a scope that's already
+//                     running returns the existing job_id. `directory` must be
+//                     under MNEMOSYNE_REINDEX_ROOTS (else 403). Distinct from
 //                     POST /index above — see SERVICE.md's "Two reindex paths".
+//   GET  /reindex          -> recent reindex jobs, newest first (in memory)
+//   GET  /reindex/:job_id  -> one job: {status: running|succeeded|failed,
+//                     files_scanned, files_indexed, errors, started_at, finished_at}
+//   POST /events/repo-merged {repo, ref} -> maps repo -> {scope, directory}
+//                     via MNEMOSYNE_REPO_SCOPES and starts a reindex job (the
+//                     event-driven entry point Pantheon calls on merge; 422
+//                     for an unmapped repo). See src/reindex-jobs.mjs.
 //   GET  /metrics  ?format=json -> in-process request metrics for /recall,
 //                     /remember, /grep, /reindex by scope + outcome, in the
 //                     Prometheus text format (JSON with ?format=json). See
@@ -57,11 +73,16 @@
 // every existing and future programmatic caller with no route change required on
 // their end.
 //
+// Request bodies are capped at 4 MB (413 above that). SIGTERM/SIGINT drain
+// in-flight requests for up to MNEMOSYNE_SHUTDOWN_GRACE_MS (default 10s)
+// before exiting 0 — see "Graceful shutdown" at the bottom of this file.
+//
 // PORT env (default 8477).
 
 import http from "node:http";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   health,
@@ -86,15 +107,22 @@ import {
   graphifyImpactAction,
   graphifyDepsAction,
 } from "../bin/graphify-bridge.mjs";
+import { readNote } from "./refs.mjs";
+import { collectionExists, listCollections } from "./collection-exists.mjs";
+import { createScopeHealthCheck, healthStatus } from "./scope-health.mjs";
+import {
+  createReindexJobs,
+  normalizeRepo,
+  parseReindexRoots,
+  parseRepoScopes,
+  resolveAllowedDirectory,
+} from "./reindex-jobs.mjs";
 import { createHttpMetrics } from "./observability/http-metrics.mjs";
 
 const PORT = Number(process.env.PORT || 8477);
-const SERVICE = { god: "mnemosyne", role: "memory", version: "0.1.0" };
 
-// Pull-based, in-process only: counters reset on restart and nothing is
-// pushed anywhere. Keyed by route so the finish hook below can meter every
-// outcome, including errors thrown before a handler reads its body.
-const httpMetrics = createHttpMetrics();
+// Routes metered by GET /metrics. Keyed by route so the finish hook below can
+// meter every outcome, including errors thrown before a handler reads its body.
 const METERED_ROUTES = {
   "POST /recall": "recall",
   "POST /remember": "remember",
@@ -102,20 +130,19 @@ const METERED_ROUTES = {
   "POST /reindex": "reindex",
 };
 
-// true/false when the configured scope map could be read, undefined when it
-// couldn't (the metric is then left untouched rather than guessed). Never
-// throws: metering must not change a request's outcome.
-async function isScopeMissing(scope) {
-  if (scope == null || String(scope).trim() === "") return false;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// The deployed build's real version, so /health and / say which build is live.
+// The desktop bundle ships package.json as a resource (src-tauri/tauri.conf.json);
+// if it's ever missing, report "unknown" rather than refuse to start.
+function readPackageVersion() {
   try {
-    const m = await scopeMap();
-    return !Object.prototype.hasOwnProperty.call(m.scopes, String(scope));
+    return JSON.parse(readFileSync(path.resolve(__dirname, "..", "package.json"), "utf8")).version || "unknown";
   } catch {
-    return undefined;
+    return "unknown";
   }
 }
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PACKAGE_VERSION = readPackageVersion();
+const SERVICE = { god: "mnemosyne", role: "memory", version: PACKAGE_VERSION };
 const UI_DIR = path.resolve(__dirname, "..", "ui");
 
 const STATIC_CONTENT_TYPES = {
@@ -160,14 +187,41 @@ function send(res, status, body) {
   res.end(payload);
 }
 
+const MAX_BODY_BYTES = 4 * 1024 * 1024;
+const OVERSIZE_LINGER_MS = 1000;
+
+function payloadTooLarge() {
+  return Object.assign(new Error(`payload too large (limit ${MAX_BODY_BYTES} bytes)`), {
+    status: 413,
+    tooLarge: true,
+  });
+}
+
+// Oversized bodies reject with a 413 and stop being buffered. A declared
+// Content-Length over the limit is refused before a single byte is read;
+// a chunked body is cut off as soon as it crosses the limit. The request
+// itself is destroyed once the 413 has been sent (see the catch below).
 function readJson(req) {
   return new Promise((resolve, reject) => {
-    let buf = "";
-    req.on("data", (c) => {
-      buf += c;
-      if (buf.length > 4 * 1024 * 1024) reject(new Error("payload too large"));
-    });
+    const declared = Number(req.headers["content-length"]);
+    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+      return reject(payloadTooLarge());
+    }
+    const chunks = [];
+    let size = 0;
+    const onData = (c) => {
+      size += c.length;
+      if (size > MAX_BODY_BYTES) {
+        req.off("data", onData);
+        req.pause();
+        chunks.length = 0;
+        return reject(payloadTooLarge());
+      }
+      chunks.push(c);
+    };
+    req.on("data", onData);
     req.on("end", () => {
+      const buf = Buffer.concat(chunks).toString("utf8");
       if (!buf.trim()) return resolve({});
       try {
         resolve(JSON.parse(buf));
@@ -179,315 +233,519 @@ function readJson(req) {
   });
 }
 
-const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://localhost:${PORT}`);
-  const route = `${req.method} ${url.pathname}`;
-  const t0 = Date.now();
-  // Filled in by the metered handlers below as they learn scope/hits.
-  const meter = {};
-  // Lightweight request log — proves what actually reaches the memory god
-  // (which consumers route recall/remember THROUGH Mnemosyne vs shelling direct).
-  res.on("finish", () => {
-    console.log(`[mnemosyne] ${route} -> ${res.statusCode} ${Date.now() - t0}ms`);
-    const op = METERED_ROUTES[route];
-    if (op) {
-      httpMetrics.observe({ op, status: res.statusCode, durationMs: Date.now() - t0, ...meter });
-    }
-  });
+function safeDecode(s) {
   try {
-    if (route === "GET /") {
-      // Browser navigation (Accept includes text/html) -> land on the UI shell.
-      // Everyone else (curl, fetch() with no/JSON Accept, existing consumers)
-      // keeps getting the JSON info blob unchanged.
-      const accept = String(req.headers.accept || "");
-      if (accept.includes("text/html")) {
-        res.writeHead(302, { location: "/ui" });
-        return res.end();
+    return decodeURIComponent(s);
+  } catch {
+    throw Object.assign(new Error("invalid percent-encoding in path"), { status: 400 });
+  }
+}
+
+/**
+ * Builds the HTTP server without listening. `overrides` replaces the reindex
+ * wiring (tests inject a stubbed reindex() and their own roots/repo map);
+ * everything else always goes through engine.mjs.
+ */
+export function createMnemosyneServer(overrides = {}) {
+  const reindexRoots = overrides.reindexRoots || parseReindexRoots(process.env.MNEMOSYNE_REINDEX_ROOTS);
+  const repoScopes = overrides.repoScopes || parseRepoScopes(process.env.MNEMOSYNE_REPO_SCOPES);
+  const resolveScopes = overrides.scopeMap || scopeMap;
+  const engineHealth = overrides.health || health;
+  const checkScopes = createScopeHealthCheck({
+    scopeMap: resolveScopes,
+    listCollections: overrides.listCollections || listCollections,
+    maxAgeMs: Number(process.env.MNEMOSYNE_SCOPE_CHECK_MAX_AGE_MS || 5 * 60_000),
+  });
+  const reindexJobs = createReindexJobs({
+    reindex: overrides.reindex || reindex,
+    collectionExists: overrides.collectionExists === undefined ? collectionExists : overrides.collectionExists,
+    maxJobs: overrides.maxJobs || Number(process.env.MNEMOSYNE_REINDEX_JOB_HISTORY) || undefined,
+  });
+  // Pull-based, in-process only: counters reset on restart and nothing is
+  // pushed anywhere.
+  const httpMetrics = overrides.httpMetrics || createHttpMetrics();
+
+  // true/false when the configured scope map could be read, undefined when it
+  // couldn't (the metric is then left untouched rather than guessed). Never
+  // throws: metering must not change a request's outcome.
+  async function isScopeMissing(scope) {
+    if (scope == null || String(scope).trim() === "") return false;
+    try {
+      const m = await resolveScopes();
+      return !Object.prototype.hasOwnProperty.call(m.scopes, String(scope));
+    } catch {
+      return undefined;
+    }
+  }
+
+  // Shared by POST /reindex and POST /events/repo-merged: resolve the scope's
+  // collection (400 if unknown), gate the directory on the allowed roots
+  // (403), then start — or join — the scope's job.
+  async function startReindexJob(scope, requestedDirectory, trigger) {
+    const m = await resolveScopes();
+    const collection = m.scopes[scope];
+    if (!collection) {
+      const err = new Error(`unknown scope '${scope}'. known: ${Object.keys(m.scopes).join(", ")}`);
+      err.status = 400;
+      throw err;
+    }
+    const directory = await resolveAllowedDirectory(requestedDirectory, reindexRoots);
+    const { job, deduplicated, done } = reindexJobs.start({ scope, collection, directory, trigger });
+    // Count each run once, when it finishes (a deduplicated call joined a run
+    // that's already counted). `done` never rejects.
+    if (!deduplicated) {
+      done.then(() => {
+        const finished = reindexJobs.get(job.job_id);
+        httpMetrics.observeReindexRun({
+          scope,
+          ok: finished?.status === "succeeded" && finished.errors.length === 0,
+        });
+      });
+    }
+    return {
+      job_id: job.job_id,
+      scope: job.scope,
+      status: job.status,
+      directory: job.directory,
+      deduplicated,
+    };
+  }
+
+  return http.createServer(async (req, res) => {
+    const url = new URL(req.url, `http://localhost:${PORT}`);
+    const route = `${req.method} ${url.pathname}`;
+    const t0 = Date.now();
+    // Filled in by the metered handlers below as they learn scope/hits.
+    const meter = {};
+    // Lightweight request log — proves what actually reaches the memory god
+    // (which consumers route recall/remember THROUGH Mnemosyne vs shelling direct).
+    res.on("finish", () => {
+      console.log(`[mnemosyne] ${route} -> ${res.statusCode} ${Date.now() - t0}ms`);
+      const op = METERED_ROUTES[route];
+      if (op) {
+        httpMetrics.observe({ op, status: res.statusCode, durationMs: Date.now() - t0, ...meter });
       }
-      return send(res, 200, {
-        ...SERVICE,
-        description:
-          "Pantheon memory god — thin service wrapping the swarm-memory engine over the Qdrant SSOT.",
-        endpoints: {
-          "GET /ui": "standalone UI shell (browser)",
-          "GET /health": "engine self-test (Qdrant + embedder + graph)",
-          "GET /healthz": "liveness alias (always 200) for external checkers",
-          "GET /scopes": "configured scopes + escalation ladders",
-          "GET /config": "read-only effective config (qdrant_url, embedder, default_scope, fallback_collection)",
-          "POST /recall": "{query, scope?, hits?, escalate?, min_score?, radius?} -> ranked hits w/ provenance",
-          "POST /remember": "{text, scope?, tag?} -> write-back (index into scope collection)",
-          "POST /grep": "{query, scope?, hits?, escalate?, radius?} -> KEYWORD hits (exact-string, no embedder)",
-          "POST /lanes": "{name, collection, ladder?} -> add-only atomic write of a new scope to config.toml",
-          "GET /search": "?q=&scope=&mode=recall|grep&hits=&escalate=&min_score=&radius= -> dispatches to recall()/grep()",
-          "GET /graph/stats": "graph size + origin breakdown (swarm-memory graph stats)",
-          "GET /graph/edges": "?node= -> list edges, optionally touching `node` (READ-ONLY)",
-          "GET /graph/impact/:node": "?depth= -> reverse closure: what's affected if :node changes",
-          "GET /graph/deps/:node": "?depth= -> forward closure: what :node depends on",
-          "POST /index": "{collection, paths[]} -> TARGETED: swarm-memory index <collection> <paths...> (default pruning, never --no-prune), synchronous",
-          "POST /cache/refresh": "clears ONLY the in-memory config cache (local, zero subprocesses, zero external state)",
-          "POST /reindex": "{scope, directory?} -> BULK (re)index a directory; runs async, returns immediately",
-          "GET /metrics": "?format=json -> request counters/histograms by scope + outcome (Prometheus text by default)",
-        },
-      });
-    }
-
-    if (req.method === "GET" && (url.pathname === "/ui" || url.pathname.startsWith("/ui/"))) {
-      return await serveUiAsset(res, url.pathname);
-    }
-
-    if (route === "GET /health") {
-      const h = await health();
-      return send(res, h.ok ? 200 : 503, { ...SERVICE, ...h });
-    }
-
-    // Liveness alias: process-up check only, no CLI shell-out. Deliberately
-    // always 200 (never mirrors /health's 503) so external checkers (Salus,
-    // Argus) never 404 or page on a transient engine hiccup — deep engine
-    // health stays on /health.
-    if (route === "GET /healthz") {
-      return send(res, 200, { ...SERVICE, alive: true });
-    }
-
-    if (route === "GET /metrics") {
-      if (url.searchParams.get("format") === "json") {
-        return send(res, 200, { ...SERVICE, ...httpMetrics.snapshot() });
+    });
+    trackInFlight(res);
+    try {
+      if (route === "GET /") {
+        // Browser navigation (Accept includes text/html) -> land on the UI shell.
+        // Everyone else (curl, fetch() with no/JSON Accept, existing consumers)
+        // keeps getting the JSON info blob unchanged.
+        const accept = String(req.headers.accept || "");
+        if (accept.includes("text/html")) {
+          res.writeHead(302, { location: "/ui" });
+          return res.end();
+        }
+        return send(res, 200, {
+          ...SERVICE,
+          description:
+            "Pantheon memory god — thin service wrapping the swarm-memory engine over the Qdrant SSOT.",
+          endpoints: {
+            "GET /ui": "standalone UI shell (browser)",
+            "GET /health": "engine self-test (Qdrant + embedder + graph) + per-scope collection existence; status ok|degraded|checking",
+            "GET /healthz": "liveness alias (always 200) for external checkers",
+            "GET /scopes": "configured scopes + escalation ladders",
+            "GET /config": "read-only effective config (qdrant_url, embedder, default_scope, fallback_collection)",
+            "POST /recall": "{query, scope?, hits?, escalate?, min_score?, radius?} -> ranked hits w/ provenance",
+            "POST /remember": "{text, scope?, tag?} -> write-back (index into scope collection)",
+            "POST /grep": "{query, scope?, hits?, escalate?, radius?} -> KEYWORD hits (exact-string, no embedder)",
+            "POST /lanes": "{name, collection, ladder?} -> add-only atomic write of a new scope to config.toml",
+            "GET /note": "?source=<note>&chunk=&lines=a-b -> stored note text + provenance for a mnemosyne://note/<source> ref (alias GET /notes/:source)",
+            "GET /search": "?q=&scope=&mode=recall|grep&hits=&escalate=&min_score=&radius= -> dispatches to recall()/grep()",
+            "GET /graph/stats": "graph size + origin breakdown (swarm-memory graph stats)",
+            "GET /graph/edges": "?node= -> list edges, optionally touching `node` (READ-ONLY)",
+            "GET /graph/impact/:node": "?depth= -> reverse closure: what's affected if :node changes",
+            "GET /graph/deps/:node": "?depth= -> forward closure: what :node depends on",
+            "POST /index": "{collection, paths[]} -> TARGETED: swarm-memory index <collection> <paths...> (default pruning, never --no-prune), synchronous",
+            "POST /cache/refresh": "clears ONLY the in-memory config cache (local, zero subprocesses, zero external state)",
+            "POST /reindex": "{scope, directory?} -> BULK (re)index a directory under MNEMOSYNE_REINDEX_ROOTS; 202 {job_id, scope, status}, deduped per scope",
+            "GET /reindex": "recent reindex jobs, newest first (in memory)",
+            "GET /reindex/:job_id": "job status: running|succeeded|failed, files_scanned, files_indexed, errors, started_at, finished_at",
+            "POST /events/repo-merged": "{repo, ref} -> maps repo -> scope (MNEMOSYNE_REPO_SCOPES) and starts a reindex job",
+            "GET /metrics": "?format=json -> request counters/histograms by scope + outcome (Prometheus text by default)",
+          },
+        });
       }
-      const body = httpMetrics.renderPrometheus();
-      res.writeHead(200, {
-        "content-type": "text/plain; version=0.0.4; charset=utf-8",
-        "content-length": Buffer.byteLength(body),
-      });
-      return res.end(body);
-    }
 
-    if (route === "GET /scopes") {
-      return send(res, 200, { ...SERVICE, ...(await scopes()) });
-    }
-
-    if (route === "GET /config") {
-      const m = await scopeMap();
-      return send(res, 200, {
-        ...SERVICE,
-        qdrant_url: m.qdrant_url,
-        embedder: m.embedder,
-        default_scope: m.default_scope,
-        fallback_collection: m.fallback_collection,
-        scopes: m.scopes,
-        ladder: m.ladder,
-      });
-    }
-
-    if (route === "GET /search") {
-      // Thin GET-based dispatcher for the UI's Search panel: reuses
-      // recall()/grep() verbatim (no new query-building logic here) so the
-      // UI has one uniform GET fetch surface across a semantic/keyword
-      // toggle rather than mixing GET/POST conventions across panels.
-      const q = url.searchParams.get("q");
-      const scope = url.searchParams.get("scope") || undefined;
-      const modeParam = url.searchParams.get("mode");
-      const mode = modeParam == null || modeParam === "" ? "recall" : modeParam;
-      if (mode !== "recall" && mode !== "grep") {
-        const err = new Error(`invalid mode '${mode}' — mode must be 'recall' (semantic) or 'grep' (keyword)`);
-        err.status = 400;
-        throw err;
+      if (req.method === "GET" && (url.pathname === "/ui" || url.pathname.startsWith("/ui/"))) {
+        return await serveUiAsset(res, url.pathname);
       }
-      const hitsParam = url.searchParams.get("hits");
-      const radiusParam = url.searchParams.get("radius");
-      const escalateParam = url.searchParams.get("escalate");
-      const minScoreParam = url.searchParams.get("min_score");
-      const crossBranchProvisionalParam = url.searchParams.get("cross_branch_provisional");
-      const opts = {
-        hits: hitsParam != null ? Number(hitsParam) : undefined,
-        escalate: escalateParam === "true" || escalateParam === "1",
-        radius: radiusParam != null ? Number(radiusParam) : undefined,
-        cwd: url.searchParams.get("cwd") || undefined,
-        includeCrossBranchProvisional:
-          crossBranchProvisionalParam === "true" || crossBranchProvisionalParam === "1",
-      };
-      const result =
-        mode === "recall"
-          ? await recall(q, scope, { ...opts, minScore: minScoreParam != null ? Number(minScoreParam) : undefined })
-          : await grep(q, scope, opts);
-      return send(res, 200, { ...result, mode, took_ms: Date.now() - t0 });
-    }
 
-    if (route === "POST /grep") {
-      const b = await readJson(req);
-      meter.scope = b.scope;
-      meter.scopeMissing = await isScopeMissing(b.scope);
-      const result = await grep(b.query, b.scope, {
-        hits: b.hits,
-        escalate: b.escalate,
-        radius: b.radius,
-      });
-      meter.hits = result.total_hits ?? 0;
-      return send(res, 200, { ...result, took_ms: Date.now() - t0 });
-    }
+      // `ok` (and the 200/503) is engine liveness only. `status` also folds
+      // in whether every configured scope's collection exists — "degraded"
+      // with `missing_scopes` when one doesn't — see scope-health.mjs.
+      if (route === "GET /health") {
+        const [h, sc] = await Promise.all([engineHealth(), checkScopes()]);
+        return send(res, h.ok ? 200 : 503, { ...SERVICE, ...h, status: healthStatus(h.ok, sc), ...sc });
+      }
 
-    if (route === "POST /recall") {
-      const b = await readJson(req);
-      meter.scope = b.scope;
-      meter.scopeMissing = await isScopeMissing(b.scope);
-      const result = await recall(b.query, b.scope, {
-        hits: b.hits,
-        escalate: b.escalate,
-        minScore: b.min_score,
-        radius: b.radius,
-        cwd: b.cwd,
-        includeCrossBranchProvisional: b.cross_branch_provisional === true,
-      });
-      console.log(
-        `[mnemosyne] recall q=${JSON.stringify(String(b.query || "").slice(0, 80))} ` +
-          `scope=${b.scope || "(default)"} total_hits=${result.total_hits ?? 0}`
-      );
-      meter.hits = result.total_hits ?? 0;
-      return send(res, 200, { ...result, took_ms: Date.now() - t0 });
-    }
+      // Liveness alias: process-up check only, no CLI shell-out. Deliberately
+      // always 200 (never mirrors /health's 503) so external checkers (Salus,
+      // Argus) never 404 or page on a transient engine hiccup — deep engine
+      // health stays on /health.
+      if (route === "GET /healthz") {
+        return send(res, 200, { ...SERVICE, alive: true });
+      }
 
-    if (route === "POST /remember") {
-      const b = await readJson(req);
-      meter.scope = b.layer === "code-graph" ? "code-graph" : b.scope;
-      if (b.layer === "code-graph") {
-        const { CodeGraphLayer } = await import("./layers/code-graph.mjs");
-        const graph = new CodeGraphLayer();
-        const result = await graph.remember(b.src, b.predicate, b.dst);
+      if (route === "GET /metrics") {
+        if (url.searchParams.get("format") === "json") {
+          return send(res, 200, { ...SERVICE, ...httpMetrics.snapshot() });
+        }
+        const body = httpMetrics.renderPrometheus();
+        res.writeHead(200, {
+          "content-type": "text/plain; version=0.0.4; charset=utf-8",
+          "content-length": Buffer.byteLength(body),
+        });
+        return res.end(body);
+      }
+
+      if (route === "GET /scopes") {
+        return send(res, 200, { ...SERVICE, ...(await scopes()) });
+      }
+
+      if (route === "GET /config") {
+        const m = await scopeMap();
+        return send(res, 200, {
+          ...SERVICE,
+          qdrant_url: m.qdrant_url,
+          embedder: m.embedder,
+          default_scope: m.default_scope,
+          fallback_collection: m.fallback_collection,
+          scopes: m.scopes,
+          ladder: m.ladder,
+        });
+      }
+
+      if (route === "GET /note" || (req.method === "GET" && url.pathname.startsWith("/notes/"))) {
+        // The alias segment is decoded first so an encoded "%2F"/"%2E%2E" still
+        // hits readNote()'s bare-file-name validation and is rejected (400).
+        const source =
+          route === "GET /note"
+            ? url.searchParams.get("source")
+            : safeDecode(url.pathname.slice("/notes/".length));
+        const note = await readNote(source, {
+          chunk: url.searchParams.get("chunk"),
+          lines: url.searchParams.get("lines"),
+        });
+        return send(res, 200, { ...note, took_ms: Date.now() - t0 });
+      }
+
+      if (route === "GET /search") {
+        // Thin GET-based dispatcher for the UI's Search panel: reuses
+        // recall()/grep() verbatim (no new query-building logic here) so the
+        // UI has one uniform GET fetch surface across a semantic/keyword
+        // toggle rather than mixing GET/POST conventions across panels.
+        const q = url.searchParams.get("q");
+        const scope = url.searchParams.get("scope") || undefined;
+        const modeParam = url.searchParams.get("mode");
+        const mode = modeParam == null || modeParam === "" ? "recall" : modeParam;
+        if (mode !== "recall" && mode !== "grep") {
+          const err = new Error(`invalid mode '${mode}' — mode must be 'recall' (semantic) or 'grep' (keyword)`);
+          err.status = 400;
+          throw err;
+        }
+        const hitsParam = url.searchParams.get("hits");
+        const radiusParam = url.searchParams.get("radius");
+        const escalateParam = url.searchParams.get("escalate");
+        const minScoreParam = url.searchParams.get("min_score");
+        const crossBranchProvisionalParam = url.searchParams.get("cross_branch_provisional");
+        const opts = {
+          hits: hitsParam != null ? Number(hitsParam) : undefined,
+          escalate: escalateParam === "true" || escalateParam === "1",
+          radius: radiusParam != null ? Number(radiusParam) : undefined,
+          cwd: url.searchParams.get("cwd") || undefined,
+          includeCrossBranchProvisional:
+            crossBranchProvisionalParam === "true" || crossBranchProvisionalParam === "1",
+        };
+        const result =
+          mode === "recall"
+            ? await recall(q, scope, { ...opts, minScore: minScoreParam != null ? Number(minScoreParam) : undefined })
+            : await grep(q, scope, opts);
+        return send(res, 200, { ...result, mode, took_ms: Date.now() - t0 });
+      }
+
+      if (route === "POST /grep") {
+        const b = await readJson(req);
+        meter.scope = b.scope;
+        meter.scopeMissing = await isScopeMissing(b.scope);
+        const result = await grep(b.query, b.scope, {
+          hits: b.hits,
+          escalate: b.escalate,
+          radius: b.radius,
+        });
+        meter.hits = result.total_hits ?? 0;
         return send(res, 200, { ...result, took_ms: Date.now() - t0 });
       }
-      meter.scopeMissing = await isScopeMissing(b.scope);
-      const result = await remember(b.text, b.scope, { tag: b.tag, cwd: b.cwd });
-      return send(res, 200, { ...result, took_ms: Date.now() - t0 });
-    }
 
-    if (route === "POST /lanes") {
-      const b = await readJson(req);
-      const result = await addLane(b.name, b.collection, b.ladder);
-      return send(res, 200, { ...result, took_ms: Date.now() - t0 });
-    }
-
-    // --- Operations (s-05): Reindex + Refresh config cache ------------------
-    // THREE DISTINCT actions that must never be conflated:
-    //   POST /index         -> TARGETED: shells out to `swarm-memory index`
-    //                           for an operator-selected collection + >=1
-    //                           path (default pruning; live Qdrant Cloud
-    //                           write, synchronous).
-    //   POST /reindex        -> BULK: scans a whole directory into a scope's
-    //                           collection, async (202 + background run).
-    //   POST /cache/refresh -> purely local: clears engine.mjs's in-memory
-    //                           scopeMap cache only. No subprocess, no Qdrant,
-    //                           no config.toml, no graph.sqlite. NOT a data
-    //                           deletion of any kind.
-    // None of these routes, nor any function either calls, ever wraps a
-    // Qdrant collection delete/wipe/drop — no such verb exists in the
-    // swarm-memory CLI and none is invented here. See SERVICE.md's hard
-    // guardrail and "Two reindex paths".
-
-    if (route === "POST /index") {
-      const b = await readJson(req);
-      const result = await reindexPaths(b.collection, b.paths);
-      return send(res, 200, { ...result, took_ms: Date.now() - t0 });
-    }
-
-    if (route === "POST /reindex") {
-      const b = await readJson(req);
-      meter.scope = b.scope;
-      if (!b.scope || !String(b.scope).trim()) {
-        const err = new Error("scope is required");
-        err.status = 400;
-        throw err;
-      }
-      const scope = String(b.scope);
-      const directory = b.directory ? String(b.directory) : undefined;
-      meter.scopeMissing = await isScopeMissing(scope);
-      // Fire-and-forget: reindex can take minutes, so the request returns
-      // immediately and the run continues (and logs its outcome) in the
-      // background — no progress tracking in slice-2 (MVP).
-      reindex(scope, { directory })
-        .then((result) => {
-          httpMetrics.observeReindexRun({ scope, ok: result.errors.length === 0 });
-          console.log(
-            `[mnemosyne] reindex complete scope=${scope} files_indexed=${result.files_indexed}/${result.files_scanned} errors=${result.errors.length}`
-          );
-        })
-        .catch((e) => {
-          httpMetrics.observeReindexRun({ scope, ok: false });
-          console.error(`[mnemosyne] ERROR reindex: scope=${scope} failed: ${e.message}`);
+      if (route === "POST /recall") {
+        const b = await readJson(req);
+        meter.scope = b.scope;
+        meter.scopeMissing = await isScopeMissing(b.scope);
+        const result = await recall(b.query, b.scope, {
+          hits: b.hits,
+          escalate: b.escalate,
+          minScore: b.min_score,
+          radius: b.radius,
+          cwd: b.cwd,
+          includeCrossBranchProvisional: b.cross_branch_provisional === true,
         });
-      return send(res, 202, { status: "started", scope, directory: directory || process.cwd() });
-    }
-
-    if (route === "POST /cache/refresh") {
-      // Synchronous, local-only — never awaits anything, spawns nothing.
-      const result = resetScopeMapCache();
-      return send(res, 200, { ...SERVICE, ...result, took_ms: Date.now() - t0 });
-    }
-
-    // --- Graph (s-04, extended by la-02-graphify-adapter, soft-defaulted by
-    // cr-01-graphify-default-layer): READ-ONLY impact-graph exploration.
-    // isGraphifyConfigured() (bin/graphify-bridge.mjs) decides the backend
-    // per request, not a plain "did MNEMOSYNE_LAYERS mention graphify"
-    // check:
-    //   - MNEMOSYNE_LAYERS explicitly names "graphify" -> graphify, always;
-    //     a missing binary fails loudly (500), never silently downgraded.
-    //   - MNEMOSYNE_LAYERS explicitly names something else (e.g. just
-    //     "vector") -> swarm-memory's graph QUERY verbs via engine.mjs,
-    //     always -- graphify is never even attempted (pluggability).
-    //   - MNEMOSYNE_LAYERS entirely unset (bare install) -> SOFT default:
-    //     graphify if its binary is on PATH, else the swarm-memory-backed
-    //     path below with a loud console.warn() (not a hard failure) --
-    //     preserves the zero-required-external-binary promise for a bare
-    //     install (see SERVICE.md's "Graph" section, and
-    //     bin/mnemosyne-mcp.mjs's identical wireGraphTools() pattern — this
-    //     mirrors it for the browser UI, not just MCP). `graph add`/`graph
-    //     remove` (mutation verbs) are never wrapped by either backend and
-    //     no route below reaches them — mutation is out of scope.
-
-    if (route === "GET /graph/stats") {
-      if (isGraphifyConfigured()) {
-        return send(res, 200, await graphifyStatsAction());
+        console.log(
+          `[mnemosyne] recall q=${JSON.stringify(String(b.query || "").slice(0, 80))} ` +
+            `scope=${b.scope || "(default)"} total_hits=${result.total_hits ?? 0}`
+        );
+        meter.hits = result.total_hits ?? 0;
+        return send(res, 200, { ...result, took_ms: Date.now() - t0 });
       }
-      const stats = await graphStats();
-      return send(res, 200, { ...stats, took_ms: Date.now() - t0 });
-    }
 
-    if (req.method === "GET" && url.pathname === "/graph/edges") {
-      const node = url.searchParams.get("node") || undefined;
-      if (isGraphifyConfigured()) {
-        return send(res, 200, await graphifyEdgesAction(PORT, { node }));
+      if (route === "POST /remember") {
+        const b = await readJson(req);
+        meter.scope = b.layer === "code-graph" ? "code-graph" : b.scope;
+        if (b.layer === "code-graph") {
+          const { CodeGraphLayer } = await import("./layers/code-graph.mjs");
+          const graph = new CodeGraphLayer();
+          const result = await graph.remember(b.src, b.predicate, b.dst);
+          return send(res, 200, { ...result, took_ms: Date.now() - t0 });
+        }
+        meter.scopeMissing = await isScopeMissing(b.scope);
+        const result = await remember(b.text, b.scope, { tag: b.tag, cwd: b.cwd });
+        return send(res, 200, { ...result, took_ms: Date.now() - t0 });
       }
-      const edges = await graphEdges(node);
-      return send(res, 200, { node: node || null, count: edges.length, edges, took_ms: Date.now() - t0 });
-    }
 
-    if (req.method === "GET" && url.pathname.startsWith("/graph/impact/")) {
-      const node = decodeURIComponent(url.pathname.slice("/graph/impact/".length));
-      const depthParam = url.searchParams.get("depth");
-      const depth = depthParam != null ? Number(depthParam) : undefined;
-      if (isGraphifyConfigured()) {
-        return send(res, 200, await graphifyImpactAction(PORT, node, { depth }));
+      if (route === "POST /lanes") {
+        const b = await readJson(req);
+        const result = await addLane(b.name, b.collection, b.ladder);
+        return send(res, 200, { ...result, took_ms: Date.now() - t0 });
       }
-      const impact = await graphImpact(node, { depth });
-      return send(res, 200, { node, count: impact.length, impact, took_ms: Date.now() - t0 });
-    }
 
-    if (req.method === "GET" && url.pathname.startsWith("/graph/deps/")) {
-      const node = decodeURIComponent(url.pathname.slice("/graph/deps/".length));
-      const depthParam = url.searchParams.get("depth");
-      const depth = depthParam != null ? Number(depthParam) : undefined;
-      if (isGraphifyConfigured()) {
-        return send(res, 200, await graphifyDepsAction(PORT, node, { depth }));
+      // --- Operations (s-05): Reindex + Refresh config cache ------------------
+      // THREE DISTINCT actions that must never be conflated:
+      //   POST /index         -> TARGETED: shells out to `swarm-memory index`
+      //                           for an operator-selected collection + >=1
+      //                           path (default pruning; live Qdrant Cloud
+      //                           write, synchronous).
+      //   POST /reindex        -> BULK: scans a whole directory into a scope's
+      //                           collection, async (202 + background run).
+      //   POST /cache/refresh -> purely local: clears engine.mjs's in-memory
+      //                           scopeMap cache only. No subprocess, no Qdrant,
+      //                           no config.toml, no graph.sqlite. NOT a data
+      //                           deletion of any kind.
+      // None of these routes, nor any function either calls, ever wraps a
+      // Qdrant collection delete/wipe/drop — no such verb exists in the
+      // swarm-memory CLI and none is invented here. See SERVICE.md's hard
+      // guardrail and "Two reindex paths".
+
+      if (route === "POST /index") {
+        const b = await readJson(req);
+        const result = await reindexPaths(b.collection, b.paths);
+        return send(res, 200, { ...result, took_ms: Date.now() - t0 });
       }
-      const deps = await graphDeps(node, { depth });
-      return send(res, 200, { node, count: deps.length, deps, took_ms: Date.now() - t0 });
-    }
 
-    return send(res, 404, { error: "not found", route });
-  } catch (e) {
-    const status = e.status || 500;
-    return send(res, status, { error: String(e.message || e), route });
+      if (route === "POST /reindex") {
+        const b = await readJson(req);
+        meter.scope = b.scope;
+        if (!b.scope || !String(b.scope).trim()) {
+          const err = new Error("scope is required");
+          err.status = 400;
+          throw err;
+        }
+        // Reindex can take minutes: the request returns 202 with a job_id at
+        // once and the caller polls GET /reindex/:job_id for the outcome.
+        const directory = b.directory ? String(b.directory) : undefined;
+        meter.scopeMissing = await isScopeMissing(b.scope);
+        return send(res, 202, await startReindexJob(String(b.scope), directory, { type: "api" }));
+      }
+
+      if (route === "GET /reindex") {
+        return send(res, 200, { jobs: reindexJobs.list() });
+      }
+
+      if (req.method === "GET" && url.pathname.startsWith("/reindex/")) {
+        const jobId = decodeURIComponent(url.pathname.slice("/reindex/".length));
+        const job = reindexJobs.get(jobId);
+        if (!job) return send(res, 404, { error: `unknown reindex job '${jobId}'`, route });
+        return send(res, 200, job);
+      }
+
+      if (route === "POST /events/repo-merged") {
+        // Event-driven entry point: Pantheon calls this when a merge lands, so
+        // nothing in Mnemosyne polls or schedules. Indexes whatever is on disk
+        // at the mapped directory — keeping that checkout at `ref` is the
+        // caller's job.
+        const b = await readJson(req);
+        if (!b.repo || !String(b.repo).trim()) {
+          const err = new Error("repo is required");
+          err.status = 400;
+          throw err;
+        }
+        const repo = String(b.repo);
+        const mapping = repoScopes.get(normalizeRepo(repo));
+        if (!mapping) {
+          return send(res, 422, {
+            error: `repo '${repo}' is not mapped to a scope (MNEMOSYNE_REPO_SCOPES)`,
+            repo,
+            route,
+          });
+        }
+        const ref = b.ref ? String(b.ref) : null;
+        const started = await startReindexJob(mapping.scope, mapping.directory, { type: "repo-merged", repo, ref });
+        return send(res, 202, { ...started, repo, ref });
+      }
+
+      if (route === "POST /cache/refresh") {
+        // Synchronous, local-only — never awaits anything, spawns nothing.
+        const result = resetScopeMapCache();
+        return send(res, 200, { ...SERVICE, ...result, took_ms: Date.now() - t0 });
+      }
+
+      // --- Graph (s-04, extended by la-02-graphify-adapter, soft-defaulted by
+      // cr-01-graphify-default-layer): READ-ONLY impact-graph exploration.
+      // isGraphifyConfigured() (bin/graphify-bridge.mjs) decides the backend
+      // per request, not a plain "did MNEMOSYNE_LAYERS mention graphify"
+      // check:
+      //   - MNEMOSYNE_LAYERS explicitly names "graphify" -> graphify, always;
+      //     a missing binary fails loudly (500), never silently downgraded.
+      //   - MNEMOSYNE_LAYERS explicitly names something else (e.g. just
+      //     "vector") -> swarm-memory's graph QUERY verbs via engine.mjs,
+      //     always -- graphify is never even attempted (pluggability).
+      //   - MNEMOSYNE_LAYERS entirely unset (bare install) -> SOFT default:
+      //     graphify if its binary is on PATH, else the swarm-memory-backed
+      //     path below with a loud console.warn() (not a hard failure) --
+      //     preserves the zero-required-external-binary promise for a bare
+      //     install (see SERVICE.md's "Graph" section, and
+      //     bin/mnemosyne-mcp.mjs's identical wireGraphTools() pattern — this
+      //     mirrors it for the browser UI, not just MCP). `graph add`/`graph
+      //     remove` (mutation verbs) are never wrapped by either backend and
+      //     no route below reaches them — mutation is out of scope.
+
+      if (route === "GET /graph/stats") {
+        if (isGraphifyConfigured()) {
+          return send(res, 200, await graphifyStatsAction());
+        }
+        const stats = await graphStats();
+        return send(res, 200, { ...stats, took_ms: Date.now() - t0 });
+      }
+
+      if (req.method === "GET" && url.pathname === "/graph/edges") {
+        const node = url.searchParams.get("node") || undefined;
+        if (isGraphifyConfigured()) {
+          return send(res, 200, await graphifyEdgesAction(PORT, { node }));
+        }
+        const edges = await graphEdges(node);
+        return send(res, 200, { node: node || null, count: edges.length, edges, took_ms: Date.now() - t0 });
+      }
+
+      if (req.method === "GET" && url.pathname.startsWith("/graph/impact/")) {
+        const node = decodeURIComponent(url.pathname.slice("/graph/impact/".length));
+        const depthParam = url.searchParams.get("depth");
+        const depth = depthParam != null ? Number(depthParam) : undefined;
+        if (isGraphifyConfigured()) {
+          return send(res, 200, await graphifyImpactAction(PORT, node, { depth }));
+        }
+        const impact = await graphImpact(node, { depth });
+        return send(res, 200, { node, count: impact.length, impact, took_ms: Date.now() - t0 });
+      }
+
+      if (req.method === "GET" && url.pathname.startsWith("/graph/deps/")) {
+        const node = decodeURIComponent(url.pathname.slice("/graph/deps/".length));
+        const depthParam = url.searchParams.get("depth");
+        const depth = depthParam != null ? Number(depthParam) : undefined;
+        if (isGraphifyConfigured()) {
+          return send(res, 200, await graphifyDepsAction(PORT, node, { depth }));
+        }
+        const deps = await graphDeps(node, { depth });
+        return send(res, 200, { node, count: deps.length, deps, took_ms: Date.now() - t0 });
+      }
+
+      return send(res, 404, { error: "not found", route });
+    } catch (e) {
+      const status = e.status || 500;
+      if (e.tooLarge) {
+        // Don't keep a half-read oversized upload open: destroy the request
+        // once the 413 is on the wire. The rest of the upload is discarded
+        // (never buffered) for a short linger first — closing a socket with
+        // unread bytes makes the kernel RST it, and a client still writing its
+        // body would see EPIPE instead of the 413. (No `connection: close`
+        // header for the same reason: Node would close the socket immediately.)
+        res.on("finish", () => {
+          const linger = setTimeout(() => req.destroy(), OVERSIZE_LINGER_MS);
+          req.once("end", () => {
+            clearTimeout(linger);
+            req.destroy();
+          });
+          req.resume();
+        });
+      }
+      return send(res, status, { error: String(e.message || e), route });
+    }
+  });
+}
+
+// --- Graceful shutdown ------------------------------------------------------
+// On SIGTERM/SIGINT: stop accepting connections, let in-flight requests (e.g.
+// a remember() between writing its note file and finishing the index) run to
+// completion for up to MNEMOSYNE_SHUTDOWN_GRACE_MS, then exit 0 with one
+// structured log line saying whether everything drained.
+const SHUTDOWN_GRACE_MS = Number(process.env.MNEMOSYNE_SHUTDOWN_GRACE_MS || 10_000);
+let inFlight = 0;
+let shuttingDown = null;
+
+function trackInFlight(res) {
+  inFlight += 1;
+  let done = false;
+  const release = () => {
+    if (done) return;
+    done = true;
+    inFlight -= 1;
+    if (shuttingDown && inFlight === 0) shuttingDown.finish(false);
+  };
+  res.on("finish", release);
+  res.on("close", release);
+}
+
+function shutdown(server, signal) {
+  if (shuttingDown) return;
+  const t0 = Date.now();
+  const pendingAtSignal = inFlight;
+  let timer;
+  shuttingDown = {
+    finish(timedOut) {
+      clearTimeout(timer);
+      console.log(
+        JSON.stringify({
+          event: "mnemosyne.shutdown",
+          signal,
+          in_flight_at_signal: pendingAtSignal,
+          in_flight_abandoned: inFlight,
+          timed_out: timedOut,
+          grace_ms: SHUTDOWN_GRACE_MS,
+          duration_ms: Date.now() - t0,
+        })
+      );
+      process.exit(0);
+    },
+  };
+  server.close();
+  server.closeIdleConnections();
+  if (inFlight === 0) return shuttingDown.finish(false);
+  timer = setTimeout(() => shuttingDown.finish(true), SHUTDOWN_GRACE_MS);
+}
+
+// Listen only when run as the entry point (node src/server.mjs, bin/mnemosyne,
+// the Tauri sidecar) — importing this module (tests) just gets the factory.
+function isDirectRun() {
+  try {
+    return realpathSync(path.resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
   }
-});
-
-server.listen(PORT, () => {
-  // eslint-disable-next-line no-console
-  console.log(`[mnemosyne] memory god listening on http://127.0.0.1:${PORT}`);
-});
+}
+if (isDirectRun()) {
+  const server = createMnemosyneServer();
+  process.on("SIGTERM", () => shutdown(server, "SIGTERM"));
+  process.on("SIGINT", () => shutdown(server, "SIGINT"));
+  server.listen(PORT, () => {
+    // eslint-disable-next-line no-console
+    console.log(`[mnemosyne] memory god listening on http://127.0.0.1:${PORT}`);
+  });
+}

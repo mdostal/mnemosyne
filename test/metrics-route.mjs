@@ -9,11 +9,12 @@
 // Usage: node test/metrics-route.mjs
 
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHttpMetrics, outcomeFor } from "../src/observability/http-metrics.mjs";
+import { createMnemosyneServer } from "../src/server.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -201,26 +202,65 @@ try {
     "counters are stable across scrapes",
   );
 
-  // A background reindex run lands in mnemosyne_reindex_runs_total once it finishes.
-  const dir = await mkdtemp(path.join(tmpdir(), "mnemosyne-metrics-"));
-  try {
-    await writeFile(path.join(dir, "note.md"), "metrics reindex fixture\n", "utf8");
-    const started = await post("/reindex", JSON.stringify({ scope: "personal", directory: dir }));
-    ok(started.status === 202, `reindex personal -> 202 (got ${started.status})`);
-    const runDeadline = Date.now() + 5000;
-    let runs;
-    while (Date.now() < runDeadline) {
-      const t = await (await fetch(`${BASE}/metrics`)).text();
-      runs = sample(t, 'mnemosyne_reindex_runs_total{scope="personal",outcome="ok"}');
-      if (runs === 1) break;
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    ok(runs === 1, `mnemosyne_reindex_runs_total{scope="personal",outcome="ok"} == 1 after the run finishes (got ${runs})`);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
 } finally {
   child.kill();
+}
+
+// --- background reindex runs, in-process with a stubbed reindex -------------
+// POST /reindex gates on MNEMOSYNE_REINDEX_ROOTS and a Qdrant collection check,
+// so this part uses createMnemosyneServer()'s overrides instead of the spawned
+// service above.
+{
+  const dir = await mkdtemp(path.join(tmpdir(), "mnemosyne-metrics-"));
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const runs = [];
+  const server = createMnemosyneServer({
+    scopeMap: async () => ({ scopes: { personal: "personal_coll", flaky: "flaky_coll" } }),
+    collectionExists: null,
+    reindexRoots: [dir],
+    reindex: async (scope) => {
+      runs.push(scope);
+      await gate;
+      return { files_scanned: 1, files_indexed: 1, errors: scope === "flaky" ? ["x.md: boom"] : [] };
+    },
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const postTo = async (pathname, body) =>
+    (await fetch(base + pathname, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).status;
+  const scrape = async () => (await fetch(`${base}/metrics`)).text();
+  try {
+    ok((await postTo("/reindex", { scope: "personal", directory: dir })) === 202, "reindex personal -> 202");
+    ok((await postTo("/reindex", { scope: "personal", directory: dir })) === 202, "second reindex personal joins the running job -> 202");
+    ok((await postTo("/reindex", { scope: "flaky", directory: dir })) === 202, "reindex flaky -> 202");
+    const running = await scrape();
+    ok(
+      sample(running, 'mnemosyne_requests_total{op="reindex",scope="personal",outcome="ok"}') === 2,
+      "both personal reindex requests are metered",
+    );
+    ok(!running.includes("mnemosyne_reindex_runs_total{"), "no run is counted while it's still running");
+    release();
+    const deadline = Date.now() + 5000;
+    let text = "";
+    while (Date.now() < deadline) {
+      text = await scrape();
+      if (text.includes('mnemosyne_reindex_runs_total{scope="flaky"')) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    ok(runs.length === 2, `the joined request didn't start a second run (runs: ${runs.join(",")})`);
+    ok(
+      sample(text, 'mnemosyne_reindex_runs_total{scope="personal",outcome="ok"}') === 1,
+      'mnemosyne_reindex_runs_total{scope="personal",outcome="ok"} == 1 (counted once, not per request)',
+    );
+    ok(
+      sample(text, 'mnemosyne_reindex_runs_total{scope="flaky",outcome="error"}') === 1,
+      'mnemosyne_reindex_runs_total{scope="flaky",outcome="error"} == 1 (a file failed)',
+    );
+  } finally {
+    server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
 }
 
 if (fails > 0) {
