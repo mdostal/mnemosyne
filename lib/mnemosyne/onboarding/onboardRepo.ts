@@ -32,7 +32,7 @@
  * `create_collection_and_scope()` maps to this repo's own collection
  * (design-discussion.md's "own scope" isolation: scope->collection mapping
  * keyed to this repo's own collection). `POST /reindex` itself is
- * asynchronous (`202 {status:'started',...}` immediately, the real index
+ * asynchronous (`202 {job_id, status:'running',...}` immediately, the real index
  * continues in the background), so `{ ran: true }` here means the reindex
  * was successfully KICKED OFF against a real collection, not that indexing
  * has completed by the time `onboardRepo()` returns -- see
@@ -213,7 +213,7 @@ function mnemosyneServiceUrl(): string {
  * Mnemosyne service. `scope` is `scopeId` -- see this module's own doc
  * comment for why that's the correct per-repo scope key to reuse here.
  *
- * `POST /reindex` itself is asynchronous (`202 {status:'started',...}`
+ * `POST /reindex` itself is asynchronous (`202 {job_id, status:'running',...}`
  * immediately; the real index continues in the background and logs its own
  * outcome -- SERVICE.md) so a `{ ran: true }` result here means the reindex
  * was successfully KICKED OFF against a real collection, not that indexing
