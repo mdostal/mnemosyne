@@ -398,6 +398,17 @@ npm run test:e2e
   shrunk file, scoped to that one file's own path); the Qdrant collections
   (SSOT) are never wiped. There is no delete/wipe/drop-collection endpoint,
   UI action, or CLI verb anywhere in this service — see "Operations" above.
+- **No lost writes.** `remember` note files are named
+  `<timestamp>-<tag>-<random>.md` and created with the `wx` flag, so
+  concurrent same-tag writes never overwrite each other. `POST /lanes`
+  writes are serialized by an in-process lock, so concurrent adds can't
+  drop a lane. A request body over 4 MB gets `413` (not `500`), and the
+  request is destroyed rather than read to the end.
+- **Graceful shutdown.** On `SIGTERM`/`SIGINT` the server stops accepting
+  connections, waits up to `MNEMOSYNE_SHUTDOWN_GRACE_MS` (default `10000`)
+  for in-flight requests to finish, logs one JSON line
+  (`{"event":"mnemosyne.shutdown", ...}` with `in_flight_at_signal`,
+  `in_flight_abandoned`, `timed_out`), then exits 0.
 - No secrets printed. No Don-stack / multica-daemon / auriga touched.
 - Zero third-party deps — runs on the hive's Node with no install step.
 

@@ -426,6 +426,24 @@ async function applyStatusFilter(result, opts) {
 // same "never write with guessed data" contract as this function's existing
 // swarm-memory failure handling, and this story's explicit risk mitigation.
 // Recall-side filtering on `status` is la-05 — not implemented here.
+// Note files are named `<timestamp>-<tag>-<random>.md` and created with the
+// `wx` flag, so two same-tag writes in the same millisecond can never
+// overwrite each other: the random suffix makes a clash vanishingly
+// unlikely, and `wx` turns the rare clash that does happen into an EEXIST we
+// retry with a fresh suffix instead of a silent overwrite.
+async function writeNewNoteFile(base, content) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const file = path.join(NOTES_DIR, `${base}-${randomBytes(4).toString("hex")}.md`);
+    try {
+      await writeFile(file, content, { encoding: "utf8", flag: "wx" });
+      return file;
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+    }
+  }
+  throw new Error(`could not allocate a unique note file name for ${base}`);
+}
+
 export async function remember(text, scope, opts = {}) {
   if (!text || !String(text).trim()) {
     const err = new Error("text is required");
@@ -482,11 +500,10 @@ export async function remember(text, scope, opts = {}) {
   await mkdir(NOTES_DIR, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const tag = (opts.tag || "note").replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 40);
-  const file = path.join(NOTES_DIR, `${stamp}-${tag}.md`);
   const header =
     `<!-- remembered via Mnemosyne @ ${new Date().toISOString()} scope=${useScope} ` +
     `status=${status} branch=${sourceRef.branch} commit=${sourceRef.commit_sha} -->\n`;
-  await writeFile(file, header + String(text) + "\n", "utf8");
+  const file = await writeNewNoteFile(`${stamp}-${tag}`, header + String(text) + "\n");
 
   // Direct-mapped scope -> collection; index appends this one new file. The
   // file above is already on disk and is kept regardless of what happens
@@ -754,6 +771,17 @@ function insertIntoTable(text, tableName, newLine) {
   return lines.join("\n");
 }
 
+// In-process async mutex for config.toml writes: each caller chains onto the
+// previous one's promise, so waiters sleep on the event loop (no busy-wait)
+// and run strictly one at a time in arrival order. A failed write releases
+// the lock just like a successful one.
+let _configLock = Promise.resolve();
+function withConfigLock(fn) {
+  const result = _configLock.then(fn);
+  _configLock = result.catch(() => {});
+  return result;
+}
+
 export async function addLane(name, collection, ladder) {
   if (!name || !SCOPE_NAME_RE.test(String(name))) {
     const err = new Error(
@@ -779,6 +807,13 @@ export async function addLane(name, collection, ladder) {
     ladderArr = ladder.map(String);
   }
 
+  // Serialized: the read / duplicate-check / rename below is a
+  // read-modify-write of one shared file, so two concurrent adds must not
+  // interleave or the second rename silently drops the first lane.
+  return withConfigLock(() => writeLane(name, collection, ladderArr));
+}
+
+async function writeLane(name, collection, ladderArr) {
   const configPath = defaultConfigPath();
   const original = await readFile(configPath, "utf8");
 
