@@ -26,7 +26,7 @@ Every memory op runs over the live Qdrant corpus; nothing is stubbed or mocked.
 | `GET /scopes`   | —                                                           | scopes → collections + escalation ladders |
 | `GET /config`   | —                                                           | read-only effective config: `qdrant_url`, `embedder` (provider/model), `default_scope`, `fallback_collection`, `scopes`, `ladder` — thin wrapper over `engine.mjs`'s cached `scopeMap()` |
 | `POST /recall`  | `{query, scope?, hits?, escalate?, min_score?, radius?}`    | ranked hits **with full provenance** (layer/collection, file, chunk span, embedder, retrieved_at) |
-| `POST /remember`| `{text, scope?, tag?}`                                       | write-back: persists a note + indexes (upsert, `--no-prune`) it into the scope's collection so it is immediately recallable |
+| `POST /remember`| `{text, scope?, tag?, cwd?, status?, source_ref?}`           | write-back: persists a note + indexes (upsert, `--no-prune`) it into the scope's collection so it is immediately recallable. Flight provenance is auto-detected from `cwd`'s git state unless `status` + `source_ref` are passed — see "Remember provenance" below |
 | `POST /lanes`   | `{name, collection, ladder?}`                                | **add-only** atomic write of a new `[scopes]`/`[ladder]` entry to `~/.config/swarm-memory/config.toml` — see "Lanes / add-lane" below |
 | `GET /search`   | query params: `q`, `scope?`, `mode?` (`recall`\|`grep`, default `recall`), `hits?`, `escalate?`, `min_score?`, `radius?` | thin dispatcher for the `/ui` Search panel — routes straight to `recall()`/`grep()` (no new query logic); invalid `mode` → `400` |
 | `GET /note`     | query params: `source` (bare note file name or `mnemosyne://note/<source>`), `chunk?`, `lines?` (`a-b`); alias `GET /notes/:source` | stored note text + provenance (flight-status header) for a recall hit's `ref`; path segments / `..` → `400`, unknown note → `404` |
@@ -108,6 +108,40 @@ not collapse these into one endpoint — they serve different operator intents
 `recall` returns the engine's native `--json` shape (`total_hits`, `scopes[].hits[]`
 with `provenance`). `scope` defaults to the engine default (`top`) for recall and
 to `personal` for remember.
+
+### Remember provenance (`status` + `source_ref`)
+
+Every `remember` write stamps the note header with a flight `status`
+(`provisional` \| `confirmed` \| `superseded`) and a `source_ref`
+(`{branch, commit_sha, pr_url}`). By default both are auto-detected from the
+git state of the body's `cwd` (or the service's own cwd): the default branch
+gives `confirmed`, any other branch `provisional`. When that cwd has no usable
+git state (no repo, detached HEAD) the write is refused with `422`.
+
+A caller with no checkout to point at (a client-level note, or one written
+before the repo is cloned) passes the provenance itself (PANT-977):
+
+```bash
+curl -s -X POST http://mnemosyne:8477/remember -H 'content-type: application/json' -d '{
+  "text": "firefly-events prefers X across its repos",
+  "scope": "firefly-events",
+  "status": "confirmed",
+  "source_ref": {"branch": "main", "commit_sha": "55b2b0e", "pr_url": "https://github.com/org/repo/pull/1"}
+}'
+```
+
+- `status` and `source_ref` go together: pass both, or neither to auto-detect.
+  One without the other is a `400`. `sourceRef` is accepted as an alias.
+- `status` must be `provisional`, `confirmed` or `superseded`.
+- `source_ref.branch` is required: a non-empty string with no whitespace.
+- `source_ref.commit_sha` is optional; when present it must be a 7-64
+  character hex sha. Without it the header records `commit=none`, `GET /note`
+  reports `commit_sha: null`, and the promote/supersede triggers (which match
+  on branch + commit) leave the note alone.
+- `source_ref.pr_url` is optional (string).
+- Any bad value is a `400`; nothing is written.
+
+The MCP `remember` tool takes the same two optional fields.
 
 **kw-01-js-server-parallel-keyword:** `recall()` runs the vector layer and the
 keyword layer (`grep()`, exact-match) in parallel on every call (not as a

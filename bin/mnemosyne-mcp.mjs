@@ -187,6 +187,18 @@ export function createServer({ port = DEFAULT_PORT } = {}) {
         text: z.string().describe("The content to remember"),
         scope: z.string().optional().describe("Scope to write into (defaults to 'personal')"),
         tag: z.string().optional().describe("A short tag for the note filename"),
+        status: z
+          .enum(["provisional", "confirmed", "superseded"])
+          .optional()
+          .describe("Explicit flight status. Pass with source_ref, or omit both to auto-detect from the server's git cwd"),
+        source_ref: z
+          .object({
+            branch: z.string(),
+            commit_sha: z.string().optional(),
+            pr_url: z.string().optional(),
+          })
+          .optional()
+          .describe("Explicit provenance {branch, commit_sha?, pr_url?}. Pass with status"),
       },
     },
     wrapAction(port, rememberAction),

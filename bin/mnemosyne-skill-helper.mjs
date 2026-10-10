@@ -212,8 +212,9 @@ export const recallAction = (port, { query, scope, hits, escalate, min_score, ra
   apiFetch(port, "POST", "/recall", { query, scope, hits, escalate, min_score, radius });
 
 // rememberAction — thin pass-through to POST /remember.
-export const rememberAction = (port, { text, scope, tag } = {}) =>
-  apiFetch(port, "POST", "/remember", { text, scope, tag });
+// status + source_ref are optional explicit provenance (PANT-977).
+export const rememberAction = (port, { text, scope, tag, status, source_ref } = {}) =>
+  apiFetch(port, "POST", "/remember", { text, scope, tag, status, source_ref });
 
 // grepAction — thin pass-through to POST /grep.
 export const grepAction = (port, { query, scope, hits, escalate, radius } = {}) =>

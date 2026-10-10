@@ -41,7 +41,8 @@ const HEADER_RE = /status=(provisional|confirmed|superseded)\s+branch=(\S+)\s+co
 export function parseFlightHeaderLine(line) {
   const match = HEADER_RE.exec(line || "");
   if (!match) return null;
-  return { status: match[1], branch: match[2], commit_sha: match[3] };
+  // `commit=none`: an explicit source_ref with no commit (PANT-977).
+  return { status: match[1], branch: match[2], commit_sha: match[3] === "none" ? null : match[3] };
 }
 
 // Reads the flight-status header from a note file on disk, or null if the
