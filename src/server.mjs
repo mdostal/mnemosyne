@@ -20,9 +20,11 @@
 //                   `superseded` entries, but always includes the caller's
 //                   own-branch provisional writes); cross_branch_provisional
 //                   is the explicit opt-in to see cross-branch entries too.
-//   POST /remember {text, scope?, tag?, cwd?} -> cwd (la-04) resolves the
-//                   git context (branch/commit) a write's flight status is
-//                   auto-detected from; defaults to this process's own cwd.
+//   POST /remember {text, scope?, tag?, cwd?, status?, source_ref?} -> cwd
+//                   (la-04) resolves the git context (branch/commit) a write's
+//                   flight status is auto-detected from; defaults to this
+//                   process's own cwd. status + source_ref (PANT-977) skip
+//                   auto-detection for callers with no git checkout.
 //   POST /lanes   {name, collection, ladder?} -> add-only config.toml write
 //   GET  /note    ?source=<note>&chunk=&lines=a-b  (alias: GET /notes/:source)
 //                    -> PANT-838: the stored note text + provenance for a
@@ -348,7 +350,7 @@ export function createMnemosyneServer(overrides = {}) {
             "GET /scopes": "configured scopes + escalation ladders",
             "GET /config": "read-only effective config (qdrant_url, embedder, default_scope, fallback_collection)",
             "POST /recall": "{query, scope?, hits?, escalate?, min_score?, radius?} -> ranked hits w/ provenance",
-            "POST /remember": "{text, scope?, tag?} -> write-back (index into scope collection)",
+            "POST /remember": "{text, scope?, tag?, cwd?, status?, source_ref?} -> write-back (index into scope collection)",
             "POST /grep": "{query, scope?, hits?, escalate?, radius?} -> KEYWORD hits (exact-string, no embedder)",
             "POST /lanes": "{name, collection, ladder?} -> add-only atomic write of a new scope to config.toml",
             "GET /note": "?source=<note>&chunk=&lines=a-b -> stored note text + provenance for a mnemosyne://note/<source> ref (alias GET /notes/:source)",
@@ -508,7 +510,14 @@ export function createMnemosyneServer(overrides = {}) {
           return send(res, 200, { ...result, took_ms: Date.now() - t0 });
         }
         meter.scopeMissing = await isScopeMissing(b.scope);
-        const result = await remember(b.text, b.scope, { tag: b.tag, cwd: b.cwd });
+        // PANT-977: explicit provenance for callers with no git cwd. Both or
+        // neither; remember() validates them and answers 400 on a bad value.
+        const result = await remember(b.text, b.scope, {
+          tag: b.tag,
+          cwd: b.cwd,
+          status: b.status,
+          sourceRef: b.source_ref ?? b.sourceRef,
+        });
         return send(res, 200, { ...result, took_ms: Date.now() - t0 });
       }
 
