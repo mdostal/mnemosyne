@@ -50,7 +50,7 @@ export function createScopeHealthCheck({ scopeMap, listCollections, maxAgeMs = 5
     }
   }
 
-  return async function check() {
+  async function check() {
     const isStale = !cache || Date.now() - cache.at > maxAgeMs;
     if (isStale && !inFlight) {
       inFlight = refresh()
@@ -66,7 +66,14 @@ export function createScopeHealthCheck({ scopeMap, listCollections, maxAgeMs = 5
       return { ...cache.result, scopes_checked_at: new Date(cache.at).toISOString(), scopes_checking: isStale };
     }
     return { scopes: null, missing_scopes: null, scopes_checking: true };
+  }
+  // Marks the cached result stale so the next check() refreshes it (POST
+  // /collections calls this after creating a collection). The stale result
+  // is still served until the refresh lands, so health never blocks.
+  check.invalidate = () => {
+    if (cache) cache = { ...cache, at: 0 };
   };
+  return check;
 }
 
 /**

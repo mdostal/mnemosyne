@@ -26,6 +26,11 @@
 //                   process's own cwd. status + source_ref (PANT-977) skip
 //                   auto-detection for callers with no git checkout.
 //   POST /lanes   {name, collection, ladder?} -> add-only config.toml write
+//   POST /collections {scope} -> PANT-983: creates a registered scope's Qdrant
+//                     collection (additive-only, idempotent). Off unless
+//                     MNEMOSYNE_ADMIN_TOKEN is set (403); then it needs
+//                     `Authorization: Bearer <token>` (401). See
+//                     createCollectionRoute() below.
 //   GET  /note    ?source=<note>&chunk=&lines=a-b  (alias: GET /notes/:source)
 //                    -> PANT-838: the stored note text + provenance for a
 //                       `mnemosyne://note/<source>` recall ref. source is a
@@ -82,6 +87,7 @@
 // PORT env (default 8477).
 
 import http from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { readFileSync, realpathSync } from "node:fs";
@@ -110,7 +116,7 @@ import {
   graphifyDepsAction,
 } from "../bin/graphify-bridge.mjs";
 import { readNote } from "./refs.mjs";
-import { collectionExists, listCollections } from "./collection-exists.mjs";
+import { collectionExists, createCollectionAndScope, listCollections } from "./collection-exists.mjs";
 import { createScopeHealthCheck, healthStatus } from "./scope-health.mjs";
 import {
   createReindexJobs,
@@ -243,6 +249,19 @@ function safeDecode(s) {
   }
 }
 
+// POST /collections' gate. Reindex never creates collections, and creating
+// Qdrant infra from an unauthenticated route stays out of scope, so this
+// route is off by default and only answers a caller holding the operator's
+// MNEMOSYNE_ADMIN_TOKEN.
+function adminTokenMatches(req, token) {
+  const header = String(req.headers.authorization || "");
+  const m = /^Bearer\s+(.+)$/i.exec(header);
+  if (!m) return false;
+  const given = Buffer.from(m[1].trim());
+  const want = Buffer.from(token);
+  return given.length === want.length && timingSafeEqual(given, want);
+}
+
 /**
  * Builds the HTTP server without listening. `overrides` replaces the reindex
  * wiring (tests inject a stubbed reindex() and their own roots/repo map);
@@ -252,6 +271,9 @@ export function createMnemosyneServer(overrides = {}) {
   const reindexRoots = overrides.reindexRoots || parseReindexRoots(process.env.MNEMOSYNE_REINDEX_ROOTS);
   const repoScopes = overrides.repoScopes || parseRepoScopes(process.env.MNEMOSYNE_REPO_SCOPES);
   const resolveScopes = overrides.scopeMap || scopeMap;
+  const adminToken = overrides.adminToken !== undefined ? overrides.adminToken : process.env.MNEMOSYNE_ADMIN_TOKEN || "";
+  const createCollection = overrides.createCollectionAndScope || createCollectionAndScope;
+  const resetScopes = overrides.resetScopeMapCache || resetScopeMapCache;
   const engineHealth = overrides.health || health;
   const checkScopes = createScopeHealthCheck({
     scopeMap: resolveScopes,
@@ -353,6 +375,7 @@ export function createMnemosyneServer(overrides = {}) {
             "POST /remember": "{text, scope?, tag?, cwd?, status?, source_ref?} -> write-back (index into scope collection)",
             "POST /grep": "{query, scope?, hits?, escalate?, radius?} -> KEYWORD hits (exact-string, no embedder)",
             "POST /lanes": "{name, collection, ladder?} -> add-only atomic write of a new scope to config.toml",
+            "POST /collections": "{scope} -> create a registered scope's Qdrant collection (additive, idempotent); needs MNEMOSYNE_ADMIN_TOKEN as a Bearer token",
             "GET /note": "?source=<note>&chunk=&lines=a-b -> stored note text + provenance for a mnemosyne://note/<source> ref (alias GET /notes/:source)",
             "GET /search": "?q=&scope=&mode=recall|grep&hits=&escalate=&min_score=&radius= -> dispatches to recall()/grep()",
             "GET /graph/stats": "graph size + origin breakdown (swarm-memory graph stats)",
@@ -525,6 +548,66 @@ export function createMnemosyneServer(overrides = {}) {
         const b = await readJson(req);
         const result = await addLane(b.name, b.collection, b.ladder);
         return send(res, 200, { ...result, took_ms: Date.now() - t0 });
+      }
+
+      // PANT-983: the HTTP twin of `mnemosyne onboard --create` for a scope
+      // POST /lanes already registered, so a new client repo can be indexed
+      // without a shell in this container. Only creates the collection the
+      // scope map already names (never picks a name of its own), and the
+      // Python primitive it calls has no delete/drop path.
+      if (route === "POST /collections") {
+        if (!adminToken) {
+          return send(res, 403, {
+            error: "collection creation over HTTP is disabled; set MNEMOSYNE_ADMIN_TOKEN to enable it",
+            route,
+          });
+        }
+        if (!adminTokenMatches(req, adminToken)) {
+          return send(res, 401, { error: "missing or wrong admin token (Authorization: Bearer <MNEMOSYNE_ADMIN_TOKEN>)", route });
+        }
+        const b = await readJson(req);
+        const scope = b.scope == null ? "" : String(b.scope).trim();
+        if (!scope) {
+          const err = new Error("scope is required");
+          err.status = 400;
+          throw err;
+        }
+        const m = await resolveScopes();
+        const collection = m.scopes[scope];
+        if (!collection) {
+          const err = new Error(`unknown scope '${scope}'; register it first with POST /lanes`);
+          err.status = 400;
+          throw err;
+        }
+        if (b.collection != null && String(b.collection) !== collection) {
+          return send(res, 409, {
+            error: `scope '${scope}' maps to collection '${collection}', not '${b.collection}'`,
+            scope,
+            collection,
+            route,
+          });
+        }
+        const result = await createCollection(collection, scope);
+        if (!result.ok) {
+          return send(res, 502, {
+            error: result.detail,
+            scope,
+            collection,
+            collection_created: result.collection_created,
+            scope_mapped: result.scope_mapped,
+            route,
+          });
+        }
+        if (result.scope_mapped) resetScopes();
+        checkScopes.invalidate();
+        return send(res, result.collection_created ? 201 : 200, {
+          scope,
+          collection,
+          collection_created: result.collection_created,
+          scope_mapped: result.scope_mapped,
+          detail: result.detail,
+          took_ms: Date.now() - t0,
+        });
       }
 
       // --- Operations (s-05): Reindex + Refresh config cache ------------------

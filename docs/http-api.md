@@ -141,10 +141,39 @@ A reindex job **never creates a Qdrant collection**. Before it scans
 anything, the job runs the same read-only existence check as `mnemosyne
 onboard` (`src/collection-exists.mjs`). If the scope's collection doesn't
 exist, the job ends as `failed` with an error that names the collection and
-the command that creates it (`mnemosyne onboard <path> --collection <name>
---create`). Creating infrastructure stays an explicit operator step, never a
-side effect of an event. If the check itself can't run (for example, missing
+how to create it: `POST /collections {"scope": "<scope>"}` (below), or
+`mnemosyne onboard <path> --collection <name> --create` from a shell.
+Creating infrastructure stays an explicit operator step, never a side effect
+of an event. If the check itself can't run (for example, missing
 Qdrant credentials), the job also fails with that error.
+
+### `POST /collections`
+
+Creates the Qdrant collection a scope is registered with, so a scope added
+by `POST /lanes` can be reindexed without a shell in the container. It runs
+the same additive-only `create_collection_and_scope()` as `onboard --create`
+and is idempotent: an existing collection answers `200` with
+`collection_created: false`.
+
+The route is **off unless `MNEMOSYNE_ADMIN_TOKEN` is set**, and then needs
+that token as a bearer token:
+
+```bash
+curl -sX POST localhost:8477/collections \
+  -H "authorization: Bearer $MNEMOSYNE_ADMIN_TOKEN" \
+  -d '{"scope": "firefly-events--flayr"}'
+# 201 {"scope":"firefly-events--flayr","collection":"client_firefly_events_flayr","collection_created":true,...}
+```
+
+It only creates the collection the scope map already names; an optional
+`collection` in the body must match it. `403`: the route is off. `401`: no
+token or the wrong one. `400`: no `scope`, or a scope that isn't registered
+(`POST /lanes` first). `409`: `collection` doesn't match the scope's. `502`:
+creation failed, with the primitive's `detail` saying which half did.
+
+| env | meaning |
+|-----|---------|
+| `MNEMOSYNE_ADMIN_TOKEN` | Enables `POST /collections` and is the bearer token it requires. Unset: the route answers `403`. |
 
 ### `GET /health` scope coverage
 
