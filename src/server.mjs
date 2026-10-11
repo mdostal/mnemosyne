@@ -25,6 +25,10 @@
 //                   flight status is auto-detected from; defaults to this
 //                   process's own cwd. status + source_ref (PANT-977) skip
 //                   auto-detection for callers with no git checkout.
+//   POST /ingest  {scope, docs:[{path, text, metadata?}], status?, source_ref?}
+//                   -> PANT-1046: chunked .md/.txt ingest into any scope-map
+//                   scope (client or repo), deduped by content hash, each
+//                   chunk written through remember(). See src/ingest.mjs.
 //   POST /lanes   {name, collection, ladder?} -> add-only config.toml write
 //   POST /collections {scope} -> PANT-983: creates a registered scope's Qdrant
 //                     collection (additive-only, idempotent). Off unless
@@ -126,6 +130,7 @@ import {
   resolveAllowedDirectory,
 } from "./reindex-jobs.mjs";
 import { createHttpMetrics } from "./observability/http-metrics.mjs";
+import { createIngest } from "./ingest.mjs";
 
 const PORT = Number(process.env.PORT || 8477);
 
@@ -288,6 +293,11 @@ export function createMnemosyneServer(overrides = {}) {
   // Pull-based, in-process only: counters reset on restart and nothing is
   // pushed anywhere.
   const httpMetrics = overrides.httpMetrics || createHttpMetrics();
+  const ingest = createIngest({
+    scopeMap: resolveScopes,
+    remember: overrides.remember || remember,
+    grep: overrides.grep || grep,
+  });
 
   // true/false when the configured scope map could be read, undefined when it
   // couldn't (the metric is then left untouched rather than guessed). Never
@@ -374,6 +384,7 @@ export function createMnemosyneServer(overrides = {}) {
             "POST /recall": "{query, scope?, hits?, escalate?, min_score?, radius?} -> ranked hits w/ provenance",
             "POST /remember": "{text, scope?, tag?, cwd?, status?, source_ref?} -> write-back (index into scope collection)",
             "POST /grep": "{query, scope?, hits?, escalate?, radius?} -> KEYWORD hits (exact-string, no embedder)",
+            "POST /ingest": "{scope, docs:[{path, text, metadata?}], status?, source_ref?} -> chunked .md/.txt ingest into a client or repo scope, deduped by content hash",
             "POST /lanes": "{name, collection, ladder?} -> add-only atomic write of a new scope to config.toml",
             "POST /collections": "{scope} -> create a registered scope's Qdrant collection (additive, idempotent); needs MNEMOSYNE_ADMIN_TOKEN as a Bearer token",
             "GET /note": "?source=<note>&chunk=&lines=a-b -> stored note text + provenance for a mnemosyne://note/<source> ref (alias GET /notes/:source)",
@@ -541,6 +552,12 @@ export function createMnemosyneServer(overrides = {}) {
           status: b.status,
           sourceRef: b.source_ref ?? b.sourceRef,
         });
+        return send(res, 200, { ...result, took_ms: Date.now() - t0 });
+      }
+
+      if (route === "POST /ingest") {
+        const b = await readJson(req);
+        const result = await ingest(b);
         return send(res, 200, { ...result, took_ms: Date.now() - t0 });
       }
 
