@@ -27,6 +27,7 @@ Every memory op runs over the live Qdrant corpus; nothing is stubbed or mocked.
 | `GET /config`   | —                                                           | read-only effective config: `qdrant_url`, `embedder` (provider/model), `default_scope`, `fallback_collection`, `scopes`, `ladder` — thin wrapper over `engine.mjs`'s cached `scopeMap()` |
 | `POST /recall`  | `{query, scope?, hits?, escalate?, min_score?, radius?}`    | ranked hits **with full provenance** (layer/collection, file, chunk span, embedder, retrieved_at) |
 | `POST /remember`| `{text, scope?, tag?, cwd?, status?, source_ref?}`           | write-back: persists a note + indexes (upsert, `--no-prune`) it into the scope's collection so it is immediately recallable. Flight provenance is auto-detected from `cwd`'s git state unless `status` + `source_ref` are passed — see "Remember provenance" below |
+| `POST /ingest`  | `{scope, docs: [{path, text, metadata?}], status?, source_ref?}` | chunked `.md`/`.txt` ingest into any scope-map scope, client or repo (e.g. `firefly-events--flayr`). Each chunk is written through `remember()`, deduped per scope by content hash, and carries its source path + metadata. `200` with per-doc/per-chunk status; `400` for an unknown scope or a malformed request — see "Document ingest" below |
 | `POST /lanes`   | `{name, collection, ladder?}`                                | **add-only** atomic write of a new `[scopes]`/`[ladder]` entry to `~/.config/swarm-memory/config.toml` — see "Lanes / add-lane" below |
 | `POST /collections` | `{scope, collection?}`, `Authorization: Bearer <MNEMOSYNE_ADMIN_TOKEN>` | creates a registered scope's Qdrant collection (additive-only, idempotent: `201` created, `200` already there). Off (`403`) unless `MNEMOSYNE_ADMIN_TOKEN` is set; wrong/missing token `401`. See `docs/http-api.md` |
 | `GET /search`   | query params: `q`, `scope?`, `mode?` (`recall`\|`grep`, default `recall`), `hits?`, `escalate?`, `min_score?`, `radius?` | thin dispatcher for the `/ui` Search panel — routes straight to `recall()`/`grep()` (no new query logic); invalid `mode` → `400` |
@@ -181,6 +182,40 @@ including repos passed to `mnemosyne onboard`. A job never creates a missing
 collection; it fails and names `POST /collections` (token-gated) and the
 `mnemosyne onboard --create` command instead. Jobs, dedup, the `POST /events/repo-merged` trigger and its
 `MNEMOSYNE_REPO_SCOPES` map are documented in `docs/http-api.md`.
+
+### Document ingest
+
+`POST /ingest` (`src/ingest.mjs`) loads documents into a scope from the
+running service itself; no second process (the older `:3141`
+`mnemosyne-client-api` route isn't in the container).
+
+```bash
+curl -sX POST localhost:8477/ingest -H 'content-type: application/json' -d '{
+  "scope": "firefly-events--flayr",
+  "docs": [{"path": "docs/ARCH.md", "text": "...", "metadata": {"repo": "firefly-events/flayr"}}]
+}'
+```
+
+- **Formats and limits:** `.md`/`.txt` paths only, at most 50 docs per
+  request, 200,000 bytes of text per doc, 2,000 bytes of `metadata` JSON.
+  A doc that breaks a limit is `rejected` with a reason; the rest still land.
+- **Chunking:** 4,000-byte UTF-8-safe chunks (same rules as
+  `lib/mnemosyne/ingest/ingestDocument.ts`), written one at a time.
+- **Provenance:** each chunk's note starts with
+  `[ingested document] source: <path> (chunk i/n)`, a
+  `<!-- mnemosyne-ingest {...} -->` line (path, chunk index/count, doc hash,
+  caller metadata) and an `ingest-sha256:<hash>` marker. `status` /
+  `source_ref` default to `confirmed` / `{branch: "ingest"}`; pass them to
+  override (same rules as `POST /remember`).
+- **Dedupe:** per scope, by the chunk's sha256. A chunk is skipped as
+  `duplicate` when this process already wrote it, or when a keyword grep of
+  the scope finds its marker, so a restart doesn't re-ingest. If that grep
+  fails, the chunk is written anyway and the response carries a `warnings`
+  entry.
+- **Response:** `{ok, scope, collection, totals, docs: [{path, doc_sha256,
+  status, chunk_count, chunks: [{index, sha256, status, file?, error?}]}],
+  warnings}`. Doc status is `ingested`, `duplicate`, `partial`, `failed` or
+  `rejected`; `ok` is false if any chunk failed or any doc was rejected.
 
 ## Run
 
