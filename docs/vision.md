@@ -29,6 +29,25 @@ real service wraps the layer stack end to end:
   (held in-process, not served over HTTP). The deployed `:8477` service has its
   own `GET /metrics` (Prometheus) with request counters by scope and outcome.
   See [`docs/observability.md`](./observability.md).
+- **Event-driven reindexing** (PANT-837) — `POST /reindex` starts an
+  observable, per-scope-deduped job (`GET /reindex/:job_id` reports
+  `running`/`succeeded`/`failed`), and `POST /events/repo-merged {repo, ref}`
+  maps a merged repo to its scope via `MNEMOSYNE_REPO_SCOPES` and starts (or
+  joins) that scope's job. Pantheon core-api reindexes a pulled client repo
+  through `POST /reindex` each time its tracked branch moves. A job never
+  creates a Qdrant collection; a missing one fails the job and names the fix.
+- **Per-client scopes** (pantheon-v2 PANT-966) — Pantheon registers a
+  `<tenant>` scope and a `<tenant>--<repo>` scope per client repo (collections
+  `client_<tenant>[_<repo>]`) through `POST /lanes`, so client work recalls
+  only that client's memory. Pantheon reaches these scopes only through its
+  core-api facade, never directly from an agent.
+- **HTTP collection create** (PANT-983, closes mnemosyne#63) —
+  `POST /collections {scope}` creates a registered scope's collection with the
+  same additive-only, idempotent primitive as `mnemosyne onboard --create`.
+  It is off (`403`) unless `MNEMOSYNE_ADMIN_TOKEN` is set, then needs that
+  token as a Bearer token. Pantheon calls it after `POST /lanes` when it has
+  the token, so a new client repo no longer needs a shell in the container.
+  See [`docs/http-api.md`](./http-api.md).
 - **Loud-failure + provenance contracts enforced** — a degraded/unavailable
   layer is flagged explicitly, never silently skipped; every hit carries the
   full 7-field provenance record.
@@ -43,8 +62,12 @@ for the current component/flow diagrams):
 - The **meta layer** (Obsidian vault) and **enterprise** layer routing are
   contracted but not yet wired end-to-end — recall/remember today primarily
   exercise the code-graph/vector/file layers.
-- **Continuous indexing** as a Multica-native scheduled job (indexing today
-  runs via explicit `reindex` calls, not an always-on schedule).
+- **Continuous indexing beyond the vector layer.** Repo merges and client
+  branch moves now trigger reindex jobs (above), but those jobs only refresh a
+  scope's vector collection from its checkout. The code-graph and the Obsidian
+  vault are not refreshed on any trigger yet, and a repo that isn't in
+  `MNEMOSYNE_REPO_SCOPES` or Pantheon's tenant registry still needs an
+  explicit `reindex` call.
 - **Consus/Janus read model** — browsing layers and tracing provenance in the
   UI is not built yet.
 - **Argus/Metis decision + metric ingestion** — observability emits the
@@ -64,9 +87,10 @@ hive's **Obsidian** knowledge vault as the intended meta layer.
    escalation path as the top (meta) layer, and stand up the enterprise
    scope so cross-project standards/CBAs are recallable, not just
    project-local memory.
-2. **Continuous indexing.** Move indexing off explicit `reindex` calls onto a
-   Multica-native schedule (event- or interval-driven, no localized cron) so
-   vector + code-graph + vault indexes stay fresh automatically.
+2. **Continuous indexing, every layer.** Vector reindexing is already
+   event-driven (repo-merged / branch-move triggers, PANT-837). Extend the
+   same triggers (no localized cron, no new polling loops) so the code-graph
+   and vault indexes stay fresh too.
 3. **Argus/Metis integration.** Route every `recall`/`remember` decision +
    metric record to Argus/Metis, matching the pattern every other Pantheon
    god follows.
@@ -126,8 +150,8 @@ in the swarm.
   behind the existing layer-adapter interface (see `lib/mnemosyne/layers/`).
 - **Enterprise-scope routing** — extend scope resolution so `enterprise`
   queries reach the right cross-project collection.
-- **Continuous indexing** — replace explicit `reindex` invocation with a
-  Multica-native scheduled trigger.
+- **Continuous indexing for code-graph + vault** — hook the code-graph and
+  vault refresh onto the existing reindex-job triggers (`src/reindex-jobs.mjs`).
 - **Argus/Metis emitter** — forward the existing observability events/metrics
   to Argus/Metis instead of (only) local structured logs.
 - **Backend adapter interface** — sketch a second vector-backend driver
