@@ -28,6 +28,7 @@ Every memory op runs over the live Qdrant corpus; nothing is stubbed or mocked.
 | `POST /recall`  | `{query, scope?, hits?, escalate?, min_score?, radius?}`    | ranked hits **with full provenance** (layer/collection, file, chunk span, embedder, retrieved_at) |
 | `POST /remember`| `{text, scope?, tag?, cwd?, status?, source_ref?}`           | write-back: persists a note + indexes (upsert, `--no-prune`) it into the scope's collection so it is immediately recallable. Flight provenance is auto-detected from `cwd`'s git state unless `status` + `source_ref` are passed — see "Remember provenance" below |
 | `POST /lanes`   | `{name, collection, ladder?}`                                | **add-only** atomic write of a new `[scopes]`/`[ladder]` entry to `~/.config/swarm-memory/config.toml` — see "Lanes / add-lane" below |
+| `POST /collections` | `{scope, collection?}`, `Authorization: Bearer <MNEMOSYNE_ADMIN_TOKEN>` | creates a registered scope's Qdrant collection (additive-only, idempotent: `201` created, `200` already there). Off (`403`) unless `MNEMOSYNE_ADMIN_TOKEN` is set; wrong/missing token `401`. See `docs/http-api.md` |
 | `GET /search`   | query params: `q`, `scope?`, `mode?` (`recall`\|`grep`, default `recall`), `hits?`, `escalate?`, `min_score?`, `radius?` | thin dispatcher for the `/ui` Search panel — routes straight to `recall()`/`grep()` (no new query logic); invalid `mode` → `400` |
 | `GET /note`     | query params: `source` (bare note file name or `mnemosyne://note/<source>`), `chunk?`, `lines?` (`a-b`); alias `GET /notes/:source` | stored note text + provenance (flight-status header) for a recall hit's `ref`; path segments / `..` → `400`, unknown note → `404` |
 | `GET /graph/stats` | —                                                        | graph size + origin breakdown (`swarm-memory graph stats`): `{nodes, edges, edges_by_origin, db}` |
@@ -177,8 +178,8 @@ curl -s localhost:8477/reindex/<job_id>     # running | succeeded | failed
 `directory` must sit under `MNEMOSYNE_REINDEX_ROOTS` (`:`-separated; unset
 means only the service's cwd), so set it to cover every checkout you reindex,
 including repos passed to `mnemosyne onboard`. A job never creates a missing
-collection; it fails and names the `mnemosyne onboard --create` command
-instead. Jobs, dedup, the `POST /events/repo-merged` trigger and its
+collection; it fails and names `POST /collections` (token-gated) and the
+`mnemosyne onboard --create` command instead. Jobs, dedup, the `POST /events/repo-merged` trigger and its
 `MNEMOSYNE_REPO_SCOPES` map are documented in `docs/http-api.md`.
 
 ## Run
@@ -506,7 +507,9 @@ npm run test:e2e
   **additive** (`--no-prune`, upsert of a brand-new note file only); `reindex`
   (`POST /index`) uses the CLI's own default pruning (stale tail chunks of a
   shrunk file, scoped to that one file's own path); the Qdrant collections
-  (SSOT) are never wiped. There is no delete/wipe/drop-collection endpoint,
+  (SSOT) are never wiped. `POST /collections` only ever *creates* a
+  registered scope's collection, and only with `MNEMOSYNE_ADMIN_TOKEN`.
+  There is no delete/wipe/drop-collection endpoint,
   UI action, or CLI verb anywhere in this service — see "Operations" above.
 - **No lost writes.** `remember` note files are named
   `<timestamp>-<tag>-<random>.md` and created with the `wx` flag, so

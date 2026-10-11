@@ -17,8 +17,9 @@
 // Missing collection policy: a job NEVER creates a Qdrant collection. Before
 // indexing it runs the read-only collectionExists() check and, if the scope's
 // collection isn't there, the job fails with an error naming the collection
-// and how to create it (`mnemosyne onboard ... --create`). Creating infra
-// from an unauthenticated event route is deliberately out of scope.
+// and how to create it (`mnemosyne onboard ... --create`, or the token-gated
+// POST /collections). Creating infra from an unauthenticated event route is
+// deliberately out of scope.
 import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import path from "node:path";
@@ -148,7 +149,8 @@ export function createReindexJobs({
         throw new Error(
           `collection '${job.collection}' for scope '${job.scope}' does not exist in Qdrant; ` +
             `reindex never creates collections -- create it first ` +
-            `(mnemosyne onboard <path> --collection ${job.collection} --create)`
+            `(POST /collections {"scope":"${job.scope}"} with the admin token, or ` +
+            `mnemosyne onboard <path> --collection ${job.collection} --create)`
         );
       }
       const result = await reindex(job.scope, { directory: job.directory });
