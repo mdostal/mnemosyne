@@ -14,10 +14,17 @@
 // and child env once at module load, so each scenario re-imports engine.mjs
 // fresh (via a cache-busting query string) after setting env vars for that
 // scenario.
+//
+// Hermetic git state (PANT-831): remember() auto-detects flight status from
+// the git state of opts.cwd, so every write here runs against a scratch git
+// repo on a named branch (repoDir) rather than whatever checkout the suite
+// happens to run in (CI checks out a detached HEAD). The detached-HEAD
+// guard itself is covered by its own scenario against a detached scratch repo.
 import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { makeScratchGitRepo } from "./fixtures/scratch-git-repo.mjs";
 
 const FIXTURE = fileURLToPath(new URL("./fixtures/fake-swarm-memory", import.meta.url));
 
@@ -39,6 +46,14 @@ async function loadEngine(mode, notesDir) {
 }
 
 const notesDir = await mkdtemp(path.join(tmpdir(), "mnemosyne-write-through-"));
+
+// Named branch: auto-detection resolves cleanly regardless of the checkout.
+const { dir: repoDir, cleanup: cleanupRepo } = makeScratchGitRepo({ prefix: "mnemosyne-write-through-repo-" });
+// Detached HEAD: auto-detection must refuse the write (422).
+const { dir: detachedRepoDir, cleanup: cleanupDetachedRepo } = makeScratchGitRepo({
+  prefix: "mnemosyne-write-through-detached-",
+  detached: true,
+});
 
 async function fileExists(p) {
   try {
@@ -68,7 +83,7 @@ async function withCapturedStderr(fn) {
   let file = null;
   const stderrLines = await withCapturedStderr(async () => {
     try {
-      await remember("hard-fail scenario note", "personal", { tag: "wt-hard-fail" });
+      await remember("hard-fail scenario note", "personal", { tag: "wt-hard-fail", cwd: repoDir });
     } catch (e) {
       error = e;
       file = e.file || null;
@@ -93,7 +108,7 @@ async function withCapturedStderr(fn) {
   let error = null;
   const stderrLines = await withCapturedStderr(async () => {
     try {
-      await remember("silent-fail scenario note", "personal", { tag: "wt-silent-fail" });
+      await remember("silent-fail scenario note", "personal", { tag: "wt-silent-fail", cwd: repoDir });
     } catch (e) {
       error = e;
     }
@@ -124,7 +139,7 @@ async function withCapturedStderr(fn) {
 // --- AC2 + AC4: successful write-through -----------------------------------
 {
   const { remember } = await loadEngine("success", notesDir);
-  const result = await remember("success scenario note", "personal", { tag: "wt-success" });
+  const result = await remember("success scenario note", "personal", { tag: "wt-success", cwd: repoDir });
 
   ok(
     result.chunks_upserted > 0,
@@ -133,7 +148,34 @@ async function withCapturedStderr(fn) {
   ok(await fileExists(result.file), `success: note file exists at the returned path -> ${result.file}`);
 }
 
+// --- Guard: detached HEAD without explicit status/sourceRef -> 422 ---------
+{
+  const { remember } = await loadEngine("success", notesDir);
+  let error = null;
+  try {
+    await remember("detached scenario note", "personal", { tag: "wt-detached", cwd: detachedRepoDir });
+  } catch (e) {
+    error = e;
+  }
+
+  ok(!!error, "detached-HEAD: remember() rejects when flight status can't be auto-detected");
+  ok(error?.status === 422, `detached-HEAD: rejection carries status 422 -> got ${error?.status}`);
+  ok(
+    /detached-HEAD/.test(error?.message || "") &&
+      /Pass opts\.status and opts\.sourceRef explicitly/.test(error?.message || ""),
+    `detached-HEAD: error message carries the guidance -> "${error?.message}"`
+  );
+  const fs = await import("node:fs/promises");
+  const files = await fs.readdir(notesDir);
+  ok(
+    !files.some((f) => f.includes("wt-detached")),
+    "detached-HEAD: rejected write leaves no note file behind"
+  );
+}
+
 await rm(notesDir, { recursive: true, force: true });
+cleanupRepo();
+cleanupDetachedRepo();
 
 console.log(fails ? `\n${fails} check(s) failed` : "\nall write-through checks passed");
 process.exit(fails ? 1 : 0);

@@ -289,7 +289,11 @@ describe('crawlAndIngest — rate limiting', () => {
     expect(pageRequests).toHaveLength(3);
     for (let i = 1; i < pageRequests.length; i++) {
       const elapsed = pageRequests[i]!.receivedAt - pageRequests[i - 1]!.receivedAt;
-      expect(elapsed).toBeGreaterThanOrEqual(MIN_REQUEST_DELAY_MS - 5); // small scheduling-jitter tolerance
+      // The crawler spaces request *starts* (lastRequestAt is stamped before
+      // fetch); this measures server *receipt*, which also moves with per-request
+      // connection latency (the first request pays connection setup), so allow
+      // 25ms of jitter. A missing delay would show up as ~0ms here.
+      expect(elapsed).toBeGreaterThanOrEqual(MIN_REQUEST_DELAY_MS - 25);
     }
   });
 });

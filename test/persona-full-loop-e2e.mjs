@@ -108,11 +108,9 @@
 // test's own accounting of itself" posture) or a real HTTP call.
 //
 // This file has a live swarm-memory-backed service dependency chain (a real
-// src/server.mjs subprocess) and is NOT part of the combined `npm test`
-// script for the same reason test/persona-draft-cross-transport.mjs/
-// test/http-api.mjs's own pu-03 section aren't gated behind anything extra --
-// it spins its own fixture double up itself, so it needs no external state,
-// but is still run as its own dedicated script for clarity.
+// src/server.mjs subprocess), but it spins its own fixture double up itself,
+// so it needs no external state and runs under `npm test`
+// (scripts/run-tests.mjs) like every other test/*.mjs.
 //
 // Usage: node test/persona-full-loop-e2e.mjs
 import { spawn } from "node:child_process";
@@ -127,6 +125,7 @@ import { parse as parseYaml } from "yaml";
 import { runPersonaInterview } from "../skills/mnemosyne-persona-interview/interview-engine.mjs";
 import { crawlBoundedContext } from "../skills/mnemosyne-persona-interview/crawl-context.mjs";
 import { writeDraftPersonaViaCli } from "../skills/mnemosyne-persona-interview/persona-draft-writer.mjs";
+import { makeScratchGitRepo } from "./fixtures/scratch-git-repo.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -199,8 +198,12 @@ async function main() {
     "utf8",
   );
 
+  // PANT-831/832: the approval's remember() auto-detects flight status from
+  // this server's cwd, so run it inside a scratch repo on a named branch
+  // rather than the (possibly detached-HEAD, as on CI) checkout.
+  const serverRepo = makeScratchGitRepo({ prefix: "mnemosyne-pu13-server-repo-" });
   const swarmChild = spawn(process.execPath, [REAL_SERVER], {
-    cwd: ROOT,
+    cwd: serverRepo.dir,
     env: {
       ...process.env,
       PORT: String(SWARM_PORT),
@@ -460,6 +463,7 @@ async function main() {
     await rm(notesDir, { recursive: true, force: true });
     await rm(indexStoreDir, { recursive: true, force: true });
     await rm(crawlFixtureRepo, { recursive: true, force: true });
+    serverRepo.cleanup();
   }
 
   console.log(`\n${fails === 0 ? "all persona-full-loop-e2e checks passed" : `${fails} FAILURE(S)`}`);

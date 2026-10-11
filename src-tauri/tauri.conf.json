@@ -29,6 +29,7 @@
       "../src/*.mjs": "src/",
       "../src/layers/*.mjs": "src/layers/",
       "../bin/graphify-bridge.mjs": "bin/graphify-bridge.mjs",
+      "../package.json": "package.json",
       "../ui/*": "ui/"
     },
     "android": {

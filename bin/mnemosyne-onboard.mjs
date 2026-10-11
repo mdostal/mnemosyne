@@ -31,7 +31,7 @@
 //          LOUDLY, directing the operator to --create instead of silently
 //          proceeding against infra that isn't there (ro-05 acceptance
 //          criterion #5).
-//   1b. --create only: createCollectionAndScope() below, shelling out to
+//   1b. --create only: createCollectionAndScope() (src/collection-exists.mjs), shelling out to
 //      ro-06's real, unmodified `mnemosyne.onboarding.
 //      create_collection_and_scope(name, scope=<resolved --scope-id>)` --
 //      creates the Qdrant collection and registers the scope->collection
@@ -77,151 +77,32 @@
 // dispatch comment): noEmit:true means there is no build step to import a
 // .ts module any other way.
 
-import { execFile } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { onboardRepo } from "../lib/mnemosyne/onboarding/onboardRepo.ts";
 import { appendOrgTreeEntry } from "../lib/mnemosyne/onboarding/orgTree.ts";
 import { classifyCollection } from "../lib/mnemosyne/onboarding/classify.ts";
-
-const execFileAsync = promisify(execFile);
+import { collectionExists, createCollectionAndScope } from "../src/collection-exists.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(__dirname, "..");
 
-const PYTHON_BIN = process.env.MNEMOSYNE_PYTHON_BIN || "python3";
 const KNOWN_SCOPES = ["project", "enterprise"];
 
 // --- collection-existence pre-check (acceptance criterion #5) --------------
 //
-// Reuses mnemosyne/inventory/qdrant_inventory.py's own read-only
-// read_qdrant_key -> load_qdrant_url -> build_qdrant_client ->
-// list_collection_names chain verbatim -- no new Qdrant-touching Python
-// code (see this file's own header comment / the story's risk mitigation).
-// A `QdrantInventoryError` (bad/missing credentials, unreachable Qdrant,
-// etc.) is surfaced loudly, never treated as "collection doesn't exist".
-const COLLECTION_EXISTS_SCRIPT = [
-  "import json, sys",
-  "from mnemosyne.inventory.qdrant_inventory import (",
-  "    QdrantInventoryError,",
-  "    build_qdrant_client,",
-  "    list_collection_names,",
-  "    load_qdrant_url,",
-  "    read_qdrant_key,",
-  ")",
-  "name = sys.argv[1]",
-  "try:",
-  "    key = read_qdrant_key()",
-  "    url = load_qdrant_url()",
-  "    client = build_qdrant_client(url, key)",
-  "    names = list_collection_names(client)",
-  "except QdrantInventoryError as exc:",
-  "    print(str(exc), file=sys.stderr)",
-  "    sys.exit(1)",
-  'print(json.dumps({"exists": name in names}))',
-].join("\n");
-
-/**
- * True if `name` is a real, currently-existing Qdrant collection, per a
- * real read-only inventory read (never a live *write*, and never a guess).
- * `exec`/`command`/`cwd` are injectable purely for testability (mirrors
- * bin/mnemosyne-agent.mjs's own `{ exec }` injection convention) -- tests
- * point `cwd`'s python subprocess at a fake local HTTP "Qdrant" (via
- * HOME-relative `~/.config/swarm-memory/{qdrant.key,config.toml}` fixtures),
- * never at live Qdrant Cloud.
- */
-export async function collectionExists(name, { exec = execFileAsync, command = PYTHON_BIN, cwd = REPO_ROOT } = {}) {
-  let stdout;
-  try {
-    const result = await exec(command, ["-c", COLLECTION_EXISTS_SCRIPT, name], { cwd });
-    stdout = result.stdout;
-  } catch (e) {
-    const detail = (e && e.stderr && String(e.stderr).trim()) || (e && e.message) || String(e);
-    throw new Error(`could not check whether collection '${name}' already exists in Qdrant: ${detail}`);
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    throw new Error(
-      `Qdrant collection-existence check returned output that could not be parsed as JSON: ${stdout.slice(0, 200)}`,
-    );
-  }
-  return parsed.exists === true;
-}
+// collectionExists() lives in src/collection-exists.mjs (plain Node, no tsx)
+// so src/server.mjs's reindex jobs (PANT-837) can run the same read-only
+// check before bulk-indexing into a scope's collection. Re-exported here
+// unchanged for existing callers.
+export { collectionExists };
 
 // --- --create's collection-creation + scope-mapping call (ro-07) -----------
 //
-// Shells out to ro-06's real, unmodified `mnemosyne.onboarding.
-// create_collection_and_scope(name, scope, client=...)` -- reused exactly,
-// never reimplemented. `client` is the same real `HttpQdrantClient` (or the
-// `qdrant_client` package, when installed) `collectionExists()` above
-// already builds via `build_qdrant_client(load_qdrant_url(),
-// read_qdrant_key())` -- one credential-resolution path, shared by both
-// read-only and additive-only call sites.
-const CREATE_COLLECTION_SCRIPT = [
-  "import json, sys",
-  "from mnemosyne.inventory.qdrant_inventory import (",
-  "    QdrantInventoryError,",
-  "    build_qdrant_client,",
-  "    load_qdrant_url,",
-  "    read_qdrant_key,",
-  ")",
-  "from mnemosyne.onboarding import create_collection_and_scope",
-  "name = sys.argv[1]",
-  "scope = sys.argv[2]",
-  "try:",
-  "    key = read_qdrant_key()",
-  "    url = load_qdrant_url()",
-  "    client = build_qdrant_client(url, key)",
-  "except QdrantInventoryError as exc:",
-  "    print(str(exc), file=sys.stderr)",
-  "    sys.exit(1)",
-  "result = create_collection_and_scope(name, scope, client=client)",
-  "print(json.dumps({",
-  "    'name': result.name,",
-  "    'scope': result.scope,",
-  "    'collection_created': result.collection_created,",
-  "    'scope_mapped': result.scope_mapped,",
-  "    'ok': result.ok,",
-  "    'detail': result.detail,",
-  "}))",
-].join("\n");
-
-/**
- * Creates Qdrant collection `name` and registers `scope -> name` in
- * swarm-memory's real `config.toml` `[scopes]` table -- ro-06's
- * `create_collection_and_scope()`, called for real (never re-implemented in
- * JS). Additive-only, same as the primitive it calls: no delete/drop code
- * path exists anywhere upstream of this call either.
- *
- * `exec`/`command`/`cwd` are injectable purely for testability, mirroring
- * `collectionExists()`'s own identical convention above -- tests point
- * `cwd`'s python subprocess at a fake local HTTP "Qdrant" + a throwaway
- * `config.toml`, never at live Qdrant Cloud.
- */
-export async function createCollectionAndScope(
-  name,
-  scope,
-  { exec = execFileAsync, command = PYTHON_BIN, cwd = REPO_ROOT } = {},
-) {
-  let stdout;
-  try {
-    const result = await exec(command, ["-c", CREATE_COLLECTION_SCRIPT, name, scope], { cwd });
-    stdout = result.stdout;
-  } catch (e) {
-    const detail = (e && e.stderr && String(e.stderr).trim()) || (e && e.message) || String(e);
-    throw new Error(`could not create collection '${name}' / scope '${scope}': ${detail}`);
-  }
-  try {
-    return JSON.parse(stdout);
-  } catch {
-    throw new Error(
-      `collection-creation script returned output that could not be parsed as JSON: ${stdout.slice(0, 200)}`,
-    );
-  }
-}
+// createCollectionAndScope() lives in src/collection-exists.mjs (plain Node,
+// no tsx) so src/server.mjs's POST /collections (PANT-983) runs the same
+// call. Re-exported here unchanged for existing callers.
+export { createCollectionAndScope };
 
 // --- --override's org_tree_path derivation ----------------------------------
 //

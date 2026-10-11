@@ -23,6 +23,7 @@ import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { makeScratchGitRepo } from "./fixtures/scratch-git-repo.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -68,9 +69,12 @@ async function waitForUp(base, timeoutMs, child) {
   }
 }
 
-function spawnServer(port, env) {
+// PANT-831: scenarios that POST /remember pass `cwd` pointing at a scratch
+// repo on a named branch, because remember() auto-detects flight status from
+// the server's cwd and the checkout itself may be a detached HEAD (CI).
+function spawnServer(port, env, { cwd = ROOT } = {}) {
   const child = spawn(TSX, [SERVER], {
-    cwd: ROOT,
+    cwd,
     env: { ...process.env, MNEMOSYNE_PORT: String(port), ...env },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -161,6 +165,7 @@ async function testVectorOnly() {
 
   const port = 31420;
   const base = `http://127.0.0.1:${port}`;
+  const serverRepo = makeScratchGitRepo({ prefix: "mnemosyne-single-layer-repo-" });
   const { child, getOutput } = spawnServer(port, {
     MNEMOSYNE_LAYERS: JSON.stringify({ layers: [{ name: "vector" }] }),
     MNEMOSYNE_ROOT_DIR: missingRoot,
@@ -169,7 +174,7 @@ async function testVectorOnly() {
     SENTINEL_LOG: sentinelLog,
     EMPTY_MARKER: "EMPTY_MARKER_CR04",
     MNEMOSYNE_NOTES_DIR: notesDir,
-  });
+  }, { cwd: serverRepo.dir });
 
   try {
     const up = await waitForUp(base, 15000, child);
@@ -260,6 +265,7 @@ async function testVectorOnly() {
     );
   } finally {
     child.kill();
+    serverRepo.cleanup();
     await rm(tmp, { recursive: true, force: true });
   }
 }
@@ -278,6 +284,7 @@ async function testFileOnly() {
 
   const port = 31421;
   const base = `http://127.0.0.1:${port}`;
+  const serverRepo = makeScratchGitRepo({ prefix: "mnemosyne-single-layer-repo-" });
   const { child, getOutput } = spawnServer(port, {
     MNEMOSYNE_LAYERS: JSON.stringify({ layers: [{ name: "file" }] }),
     MNEMOSYNE_ROOT_DIR: root,
@@ -286,7 +293,7 @@ async function testFileOnly() {
     SWARM_MEMORY_BIN: swarmBin,
     MNEMO_TEST_NODE: process.execPath,
     SENTINEL_LOG: sentinelLog,
-  });
+  }, { cwd: serverRepo.dir });
 
   try {
     const up = await waitForUp(base, 15000, child);
@@ -372,6 +379,7 @@ async function testFileOnly() {
     );
   } finally {
     child.kill();
+    serverRepo.cleanup();
     await rm(tmp, { recursive: true, force: true });
   }
 }

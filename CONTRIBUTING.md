@@ -18,11 +18,20 @@ Qdrant Cloud engine rather than standing up its own store.
 ## Tests
 
 ```bash
-npm test              # full suite: bundle, inject, write-through, health-drift,
-                       # code-graph, reindex, vector, http-api, + vitest contracts
+npm test              # every test/*.mjs file, then the vitest contract suites
 npm run test:e2e       # Minerva-style end-to-end integration test
 npm run typecheck      # tsc --noEmit
 ```
+
+`npm test` runs `scripts/run-tests.mjs`, which picks up every `test/*.mjs`
+file on its own, so a new test file needs no wiring. It keeps going after a
+failing file, prints a per-file PASS / FAIL / SKIP summary, and exits non-zero
+if anything failed. Files that need something beyond `npm ci` (the real
+`swarm-memory` binary, a Playwright browser, PyYAML, a build toolchain, or a
+live Mnemosyne/corpus) are declared in the runner's `REQUIREMENTS` table and
+print `SKIP <file>: <reason>` when it's missing. Live tests only run with
+`MNEMOSYNE_LIVE_TESTS=1`; without it the runner also drops `MNEMOSYNE_URL`
+from the test environment so nothing writes into a real service.
 
 Most of the suite runs against a temporary fake `swarm-memory` executable, so
 it does not require live Qdrant access. See [`README.md`](./README.md#tests)

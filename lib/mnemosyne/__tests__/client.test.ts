@@ -7,6 +7,8 @@ import type { Metrics } from '../../../src/observability/metrics.js';
 import { MnemosyneClient, type MnemosyneClientOptions } from '../client.js';
 import type { Hit, RecallResult, RememberResult } from '../interfaces.js';
 import type { LayerAdapter, RecallOptions, RememberOptions } from '../layers/LayerAdapter.js';
+// eslint-disable-next-line import/extensions
+import { makeScratchGitRepo } from '../../../test/fixtures/scratch-git-repo.mjs';
 
 function stubVectorLayer(recall: (query: string, options?: RecallOptions) => Promise<RecallResult>): LayerAdapter {
   return { layer: 'vector', recall };
@@ -112,6 +114,20 @@ const silentMetrics: Metrics = {
   counter: () => undefined,
 };
 
+const scratchRepoCleanups: Array<() => void> = [];
+
+/**
+ * PANT-831: the file layer's remember() auto-detects flight status from
+ * process.cwd(), which is the (possibly detached-HEAD, e.g. CI) checkout.
+ * Pin it to a scratch repo on a named branch for tests that write through
+ * the file layer, so they don't depend on the checkout's git state.
+ */
+function pinCwdToScratchRepo(): void {
+  const repo = makeScratchGitRepo({ prefix: 'mnemosyne-client-repo-' });
+  scratchRepoCleanups.push(repo.cleanup);
+  vi.spyOn(process, 'cwd').mockReturnValue(repo.dir);
+}
+
 async function makeTempRoot(): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), 'mnemosyne-client-'));
   tempRoots.push(root);
@@ -145,6 +161,7 @@ function makeObservabilityMocks(): { logger: Logger; metrics: Metrics } {
 afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   vi.restoreAllMocks();
+  scratchRepoCleanups.splice(0).forEach((cleanup) => cleanup());
 });
 
 describe('MnemosyneClient', () => {
@@ -284,6 +301,7 @@ describe('MnemosyneClient', () => {
   });
 
   it('remember() falls back to the file layer when vector has no remember() (auto-routing, no explicit layer)', async () => {
+    pinCwdToScratchRepo();
     const root = await makeTempRoot();
     const recallOnlyVectorLayer = stubVectorLayer(async (query, options) => ({
       ok: true,
@@ -540,6 +558,7 @@ describe('MnemosyneClient', () => {
   });
 
   it('logs and counts layer_degraded for the layer skipped along the way when remember() auto-falls-back to file', async () => {
+    pinCwdToScratchRepo();
     const root = await makeTempRoot();
     const { logger, metrics } = makeObservabilityMocks();
     const failingRemember = vi.fn(async (): Promise<RememberResult> => ({

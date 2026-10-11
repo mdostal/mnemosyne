@@ -106,6 +106,7 @@ import { fileURLToPath } from "node:url";
 // lib/mnemosyne/layer1/*.ts).
 // eslint-disable-next-line import/extensions
 import { MAX_EXPLICIT_FILES } from "../skills/mnemosyne-persona-interview/crawl-context.mjs";
+import { makeScratchGitRepo } from "./fixtures/scratch-git-repo.mjs";
 
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1292,11 +1293,14 @@ async function main() {
   // it at this test server is just `extraEnv: { PORT }` on `runCli`.
   {
     const notesDir = await makeTempDir("mnemosyne-persona-cli-pu04-notes-");
+    // PANT-831: the server's remember() auto-detects flight status from its cwd, so run it
+    // inside a scratch repo on a named branch rather than the (possibly detached-HEAD) checkout.
+    const serverRepo = makeScratchGitRepo({ prefix: "mnemosyne-persona-cli-pu04-repo-" });
     let server;
     let serverOutput = "";
     try {
       server = spawn(process.execPath, [SERVER_PATH], {
-        cwd: ROOT,
+        cwd: serverRepo.dir,
         env: {
           ...process.env,
           PORT: String(DRAFT_REMEMBER_TEST_PORT),
@@ -1400,6 +1404,7 @@ async function main() {
           // already gone
         }
       }
+      serverRepo.cleanup();
       await rm(notesDir, { recursive: true, force: true });
     }
   }
