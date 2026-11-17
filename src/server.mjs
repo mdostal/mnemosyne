@@ -30,6 +30,13 @@
 //                   scope (client or repo), deduped by content hash, each
 //                   chunk written through remember(). See src/ingest.mjs.
 //   POST /lanes   {name, collection, ladder?} -> add-only config.toml write
+//
+//   Write auth (first-cut-trust t1k): POST /remember, /ingest, /lanes,
+//   /index, /reindex and /events/repo-merged need MNEMOSYNE_ADMIN_TOKEN as
+//   `Authorization: Bearer <token>` (401 otherwise). With no token set, only
+//   loopback callers may write (403 otherwise). MNEMOSYNE_OPEN_REMEMBER=1
+//   keeps plain POST /remember open for agent hooks. Reads stay open. See
+//   writeGate() below.
 //   POST /collections {scope} -> PANT-983: creates a registered scope's Qdrant
 //                     collection (additive-only, idempotent). Off unless
 //                     MNEMOSYNE_ADMIN_TOKEN is set (403); then it needs
@@ -131,8 +138,12 @@ import {
 } from "./reindex-jobs.mjs";
 import { createHttpMetrics } from "./observability/http-metrics.mjs";
 import { createIngest } from "./ingest.mjs";
+import { resolveIndexTargets } from "./index-guard.mjs";
 
 const PORT = Number(process.env.PORT || 8477);
+
+// Files per `swarm-memory index` call when POST /index expands a directory.
+const INDEX_BATCH_FILES = 200;
 
 // Routes metered by GET /metrics. Keyed by route so the finish hook below can
 // meter every outcome, including errors thrown before a handler reads its body.
@@ -267,6 +278,15 @@ function adminTokenMatches(req, token) {
   return given.length === want.length && timingSafeEqual(given, want);
 }
 
+function isLoopbackAddress(address) {
+  const a = String(address || "");
+  return a === "::1" || /^(::ffff:)?127\./.test(a);
+}
+
+function isTruthyEnv(value) {
+  return /^(1|true|yes|on)$/i.test(String(value || "").trim());
+}
+
 /**
  * Builds the HTTP server without listening. `overrides` replaces the reindex
  * wiring (tests inject a stubbed reindex() and their own roots/repo map);
@@ -277,6 +297,14 @@ export function createMnemosyneServer(overrides = {}) {
   const repoScopes = overrides.repoScopes || parseRepoScopes(process.env.MNEMOSYNE_REPO_SCOPES);
   const resolveScopes = overrides.scopeMap || scopeMap;
   const adminToken = overrides.adminToken !== undefined ? overrides.adminToken : process.env.MNEMOSYNE_ADMIN_TOKEN || "";
+  const openRemember =
+    overrides.openRemember !== undefined ? overrides.openRemember : isTruthyEnv(process.env.MNEMOSYNE_OPEN_REMEMBER);
+  const isLocalPeer = overrides.isLocalPeer || ((req) => isLoopbackAddress(req.socket.remoteAddress));
+  const recallFn = overrides.recall || recall;
+  const grepFn = overrides.grep || grep;
+  const rememberFn = overrides.remember || remember;
+  const addLaneFn = overrides.addLane || addLane;
+  const reindexPathsFn = overrides.reindexPaths || reindexPaths;
   const createCollection = overrides.createCollectionAndScope || createCollectionAndScope;
   const resetScopes = overrides.resetScopeMapCache || resetScopeMapCache;
   const engineHealth = overrides.health || health;
@@ -295,9 +323,27 @@ export function createMnemosyneServer(overrides = {}) {
   const httpMetrics = overrides.httpMetrics || createHttpMetrics();
   const ingest = createIngest({
     scopeMap: resolveScopes,
-    remember: overrides.remember || remember,
-    grep: overrides.grep || grep,
+    remember: rememberFn,
+    grep: grepFn,
   });
+
+  // Every state-changing route goes through this (first-cut-trust t1k).
+  // Returns null when the caller may write, else [status, body]. With
+  // MNEMOSYNE_ADMIN_TOKEN set, every caller (loopback too) must send it as a
+  // Bearer token. Without it, only loopback callers may write: a standalone
+  // install keeps working, and a container deployment that forgot the token
+  // fails closed for every other container.
+  function writeGate(req, route) {
+    if (adminToken) {
+      if (adminTokenMatches(req, adminToken)) return null;
+      return [401, { error: "missing or wrong admin token (Authorization: Bearer <MNEMOSYNE_ADMIN_TOKEN>)", route }];
+    }
+    if (isLocalPeer(req)) return null;
+    return [
+      403,
+      { error: "writes from non-loopback callers are off until MNEMOSYNE_ADMIN_TOKEN is set; then send it as a Bearer token", route },
+    ];
+  }
 
   // true/false when the configured scope map could be read, undefined when it
   // couldn't (the metric is then left untouched rather than guessed). Never
@@ -382,10 +428,10 @@ export function createMnemosyneServer(overrides = {}) {
             "GET /scopes": "configured scopes + escalation ladders",
             "GET /config": "read-only effective config (qdrant_url, embedder, default_scope, fallback_collection)",
             "POST /recall": "{query, scope?, hits?, escalate?, min_score?, radius?} -> ranked hits w/ provenance",
-            "POST /remember": "{text, scope?, tag?, cwd?, status?, source_ref?} -> write-back (index into scope collection)",
+            "POST /remember": "{text, scope?, tag?, cwd?, status?, source_ref?} -> write-back (index into scope collection); needs MNEMOSYNE_ADMIN_TOKEN unless MNEMOSYNE_OPEN_REMEMBER is on",
             "POST /grep": "{query, scope?, hits?, escalate?, radius?} -> KEYWORD hits (exact-string, no embedder)",
-            "POST /ingest": "{scope, docs:[{path, text, metadata?}], status?, source_ref?} -> chunked .md/.txt ingest into a client or repo scope, deduped by content hash",
-            "POST /lanes": "{name, collection, ladder?} -> add-only atomic write of a new scope to config.toml",
+            "POST /ingest": "{scope, docs:[{path, text, metadata?}], status?, source_ref?} -> chunked .md/.txt ingest into a client or repo scope, deduped by content hash; needs MNEMOSYNE_ADMIN_TOKEN",
+            "POST /lanes": "{name, collection, ladder?} -> add-only atomic write of a new scope to config.toml; needs MNEMOSYNE_ADMIN_TOKEN",
             "POST /collections": "{scope} -> create a registered scope's Qdrant collection (additive, idempotent); needs MNEMOSYNE_ADMIN_TOKEN as a Bearer token",
             "GET /note": "?source=<note>&chunk=&lines=a-b -> stored note text + provenance for a mnemosyne://note/<source> ref (alias GET /notes/:source)",
             "GET /search": "?q=&scope=&mode=recall|grep&hits=&escalate=&min_score=&radius= -> dispatches to recall()/grep()",
@@ -393,12 +439,12 @@ export function createMnemosyneServer(overrides = {}) {
             "GET /graph/edges": "?node= -> list edges, optionally touching `node` (READ-ONLY)",
             "GET /graph/impact/:node": "?depth= -> reverse closure: what's affected if :node changes",
             "GET /graph/deps/:node": "?depth= -> forward closure: what :node depends on",
-            "POST /index": "{collection, paths[]} -> TARGETED: swarm-memory index <collection> <paths...> (default pruning, never --no-prune), synchronous",
+            "POST /index": "{collection, paths[]} -> TARGETED: swarm-memory index <collection> <paths...> (default pruning, never --no-prune), synchronous; paths under MNEMOSYNE_REINDEX_ROOTS, symlinks and dotfiles skipped; needs MNEMOSYNE_ADMIN_TOKEN",
             "POST /cache/refresh": "clears ONLY the in-memory config cache (local, zero subprocesses, zero external state)",
-            "POST /reindex": "{scope, directory?} -> BULK (re)index a directory under MNEMOSYNE_REINDEX_ROOTS; 202 {job_id, scope, status}, deduped per scope",
+            "POST /reindex": "{scope, directory?} -> BULK (re)index a directory under MNEMOSYNE_REINDEX_ROOTS; 202 {job_id, scope, status}, deduped per scope; needs MNEMOSYNE_ADMIN_TOKEN",
             "GET /reindex": "recent reindex jobs, newest first (in memory)",
             "GET /reindex/:job_id": "job status: running|succeeded|failed, files_scanned, files_indexed, errors, started_at, finished_at",
-            "POST /events/repo-merged": "{repo, ref} -> maps repo -> scope (MNEMOSYNE_REPO_SCOPES) and starts a reindex job",
+            "POST /events/repo-merged": "{repo, ref} -> maps repo -> scope (MNEMOSYNE_REPO_SCOPES) and starts a reindex job; needs MNEMOSYNE_ADMIN_TOKEN",
             "GET /metrics": "?format=json -> request counters/histograms by scope + outcome (Prometheus text by default)",
           },
         });
@@ -496,8 +542,8 @@ export function createMnemosyneServer(overrides = {}) {
         };
         const result =
           mode === "recall"
-            ? await recall(q, scope, { ...opts, minScore: minScoreParam != null ? Number(minScoreParam) : undefined })
-            : await grep(q, scope, opts);
+            ? await recallFn(q, scope, { ...opts, minScore: minScoreParam != null ? Number(minScoreParam) : undefined })
+            : await grepFn(q, scope, opts);
         return send(res, 200, { ...result, mode, took_ms: Date.now() - t0 });
       }
 
@@ -505,7 +551,7 @@ export function createMnemosyneServer(overrides = {}) {
         const b = await readJson(req);
         meter.scope = b.scope;
         meter.scopeMissing = await isScopeMissing(b.scope);
-        const result = await grep(b.query, b.scope, {
+        const result = await grepFn(b.query, b.scope, {
           hits: b.hits,
           escalate: b.escalate,
           radius: b.radius,
@@ -518,7 +564,7 @@ export function createMnemosyneServer(overrides = {}) {
         const b = await readJson(req);
         meter.scope = b.scope;
         meter.scopeMissing = await isScopeMissing(b.scope);
-        const result = await recall(b.query, b.scope, {
+        const result = await recallFn(b.query, b.scope, {
           hits: b.hits,
           escalate: b.escalate,
           minScore: b.min_score,
@@ -535,8 +581,19 @@ export function createMnemosyneServer(overrides = {}) {
       }
 
       if (route === "POST /remember") {
+        // MNEMOSYNE_OPEN_REMEMBER keeps the plain text write-back open for
+        // agent hooks that call Mnemosyne directly; the code-graph layer
+        // still needs the token.
+        if (!openRemember) {
+          const denied = writeGate(req, route);
+          if (denied) return send(res, ...denied);
+        }
         const b = await readJson(req);
         meter.scope = b.layer === "code-graph" ? "code-graph" : b.scope;
+        if (openRemember && b.layer === "code-graph") {
+          const denied = writeGate(req, route);
+          if (denied) return send(res, ...denied);
+        }
         if (b.layer === "code-graph") {
           const { CodeGraphLayer } = await import("./layers/code-graph.mjs");
           const graph = new CodeGraphLayer();
@@ -546,7 +603,7 @@ export function createMnemosyneServer(overrides = {}) {
         meter.scopeMissing = await isScopeMissing(b.scope);
         // PANT-977: explicit provenance for callers with no git cwd. Both or
         // neither; remember() validates them and answers 400 on a bad value.
-        const result = await remember(b.text, b.scope, {
+        const result = await rememberFn(b.text, b.scope, {
           tag: b.tag,
           cwd: b.cwd,
           status: b.status,
@@ -556,14 +613,18 @@ export function createMnemosyneServer(overrides = {}) {
       }
 
       if (route === "POST /ingest") {
+        const denied = writeGate(req, route);
+        if (denied) return send(res, ...denied);
         const b = await readJson(req);
         const result = await ingest(b);
         return send(res, 200, { ...result, took_ms: Date.now() - t0 });
       }
 
       if (route === "POST /lanes") {
+        const denied = writeGate(req, route);
+        if (denied) return send(res, ...denied);
         const b = await readJson(req);
-        const result = await addLane(b.name, b.collection, b.ladder);
+        const result = await addLaneFn(b.name, b.collection, b.ladder);
         return send(res, 200, { ...result, took_ms: Date.now() - t0 });
       }
 
@@ -645,12 +706,57 @@ export function createMnemosyneServer(overrides = {}) {
       // guardrail and "Two reindex paths".
 
       if (route === "POST /index") {
+        const denied = writeGate(req, route);
+        if (denied) return send(res, ...denied);
         const b = await readJson(req);
-        const result = await reindexPaths(b.collection, b.paths);
-        return send(res, 200, { ...result, took_ms: Date.now() - t0 });
+        if (!b.collection || !String(b.collection).trim()) {
+          const err = new Error("collection is required");
+          err.status = 400;
+          throw err;
+        }
+        const requested = Array.isArray(b.paths) ? b.paths.map((p) => String(p).trim()).filter(Boolean) : [];
+        if (requested.length === 0) {
+          const err = new Error("at least one path is required");
+          err.status = 400;
+          throw err;
+        }
+        // The CLI is never handed a directory or a symlink: the paths are
+        // walked here (index-guard.mjs) and only real, non-hidden files under
+        // MNEMOSYNE_REINDEX_ROOTS go to `swarm-memory index`.
+        const { files, skipped } = await resolveIndexTargets(requested, reindexRoots);
+        if (files.length === 0) {
+          return send(res, 200, {
+            reindexed: false,
+            collection: String(b.collection),
+            paths: requested,
+            files_indexed: 0,
+            skipped,
+            detail: "nothing indexable under the given paths",
+            took_ms: Date.now() - t0,
+          });
+        }
+        // A directory can expand to thousands of files: run the CLI in batches
+        // so the argv stays well under the OS limit, and add up the counts.
+        const sum = (a, v) => (a == null || v == null ? null : a + v);
+        let result = null;
+        for (let i = 0; i < files.length; i += INDEX_BATCH_FILES) {
+          const part = await reindexPathsFn(b.collection, files.slice(i, i + INDEX_BATCH_FILES));
+          result = !result
+            ? { ...part }
+            : {
+                ...part,
+                files_indexed: sum(result.files_indexed, part.files_indexed),
+                chunks_upserted: sum(result.chunks_upserted, part.chunks_upserted),
+                embed_failures: sum(result.embed_failures, part.embed_failures),
+                engine_output: [result.engine_output, part.engine_output].filter(Boolean).join("\n"),
+              };
+        }
+        return send(res, 200, { ...result, paths: requested, files: files.length, skipped, took_ms: Date.now() - t0 });
       }
 
       if (route === "POST /reindex") {
+        const denied = writeGate(req, route);
+        if (denied) return send(res, ...denied);
         const b = await readJson(req);
         meter.scope = b.scope;
         if (!b.scope || !String(b.scope).trim()) {
@@ -681,6 +787,8 @@ export function createMnemosyneServer(overrides = {}) {
         // nothing in Mnemosyne polls or schedules. Indexes whatever is on disk
         // at the mapped directory — keeping that checkout at `ref` is the
         // caller's job.
+        const denied = writeGate(req, route);
+        if (denied) return send(res, ...denied);
         const b = await readJson(req);
         if (!b.repo || !String(b.repo).trim()) {
           const err = new Error("repo is required");
@@ -856,5 +964,11 @@ if (isDirectRun()) {
   server.listen(PORT, () => {
     // eslint-disable-next-line no-console
     console.log(`[mnemosyne] memory god listening on http://127.0.0.1:${PORT}`);
+    if (!process.env.MNEMOSYNE_ADMIN_TOKEN) {
+      console.warn("[mnemosyne] WARNING: MNEMOSYNE_ADMIN_TOKEN is not set; write routes accept loopback callers only");
+    }
+    if (isTruthyEnv(process.env.MNEMOSYNE_OPEN_REMEMBER)) {
+      console.warn("[mnemosyne] WARNING: MNEMOSYNE_OPEN_REMEMBER is on; POST /remember needs no token");
+    }
   });
 }

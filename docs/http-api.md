@@ -132,6 +132,8 @@ jobs are never evicted). A restart forgets them.
 | `MNEMOSYNE_REINDEX_ROOTS` | Directories a reindex may scan, separated by `:` (like `PATH`). A requested `directory` must resolve, after symlinks, to one of these roots or somewhere below one. **Unset: only the service's own cwd is allowed.** |
 | `MNEMOSYNE_REPO_SCOPES` | JSON object mapping repo to `{scope, directory}`, for example `{"mdostal/mnemosyne": {"scope": "project", "directory": "/srv/repos/mnemosyne"}}`. Keys are matched case-insensitively. `https://github.com/…` and `.git` are stripped. A malformed value fails the service at startup. |
 | `MNEMOSYNE_REINDEX_JOB_HISTORY` | How many jobs to keep (default `50`). |
+| `MNEMOSYNE_ADMIN_TOKEN` | Bearer token every write route needs (`POST /remember`, `/ingest`, `/lanes`, `/collections`, `/index`, `/reindex`, `/events/repo-merged`): `Authorization: Bearer <token>`, else `401`. Unset: writes from loopback only (`403` for anyone else), and `POST /collections` is off. See `SERVICE.md`, "Write auth". |
+| `MNEMOSYNE_OPEN_REMEMBER` | `1` keeps plain `POST /remember` open without the token, for agent hooks that write back directly. Off by default. |
 | `MNEMOSYNE_PYTHON_BIN` | Python used for the read-only collection-existence check and `/health`'s collections listing (default `python3`). |
 | `MNEMOSYNE_SCOPE_CHECK_MAX_AGE_MS` | How long `/health` reuses its cached per-scope collection check before refreshing it in the background (default `300000`). |
 
@@ -173,7 +175,7 @@ creation failed, with the primitive's `detail` saying which half did.
 
 | env | meaning |
 |-----|---------|
-| `MNEMOSYNE_ADMIN_TOKEN` | Enables `POST /collections` and is the bearer token it requires. Unset: the route answers `403`. |
+| `MNEMOSYNE_ADMIN_TOKEN` | Enables `POST /collections` and is the bearer token it requires (as for every other write route). Unset: the route answers `403`. |
 
 ### `GET /health` scope coverage
 

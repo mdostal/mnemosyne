@@ -101,6 +101,36 @@ const lastRefreshedEl = document.getElementById("last-refreshed");
 const lanesStatusEl = document.getElementById("lanes-status");
 const lanesTbodyEl = document.getElementById("lanes-tbody");
 const addLaneForm = document.getElementById("add-lane-form");
+
+// --- Admin token for write routes (first-cut-trust t1k) ---------------------
+// POST /lanes and POST /index need MNEMOSYNE_ADMIN_TOKEN as a Bearer token
+// when the service has one. The operator pastes it once per tab when a write
+// answers 401; it lives in sessionStorage only (gone when the tab closes) and
+// is never written into the page.
+const ADMIN_TOKEN_STORAGE_KEY = "mnemosyne.adminToken";
+
+function adminHeaders(headers) {
+  let token = "";
+  try {
+    token = window.sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
+  } catch {
+    // sessionStorage unavailable -- send no token.
+  }
+  return token ? { ...headers, authorization: `Bearer ${token}` } : headers;
+}
+
+// After a 401: ask for the token and keep it for this tab. Returns true when
+// one was entered, so the caller can tell the operator to submit again.
+function askForAdminToken() {
+  const token = window.prompt("This action needs Mnemosyne's admin token (MNEMOSYNE_ADMIN_TOKEN):", "");
+  if (!token || !token.trim()) return false;
+  try {
+    window.sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token.trim());
+  } catch {
+    return false;
+  }
+  return true;
+}
 const addLaneStatusEl = document.getElementById("add-lane-status");
 const personasStatusEl = document.getElementById("personas-status");
 const personasTbodyEl = document.getElementById("personas-tbody");
@@ -248,10 +278,14 @@ addLaneForm.addEventListener("submit", async (evt) => {
   try {
     const res = await fetch("/lanes", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: adminHeaders({ "content-type": "application/json" }),
       body: JSON.stringify({ name, collection, ladder }),
     });
     const body = await res.json();
+    if (res.status === 401 && askForAdminToken()) {
+      setStatus(addLaneStatusEl, "", "admin token saved for this tab — submit again");
+      return;
+    }
     if (!res.ok) {
       setStatus(addLaneStatusEl, "fail", `FAIL — ${body.error || `HTTP ${res.status}`}`);
       return;
@@ -1198,10 +1232,14 @@ reindexForm.addEventListener("submit", async (evt) => {
   try {
     const res = await fetch("/index", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: adminHeaders({ "content-type": "application/json" }),
       body: JSON.stringify({ collection, paths }),
     });
     const body = await res.json();
+    if (res.status === 401 && askForAdminToken()) {
+      setStatus(reindexStatusEl, "", "admin token saved for this tab — submit again");
+      return;
+    }
     if (!res.ok) {
       setStatus(reindexStatusEl, "fail", `FAIL — ${body.error || `HTTP ${res.status}`}`);
       return;
@@ -1210,7 +1248,8 @@ reindexForm.addEventListener("submit", async (evt) => {
       reindexStatusEl,
       "pass",
       `done — ${body.files_indexed ?? "?"} file(s) indexed, ${body.chunks_upserted ?? "?"} chunk(s) upserted, ` +
-        `${body.embed_failures ?? 0} embed failure(s), ${body.total_points ?? "?"} total point(s) in ${body.collection}`
+        `${body.embed_failures ?? 0} embed failure(s), ${body.total_points ?? "?"} total point(s) in ${body.collection}` +
+        (body.skipped && body.skipped.length ? ` — ${body.skipped.length} path(s) skipped (symlinks, dotfiles, hidden dirs)` : "")
     );
     if (body.engine_output) {
       reindexResultEl.textContent = body.engine_output;

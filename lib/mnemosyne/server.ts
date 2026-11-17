@@ -280,7 +280,11 @@ async function fireDraftApprovalRemember(
   try {
     const res = await fetch(`http://127.0.0.1:${REMEMBER_SERVICE_PORT}/remember`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      // POST /remember needs MNEMOSYNE_ADMIN_TOKEN as a Bearer token when the service has one.
+      headers: {
+        'content-type': 'application/json',
+        ...(process.env.MNEMOSYNE_ADMIN_TOKEN ? { authorization: `Bearer ${process.env.MNEMOSYNE_ADMIN_TOKEN}` } : {}),
+      },
       body: JSON.stringify({ text, scope, tag }),
     });
     const data = (await res.json()) as {

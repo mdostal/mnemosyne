@@ -242,7 +242,11 @@ async function runVectorIndexStep(
   try {
     res = await fetch(`${baseUrl}/reindex`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      // POST /reindex needs MNEMOSYNE_ADMIN_TOKEN as a Bearer token when the service has one.
+      headers: {
+        'content-type': 'application/json',
+        ...(process.env.MNEMOSYNE_ADMIN_TOKEN ? { authorization: `Bearer ${process.env.MNEMOSYNE_ADMIN_TOKEN}` } : {}),
+      },
       body: JSON.stringify({ scope: scopeId, directory: repoRoot }),
     });
   } catch (error) {
