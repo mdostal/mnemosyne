@@ -2,6 +2,22 @@
 
 All notable changes to Mnemosyne are documented here.
 
+## [Unreleased]
+
+### Security
+
+- **Write routes need `MNEMOSYNE_ADMIN_TOKEN`** (first-cut-trust t1k) —
+  `POST /remember`, `/ingest`, `/lanes`, `/index`, `/reindex` and
+  `/events/repo-merged` now answer `401` without
+  `Authorization: Bearer <MNEMOSYNE_ADMIN_TOKEN>`, like `POST /collections`.
+  With no token set, only loopback callers may write. `MNEMOSYNE_OPEN_REMEMBER=1`
+  keeps plain `/remember` open for agent hooks. Reads stay open.
+- **The indexer never follows symlinks** — `POST /index` and `POST /reindex`
+  walk directories in `src/index-guard.mjs` and pass `swarm-memory` explicit
+  regular files only, under `MNEMOSYNE_REINDEX_ROOTS`, skipping symlinks,
+  dotfiles (`.env*`) and hidden directories. A `x.json -> .env` link can no
+  longer be indexed and served back through `POST /grep`.
+
 ## [0.16.0] — 2026-09-07
 
 `mnemosyne-desktop-app` epic (`da-01`..`da-05`) — Mnemosyne now ships as a

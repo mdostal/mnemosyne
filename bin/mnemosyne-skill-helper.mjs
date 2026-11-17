@@ -191,10 +191,17 @@ export async function ensureRunning({
 // returns directly) — no reformatting, no field-dropping, no new
 // business logic, no CLI shell-out of any kind.
 
+// Mnemosyne's write routes need MNEMOSYNE_ADMIN_TOKEN as a Bearer token
+// (first-cut-trust t1k); sent only when this process has it.
+function adminAuthHeader() {
+  const token = process.env.MNEMOSYNE_ADMIN_TOKEN;
+  return token ? { authorization: `Bearer ${token}` } : {};
+}
+
 async function apiFetch(port, method, urlPath, body) {
   const res = await fetch(`${baseUrl(port)}${urlPath}`, {
     method,
-    headers: body !== undefined ? { "content-type": "application/json" } : undefined,
+    headers: { ...(body !== undefined ? { "content-type": "application/json" } : {}), ...adminAuthHeader() },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const data = await res.json();
@@ -212,8 +219,9 @@ export const recallAction = (port, { query, scope, hits, escalate, min_score, ra
   apiFetch(port, "POST", "/recall", { query, scope, hits, escalate, min_score, radius });
 
 // rememberAction — thin pass-through to POST /remember.
-export const rememberAction = (port, { text, scope, tag } = {}) =>
-  apiFetch(port, "POST", "/remember", { text, scope, tag });
+// status + source_ref are optional explicit provenance (PANT-977).
+export const rememberAction = (port, { text, scope, tag, status, source_ref } = {}) =>
+  apiFetch(port, "POST", "/remember", { text, scope, tag, status, source_ref });
 
 // grepAction — thin pass-through to POST /grep.
 export const grepAction = (port, { query, scope, hits, escalate, radius } = {}) =>

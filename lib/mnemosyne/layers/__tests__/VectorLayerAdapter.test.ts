@@ -4,8 +4,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { VectorLayerAdapter } from '../VectorLayerAdapter.js';
+// eslint-disable-next-line import/extensions
+import { makeScratchGitRepo, type ScratchGitRepo } from '../../../../test/fixtures/scratch-git-repo.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -151,6 +153,22 @@ describe('VectorLayerAdapter', () => {
 
   describe('remember', () => {
     let notesDir: string;
+    // PANT-831: remember() auto-detects flight status from `cwd` git state.
+    // Writes pass `cwd: repo.dir` (a scratch repo on a named branch) so they
+    // don't depend on the checkout the suite runs in -- CI's checkout is a
+    // detached HEAD, which the auto-detection guard correctly rejects.
+    let repo: ScratchGitRepo;
+    let detachedRepo: ScratchGitRepo;
+
+    beforeAll(() => {
+      repo = makeScratchGitRepo({ prefix: 'mnemosyne-vector-remember-repo-' });
+      detachedRepo = makeScratchGitRepo({ prefix: 'mnemosyne-vector-remember-detached-', detached: true });
+    });
+
+    afterAll(() => {
+      repo.cleanup();
+      detachedRepo.cleanup();
+    });
 
     afterEach(async () => {
       if (notesDir) {
@@ -166,7 +184,7 @@ describe('VectorLayerAdapter', () => {
     it('writes a real note file and returns non-stub provenance on success', async () => {
       const adapter = await makeWritableAdapter();
       const result = await withMode('index-upserted', () =>
-        adapter.remember('a real memory to write', { scope: 'project', tag: 'test-note' }),
+        adapter.remember('a real memory to write', { scope: 'project', tag: 'test-note', cwd: repo.dir }),
       );
 
       expect(result.ok).toBe(true);
@@ -186,7 +204,7 @@ describe('VectorLayerAdapter', () => {
     it('resolves the collection via a real `swarm-memory config` call, not a guess', async () => {
       const adapter = await makeWritableAdapter();
       const result = await withMode('index-upserted', () =>
-        adapter.remember('scope-routed memory', { scope: 'project' }),
+        adapter.remember('scope-routed memory', { scope: 'project', cwd: repo.dir }),
       );
 
       expect(result.ok).toBe(true);
@@ -196,7 +214,7 @@ describe('VectorLayerAdapter', () => {
 
     it('returns RememberFailure (not a fake success) when config resolution fails', async () => {
       const adapter = await makeWritableAdapter();
-      const result = await withMode('config-error', () => adapter.remember('should not write'));
+      const result = await withMode('config-error', () => adapter.remember('should not write', { cwd: repo.dir }));
 
       expect(result.ok).toBe(false);
       if (result.ok) {
@@ -208,7 +226,7 @@ describe('VectorLayerAdapter', () => {
 
     it('returns RememberFailure and keeps the note file when the index command errors', async () => {
       const adapter = await makeWritableAdapter();
-      const result = await withMode('index-error', () => adapter.remember('should fail loudly'));
+      const result = await withMode('index-error', () => adapter.remember('should fail loudly', { cwd: repo.dir }));
 
       expect(result.ok).toBe(false);
       if (result.ok) {
@@ -221,7 +239,7 @@ describe('VectorLayerAdapter', () => {
 
     it('returns RememberFailure (not a silent success) when zero chunks are confirmed upserted', async () => {
       const adapter = await makeWritableAdapter();
-      const result = await withMode('index-zero', () => adapter.remember('nothing gets upserted'));
+      const result = await withMode('index-zero', () => adapter.remember('nothing gets upserted', { cwd: repo.dir }));
 
       expect(result.ok).toBe(false);
       if (result.ok) {
@@ -250,20 +268,18 @@ describe('VectorLayerAdapter', () => {
         adapter.remember('a memory with auto-detected flight status', {
           scope: 'project',
           tag: 'flight-status-auto',
+          cwd: repo.dir,
         }),
       );
 
       expect(result.ok).toBe(true);
       if (!result.ok) throw new Error(result.error.message);
 
-      // This test itself runs with cwd inside the real mnemosyne git repo —
-      // assert against REAL git state, not an assumed value.
-      const { stdout: branchOut } = await execFileAsync('git', [
-        'rev-parse',
-        '--abbrev-ref',
-        'HEAD',
-      ]);
-      const { stdout: shaOut } = await execFileAsync('git', ['rev-parse', 'HEAD']);
+      // Assert against the scratch repo's REAL git state, not an assumed value.
+      const { stdout: branchOut } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+        cwd: repo.dir,
+      });
+      const { stdout: shaOut } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repo.dir });
       const realBranch = branchOut.trim();
       const realSha = shaOut.trim();
 
@@ -317,6 +333,21 @@ describe('VectorLayerAdapter', () => {
       } finally {
         await rm(nonGitCwd, { recursive: true, force: true });
       }
+    });
+
+    it('fails loudly (RememberFailure, no write) when cwd is a detached HEAD', async () => {
+      const adapter = await makeWritableAdapter();
+      const result = await withMode('index-upserted', () =>
+        adapter.remember('should not write from a detached HEAD', { scope: 'project', cwd: detachedRepo.dir }),
+      );
+
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('expected remember to fail');
+      expect(result.error.code).toBe('git_context_unresolvable');
+      expect(result.error.message).toContain('detached-HEAD');
+
+      const notesDirEntries = await readdir(notesDir);
+      expect(notesDirEntries).toEqual([]);
     });
   });
 });

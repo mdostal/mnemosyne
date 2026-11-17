@@ -56,6 +56,8 @@ import { writePersonaViaCli } from '../../../../skills/mnemosyne-persona-intervi
 // eslint-disable-next-line import/extensions
 import { rememberInterviewSource } from '../../../../skills/mnemosyne-persona-interview/persona-remember.mjs';
 // eslint-disable-next-line import/extensions
+import { makeScratchGitRepo, type ScratchGitRepo } from '../../../../test/fixtures/scratch-git-repo.mjs';
+// eslint-disable-next-line import/extensions
 import {
   personaToDraftCandidate,
   writeDraftPersonaViaCli,
@@ -225,6 +227,10 @@ describe("pu-08: --commit-directly reproduces the exact pre-ticket behavior -- w
   // when run together.
   let server: ChildProcessByStdio<null, Readable, Readable>;
   let notesDir: string;
+  // PANT-831: the server's remember() auto-detects flight status from its cwd,
+  // so run it inside a scratch repo on a named branch rather than the
+  // (possibly detached-HEAD, e.g. CI) checkout.
+  let serverRepo: ScratchGitRepo;
 
   async function waitForServer(url: string, timeoutMs = 15_000): Promise<boolean> {
     const start = Date.now();
@@ -242,8 +248,9 @@ describe("pu-08: --commit-directly reproduces the exact pre-ticket behavior -- w
 
   beforeAll(async () => {
     notesDir = await mkdtemp(path.join(tmpdir(), 'mnemosyne-pu08-notes-'));
+    serverRepo = makeScratchGitRepo({ prefix: 'mnemosyne-pu08-repo-' });
     server = spawn(process.execPath, [SERVER_PATH], {
-      cwd: REPO_ROOT,
+      cwd: serverRepo.dir,
       env: {
         ...process.env,
         PORT: String(TEST_PORT),
@@ -275,6 +282,7 @@ describe("pu-08: --commit-directly reproduces the exact pre-ticket behavior -- w
       }
     }
     await rm(notesDir, { recursive: true, force: true }).catch(() => {});
+    serverRepo?.cleanup();
   });
 
   it('a full-answers interview: commits via the unchanged CLI create path AND fires remember(), producing an on-disk note -- matching the pre-ticket write+remember contract', async () => {
