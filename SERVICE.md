@@ -16,6 +16,11 @@ Every memory op runs over the live Qdrant corpus; nothing is stubbed or mocked.
 
 ## API
 
+Writes need the admin token: `POST /remember`, `/ingest`, `/lanes`,
+`/collections`, `/index`, `/reindex` and `/events/repo-merged` answer `401`
+without `Authorization: Bearer <MNEMOSYNE_ADMIN_TOKEN>`. Reads stay open. See
+"Write auth" below.
+
 | Method / path   | Body                                                        | Returns |
 |-----------------|-------------------------------------------------------------|---------|
 | `GET /`         | —                                                           | service info + endpoints (JSON) for any caller **except** one sending `Accept: text/html` (a browser), which gets a `302` to `GET /ui` instead — see below |
@@ -41,6 +46,45 @@ Every memory op runs over the live Qdrant corpus; nothing is stubbed or mocked.
 | `POST /reindex` | `{scope, directory?}`                                        | **Bulk** (re)index, scope-wide: scans `directory` (default: service's cwd; must be under `MNEMOSYNE_REINDEX_ROOTS`, else `403`) for `.ts`/`.md`/`.yaml` files and indexes each into `scope`'s collection. Returns `202 {job_id, scope, status: "running", directory, deduplicated}` **immediately**; a second call while that scope is running returns the existing `job_id`. Poll `GET /reindex/:job_id` for the outcome. Distinct from `POST /index` above — see "Two reindex paths" |
 | `GET /reindex/:job_id` | —                                                      | Reindex job status: `{status: running\|succeeded\|failed, files_scanned, files_indexed, errors, error, started_at, finished_at, trigger}`; `404` for an unknown job. `GET /reindex` lists retained jobs, newest first (in memory, last 50) |
 | `POST /events/repo-merged` | `{repo, ref}`                                      | Event-driven reindex trigger: maps `repo` → `{scope, directory}` via `MNEMOSYNE_REPO_SCOPES` and starts (or joins) that scope's job; `422` names an unmapped repo. See `docs/http-api.md` |
+
+### Write auth (`MNEMOSYNE_ADMIN_TOKEN`)
+
+Every route that changes state checks the caller first (first-cut-trust t1k):
+`POST /remember`, `POST /ingest`, `POST /lanes`, `POST /collections`,
+`POST /index`, `POST /reindex` and `POST /events/repo-merged`.
+
+- **`MNEMOSYNE_ADMIN_TOKEN` set** (every container deployment): each of those
+  routes needs `Authorization: Bearer <token>`, from loopback too. Missing or
+  wrong: `401`, and the handler never runs. The error names the env var, never
+  the token.
+- **Unset** (a standalone install on one machine): only loopback callers
+  (`127.0.0.0/8`, `::1`) may write; anyone else gets `403`. `POST /collections`
+  stays off (`403`) for everyone, as before. The service logs a WARNING at
+  start.
+- **`MNEMOSYNE_OPEN_REMEMBER=1`** keeps plain `POST /remember` open without the
+  token, for agent hooks (`hooks/post-remember.mjs`) that write back directly
+  and must not hold the admin token. The `code-graph` layer of `/remember` and
+  every other write still need it. The service logs a WARNING at start. Turn
+  it off once those hooks write through a scoped proxy instead.
+- **Open, no token:** `POST /recall`, `POST /grep`, every `GET`, and
+  `POST /cache/refresh` (clears an in-memory cache only).
+
+Callers send the token like this:
+
+```bash
+curl -sX POST localhost:8477/remember \
+  -H "authorization: Bearer $MNEMOSYNE_ADMIN_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"text": "a finding", "scope": "project"}'
+```
+
+The clients in this repo (`hooks/lib/mnemo-client.mjs`,
+`bin/mnemosyne-skill-helper.mjs` and so the MCP server, `bin/mnemosyne-reindex.mjs`,
+`mnemosyne onboard`, the `:3141` client API's remember proxy) send
+`MNEMOSYNE_ADMIN_TOKEN` from their own environment when it is set. The `/ui`
+asks for it once per tab when a write answers `401` and keeps it in
+`sessionStorage`. Never put the token in an agent runtime's environment: an
+agent that holds it can index and write anything.
 
 ### `GET /health` fields
 
@@ -175,6 +219,11 @@ MNEMOSYNE_URL=http://127.0.0.1:8477 bin/mnemosyne reindex project --dir /path/to
 curl -sX POST localhost:8477/reindex -d '{"scope":"project","directory":"/path/to/project"}'
 curl -s localhost:8477/reindex/<job_id>     # running | succeeded | failed
 ```
+
+The scan never follows a symlink (file or directory), skips dotfiles (`.env`,
+`.env.*`, `.npmrc`, ...) and hidden directories other than `.pHive` and
+`.github`, and keeps only files whose real path is under `directory`
+(`src/index-guard.mjs`).
 
 `directory` must sit under `MNEMOSYNE_REINDEX_ROOTS` (`:`-separated; unset
 means only the service's cwd), so set it to cover every checkout you reindex,
@@ -396,6 +445,13 @@ become a way to wipe a Qdrant collection. There is no such verb in the
   lanes list in the UI) and **at least one** path — both are validated
   (`400`) before any subprocess is spawned. There is no "reindex
   everything" / no-target / wildcard mode.
+- Needs the admin token (see "Write auth"). Every path must sit under
+  `MNEMOSYNE_REINDEX_ROOTS`, as written and after symlinks (`403`
+  otherwise). Mnemosyne walks directories itself (`src/index-guard.mjs`)
+  and hands the CLI explicit regular files only: a symlink (such as
+  `x.json -> ../.env`), a dotfile or a hidden directory is never passed on,
+  and comes back in the response's `skipped: [{path, reason}]`. When nothing
+  is left, the CLI is not run and the response says `reindexed: false`.
 - Runs with the CLI's **default pruning behavior** — it never passes
   `--no-prune`. Per `swarm_memory/indexer.py`'s `index_paths()`, default
   pruning only deletes points matching that **exact file's own

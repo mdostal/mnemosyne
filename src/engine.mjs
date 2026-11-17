@@ -7,7 +7,7 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { writeFile, mkdir, readFile, rename, unlink, readdir } from "node:fs/promises";
+import { writeFile, mkdir, readFile, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
@@ -22,6 +22,7 @@ import {
 } from "./flight-status.mjs";
 import { filterHitsByStatus } from "./status-filter.mjs";
 import { decorateRefs } from "./refs.mjs";
+import { walkIndexable } from "./index-guard.mjs";
 
 const execFileP = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -898,24 +899,14 @@ async function writeLane(name, collection, ladderArr) {
 // Distinct from reindexPaths(collection, paths) above (POST /index, the
 // operator-targeted action) — see SERVICE.md's "Two reindex paths". This is
 // the bulk action: for initial index builds or recovering a stale index
-// across a whole directory. Extensions + ignored directories to scan.
-const REINDEX_EXTENSIONS = new Set([".ts", ".md", ".yaml", ".yml"]);
-const REINDEX_IGNORED_DIRECTORIES = new Set([".git", "node_modules", "dist", "build", "coverage"]);
+// across a whole directory. Extensions to scan; the walk itself is
+// index-guard.mjs's (first-cut-trust t1k): symlinks are never followed,
+// dotfiles (.env, .env.*) and hidden directories are skipped, and every file
+// must stay under `directory`.
+export const REINDEX_EXTENSIONS = new Set([".ts", ".md", ".yaml", ".yml"]);
 
-async function* walkReindexable(directory) {
-  const entries = await readdir(directory, { withFileTypes: true });
-  for (const entry of entries) {
-    const entryPath = path.join(directory, entry.name);
-    if (entry.isDirectory()) {
-      if (!REINDEX_IGNORED_DIRECTORIES.has(entry.name)) {
-        yield* walkReindexable(entryPath);
-      }
-      continue;
-    }
-    if (entry.isFile() && REINDEX_EXTENSIONS.has(path.extname(entry.name))) {
-      yield entryPath;
-    }
-  }
+export function walkReindexable(directory, opts = {}) {
+  return walkIndexable(directory, { extensions: REINDEX_EXTENSIONS, ...opts });
 }
 
 // reindex(scope, {directory}) — scans `directory` (default cwd) for

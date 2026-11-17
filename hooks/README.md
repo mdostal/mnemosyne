@@ -156,6 +156,7 @@ only stdin and env and never call Multica or GitHub.
 | Var | Default | Meaning |
 |-----|---------|---------|
 | `MNEMOSYNE_URL` | `http://127.0.0.1:8477` | service base URL |
+| `MNEMOSYNE_ADMIN_TOKEN` | — | sent as `Authorization: Bearer` when set; the service's `POST /remember` needs it unless it runs with `MNEMOSYNE_OPEN_REMEMBER=1`. Never set it in an agent runtime |
 | `MNEMOSYNE_SCOPE` | — | force a scope (overrides target repo and cwd; not stdin `scope`) |
 | `MNEMOSYNE_TARGET_REPO` | — | the ticket's `target_repo` (`owner/name`); resolves scope ahead of the cwd basename |
 | `MNEMOSYNE_ROLE` | — | role when not in stdin (`orchestrator`/`architect`/`developer`) |

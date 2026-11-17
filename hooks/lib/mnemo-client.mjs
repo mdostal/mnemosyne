@@ -30,13 +30,20 @@ const CHILD_ENV = {
   PATH: `/opt/homebrew/bin:${homedir()}/.local/bin:${process.env.PATH || ""}`,
 };
 
+// Mnemosyne's write routes need MNEMOSYNE_ADMIN_TOKEN as a Bearer token
+// (first-cut-trust t1k); sent only when this process has it.
+function adminAuthHeader() {
+  const token = process.env.MNEMOSYNE_ADMIN_TOKEN;
+  return token ? { authorization: `Bearer ${token}` } : {};
+}
+
 async function httpJson(method, route, body) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), HTTP_TIMEOUT_MS);
   try {
     const res = await fetch(MNEMOSYNE_URL + route, {
       method,
-      headers: body ? { "content-type": "application/json" } : undefined,
+      headers: { ...(body ? { "content-type": "application/json" } : {}), ...adminAuthHeader() },
       body: body ? JSON.stringify(body) : undefined,
       signal: ctrl.signal,
     });

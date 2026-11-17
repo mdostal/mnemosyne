@@ -38,7 +38,11 @@ export async function run(argv, { log = console.log, warn = console.error } = {}
   try {
     res = await fetch(`${args.url}/reindex`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      // POST /reindex needs MNEMOSYNE_ADMIN_TOKEN as a Bearer token when the service has one.
+      headers: {
+        "content-type": "application/json",
+        ...(process.env.MNEMOSYNE_ADMIN_TOKEN ? { authorization: `Bearer ${process.env.MNEMOSYNE_ADMIN_TOKEN}` } : {}),
+      },
       body: JSON.stringify({ scope: args.scope, directory: args.directory }),
     });
   } catch (e) {
