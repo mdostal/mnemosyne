@@ -133,6 +133,9 @@ jobs are never evicted). A restart forgets them.
 | `MNEMOSYNE_REPO_SCOPES` | JSON object mapping repo to `{scope, directory}`, for example `{"mdostal/mnemosyne": {"scope": "project", "directory": "/srv/repos/mnemosyne"}}`. Keys are matched case-insensitively. `https://github.com/…` and `.git` are stripped. A malformed value fails the service at startup. |
 | `MNEMOSYNE_REINDEX_JOB_HISTORY` | How many jobs to keep (default `50`). |
 | `MNEMOSYNE_ADMIN_TOKEN` | Bearer token every write route needs (`POST /remember`, `/ingest`, `/lanes`, `/collections`, `/index`, `/reindex`, `/events/repo-merged`): `Authorization: Bearer <token>`, else `401`. Unset: writes from loopback only (`403` for anyone else), and `POST /collections` is off. See `SERVICE.md`, "Write auth". |
+| `MNEMOSYNE_HOST` | Interface to bind (default `127.0.0.1`). Set `0.0.0.0` only together with `MNEMOSYNE_API_TOKEN`. |
+| `MNEMOSYNE_API_TOKEN` | Bearer token every route except `GET /health`, `GET /healthz` and `/ui` needs (`401`, `code: "api_token_required"` otherwise). The admin token is accepted too. Unset: loopback callers only (`403`, `code: "api_token_not_configured"`, for anyone else). See `SERVICE.md`, "Network and read auth". |
+| `MNEMOSYNE_API_TOKEN_FILE` | File holding the API token (from the local vault), read when `MNEMOSYNE_API_TOKEN` is unset. Unreadable or empty: the service refuses to start. |
 | `MNEMOSYNE_OPEN_REMEMBER` | `1` keeps plain `POST /remember` open without the token, for agent hooks that write back directly. Off by default. |
 | `MNEMOSYNE_PYTHON_BIN` | Python used for the read-only collection-existence check and `/health`'s collections listing (default `python3`). |
 | `MNEMOSYNE_SCOPE_CHECK_MAX_AGE_MS` | How long `/health` reuses its cached per-scope collection check before refreshing it in the background (default `300000`). |

@@ -156,6 +156,8 @@ only stdin and env and never call Multica or GitHub.
 | Var | Default | Meaning |
 |-----|---------|---------|
 | `MNEMOSYNE_URL` | `http://127.0.0.1:8477` | service base URL |
+| `MNEMOSYNE_API_TOKEN` | — | sent as `Authorization: Bearer` when set and no admin token is; the service needs it on every route but `/health(z)` once it has one (PANT-1398). Safe to give agent runtimes: it only reads |
+| `MNEMOSYNE_API_TOKEN_FILE` | — | file holding the API token (written by the local vault), read when `MNEMOSYNE_API_TOKEN` is unset |
 | `MNEMOSYNE_ADMIN_TOKEN` | — | sent as `Authorization: Bearer` when set; the service's `POST /remember` needs it unless it runs with `MNEMOSYNE_OPEN_REMEMBER=1`. Never set it in an agent runtime |
 | `MNEMOSYNE_SCOPE` | — | force a scope (overrides target repo and cwd; not stdin `scope`) |
 | `MNEMOSYNE_TARGET_REPO` | — | the ticket's `target_repo` (`owner/name`); resolves scope ahead of the cwd basename |

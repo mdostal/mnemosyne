@@ -16,10 +16,13 @@ Every memory op runs over the live Qdrant corpus; nothing is stubbed or mocked.
 
 ## API
 
-Writes need the admin token: `POST /remember`, `/ingest`, `/lanes`,
-`/collections`, `/index`, `/reindex` and `/events/repo-merged` answer `401`
-without `Authorization: Bearer <MNEMOSYNE_ADMIN_TOKEN>`. Reads stay open. See
-"Write auth" below.
+The service binds `127.0.0.1` unless `MNEMOSYNE_HOST` says otherwise, and
+every route except `GET /health`, `GET /healthz` and the static `/ui` shell
+needs `Authorization: Bearer <MNEMOSYNE_API_TOKEN>` (see "Network and read
+auth" below). Writes need the admin token on top: `POST /remember`, `/ingest`,
+`/lanes`, `/collections`, `/index`, `/reindex` and `/events/repo-merged` answer
+`401` without `Authorization: Bearer <MNEMOSYNE_ADMIN_TOKEN>`. See "Write auth"
+below.
 
 | Method / path   | Body                                                        | Returns |
 |-----------------|-------------------------------------------------------------|---------|
@@ -47,6 +50,49 @@ without `Authorization: Bearer <MNEMOSYNE_ADMIN_TOKEN>`. Reads stay open. See
 | `GET /reindex/:job_id` | —                                                      | Reindex job status: `{status: running\|succeeded\|failed, files_scanned, files_indexed, errors, error, started_at, finished_at, trigger}`; `404` for an unknown job. `GET /reindex` lists retained jobs, newest first (in memory, last 50) |
 | `POST /events/repo-merged` | `{repo, ref}`                                      | Event-driven reindex trigger: maps `repo` → `{scope, directory}` via `MNEMOSYNE_REPO_SCOPES` and starts (or joins) that scope's job; `422` names an unmapped repo. See `docs/http-api.md` |
 
+### Network and read auth (`MNEMOSYNE_HOST`, `MNEMOSYNE_API_TOKEN`)
+
+Before PANT-1398 the service listened on every interface (`*:8477`) and
+answered `/recall`, `/grep`, `/note` and the graph routes to anyone on the
+local network.
+
+- **Bind address:** `MNEMOSYNE_HOST`, default `127.0.0.1`. A container that
+  other containers reach by name (`http://mnemosyne:8477`) sets
+  `MNEMOSYNE_HOST=0.0.0.0` explicitly, and must then set the API token. The
+  `:3141` client API binds `MNEMOSYNE_CLIENT_API_HOST`, default `127.0.0.1`;
+  it has no auth of its own, so keep it on loopback.
+- **API token:** every route except `GET /health`, `GET /healthz` and the
+  static `/ui` shell needs `Authorization: Bearer <token>`. The token lives in
+  the local vault (Portunus) and reaches the service either as
+  `MNEMOSYNE_API_TOKEN` or as a file named by `MNEMOSYNE_API_TOKEN_FILE`
+  (mode `0600`). The admin token is accepted too. Missing or wrong: `401`
+  with `code: "api_token_required"`, and the handler never runs. A
+  `MNEMOSYNE_API_TOKEN_FILE` that is set but unreadable or empty stops the
+  service at start instead of silently running without a token.
+- **No API token set** (a standalone install on one machine): only loopback
+  callers are served; anyone else gets `403` with
+  `code: "api_token_not_configured"` on every route but the public ones. The
+  service logs a WARNING at start, louder when `MNEMOSYNE_HOST` is not
+  loopback.
+- **Reverse proxies on the same host** (`tailscale serve`, nginx) forward
+  requests from `127.0.0.1`, so they pass the loopback rule. Set the API token
+  whenever the service is served beyond this machine.
+
+Clients resolve the token the same way: `MNEMOSYNE_ADMIN_TOKEN` when the
+process holds it (it passes both gates, and a request carries one
+Authorization header), else `MNEMOSYNE_API_TOKEN`, else the contents of
+`MNEMOSYNE_API_TOKEN_FILE`. That covers the hooks, the skill helper and the
+MCP server, the reindex CLI, `mnemosyne onboard` and the `:3141` remember
+proxy. The `/ui` asks for the API token once per tab on a `401` and keeps it
+in `sessionStorage`. The API token only reads, so agent runtimes may hold it;
+they still must not hold the admin token.
+
+```bash
+# put the token in the vault once, then hand it to the service and clients:
+export MNEMOSYNE_API_TOKEN_FILE=~/.config/mnemosyne/api-token   # 0600, written by Portunus
+curl -s localhost:8477/scopes -H "authorization: Bearer $(cat "$MNEMOSYNE_API_TOKEN_FILE")"
+```
+
 ### Write auth (`MNEMOSYNE_ADMIN_TOKEN`)
 
 Every route that changes state checks the caller first (first-cut-trust t1k):
@@ -66,8 +112,9 @@ Every route that changes state checks the caller first (first-cut-trust t1k):
   and must not hold the admin token. The `code-graph` layer of `/remember` and
   every other write still need it. The service logs a WARNING at start. Turn
   it off once those hooks write through a scoped proxy instead.
-- **Open, no token:** `POST /recall`, `POST /grep`, every `GET`, and
-  `POST /cache/refresh` (clears an in-memory cache only).
+- **No admin token needed:** `POST /recall`, `POST /grep`, every `GET`, and
+  `POST /cache/refresh` (clears an in-memory cache only). Since PANT-1398
+  they need the API token instead (see above).
 
 Callers send the token like this:
 
@@ -589,7 +636,7 @@ npm run test:e2e
 
 ## Port / route
 
-- Local: `http://127.0.0.1:8477`
+- Local: `http://127.0.0.1:8477` (bound to loopback only by default; `MNEMOSYNE_HOST` overrides)
 - Tailnet (if served): `https://hive.tail9a130d.ts.net:8448` → `127.0.0.1:8477`
 
 ## Guardrails honored
