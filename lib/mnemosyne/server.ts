@@ -142,6 +142,7 @@
 import http from 'node:http';
 import { stat } from 'node:fs/promises';
 import { MnemosyneClient } from './client.js';
+import { mnemosyneAuthHeader } from './service-auth.js';
 import type { Layer, Scope } from './interfaces.js';
 import { ingestDocument } from './ingest/ingestDocument.js';
 import { crawlAndIngest, type CrawlAndIngestOptions } from './ingest/crawlAndIngest.js';
@@ -280,11 +281,9 @@ async function fireDraftApprovalRemember(
   try {
     const res = await fetch(`http://127.0.0.1:${REMEMBER_SERVICE_PORT}/remember`, {
       method: 'POST',
-      // POST /remember needs MNEMOSYNE_ADMIN_TOKEN as a Bearer token when the service has one.
-      headers: {
-        'content-type': 'application/json',
-        ...(process.env.MNEMOSYNE_ADMIN_TOKEN ? { authorization: `Bearer ${process.env.MNEMOSYNE_ADMIN_TOKEN}` } : {}),
-      },
+      // POST /remember needs MNEMOSYNE_ADMIN_TOKEN as a Bearer token when the
+      // service has one, and the API token otherwise (PANT-1398).
+      headers: { 'content-type': 'application/json', ...mnemosyneAuthHeader() },
       body: JSON.stringify({ text, scope, tag }),
     });
     const data = (await res.json()) as {
@@ -1039,7 +1038,10 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
+// PANT-1398: loopback only by default, like src/server.mjs. This API has no
+// auth of its own, so MNEMOSYNE_CLIENT_API_HOST should stay a loopback address.
+const HOST = (process.env.MNEMOSYNE_CLIENT_API_HOST || '').trim() || '127.0.0.1';
+server.listen(PORT, HOST, () => {
   // eslint-disable-next-line no-console
-  console.log(`[mnemosyne] client HTTP API listening on http://127.0.0.1:${PORT} (root=${ROOT_DIRECTORY})`);
+  console.log(`[mnemosyne] client HTTP API listening on http://${HOST}:${PORT} (root=${ROOT_DIRECTORY})`);
 });

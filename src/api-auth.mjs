@@ -111,3 +111,22 @@ export function createApiGate({ apiToken, adminToken, isLocalPeer }) {
     ];
   };
 }
+
+/**
+ * The Authorization header an in-repo client sends to src/server.mjs: the
+ * admin token when this process holds it (it passes both the read gate and
+ * the write gate, and a request carries only one Authorization header), else
+ * the API token, else nothing. Never throws: a hook must not crash on a bad
+ * token file; the server's 401/403 names what is missing.
+ */
+export function clientAuthHeader(env = process.env) {
+  let token = String(env.MNEMOSYNE_ADMIN_TOKEN || "").trim();
+  if (!token) {
+    try {
+      token = readApiToken(env);
+    } catch {
+      token = "";
+    }
+  }
+  return token ? { authorization: `Bearer ${token}` } : {};
+}
