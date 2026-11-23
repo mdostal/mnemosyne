@@ -69,6 +69,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { clientAuthHeader } from "../src/api-auth.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -191,11 +192,12 @@ export async function ensureRunning({
 // returns directly) — no reformatting, no field-dropping, no new
 // business logic, no CLI shell-out of any kind.
 
-// Mnemosyne's write routes need MNEMOSYNE_ADMIN_TOKEN as a Bearer token
-// (first-cut-trust t1k); sent only when this process has it.
+// Every Mnemosyne route but /health(z) needs a Bearer token (PANT-1398):
+// MNEMOSYNE_ADMIN_TOKEN when this process has it (writes need it,
+// first-cut-trust t1k), else MNEMOSYNE_API_TOKEN / MNEMOSYNE_API_TOKEN_FILE.
+// The MCP server's tools go through apiFetch, so they send it too.
 function adminAuthHeader() {
-  const token = process.env.MNEMOSYNE_ADMIN_TOKEN;
-  return token ? { authorization: `Bearer ${token}` } : {};
+  return clientAuthHeader();
 }
 
 async function apiFetch(port, method, urlPath, body) {

@@ -71,6 +71,7 @@
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { MnemosyneClient } from '../client.js';
+import { mnemosyneAuthHeader } from '../service-auth.js';
 import { computeMemoryLevels, type ComputedMemoryLevel } from '../memory-levels/computeMemoryLevels.js';
 import { syncAllHarnesses, type SyncResult } from '../layer1/sync.js';
 import { repoLocalPersonaPath, writeRepoLocalPersona } from '../layer1/persona-store-repo-local.js';
@@ -242,11 +243,9 @@ async function runVectorIndexStep(
   try {
     res = await fetch(`${baseUrl}/reindex`, {
       method: 'POST',
-      // POST /reindex needs MNEMOSYNE_ADMIN_TOKEN as a Bearer token when the service has one.
-      headers: {
-        'content-type': 'application/json',
-        ...(process.env.MNEMOSYNE_ADMIN_TOKEN ? { authorization: `Bearer ${process.env.MNEMOSYNE_ADMIN_TOKEN}` } : {}),
-      },
+      // POST /reindex needs MNEMOSYNE_ADMIN_TOKEN as a Bearer token when the
+      // service has one, and the API token otherwise (PANT-1398).
+      headers: { 'content-type': 'application/json', ...mnemosyneAuthHeader() },
       body: JSON.stringify({ scope: scopeId, directory: repoRoot }),
     });
   } catch (error) {

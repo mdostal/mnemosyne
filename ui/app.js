@@ -92,6 +92,98 @@ function persistConnectBannerCollapsed(collapsed) {
 })();
 // ==================== end aha-04-ui-connect-banner ====================
 
+// --- API token for every route (PANT-1398) ----------------------------------
+// The service answers only GET /health, /healthz and this /ui shell without a
+// Bearer token. Every same-origin fetch() below goes through this wrapper:
+// it sends the admin token when the tab has one (it passes the read gate too),
+// else the API token, and on a 401 `api_token_required` asks once for
+// MNEMOSYNE_API_TOKEN, keeps it in sessionStorage for this tab (never in the
+// page) and retries once. Cross-origin calls (the :3141 client API, the
+// persona service) are left untouched.
+const API_TOKEN_STORAGE_KEY = "mnemosyne.apiToken";
+const ADMIN_TOKEN_KEY_FOR_READS = "mnemosyne.adminToken";
+
+(function installApiTokenFetch() {
+  const nativeFetch = typeof globalThis.fetch === "function" ? globalThis.fetch.bind(globalThis) : null;
+  if (!nativeFetch) return;
+
+  function stored(key) {
+    try {
+      return window.sessionStorage.getItem(key) || "";
+    } catch {
+      return "";
+    }
+  }
+
+  function isSameOrigin(input) {
+    try {
+      const raw = typeof input === "string" ? input : input && input.url;
+      if (!raw) return false;
+      const here = globalThis.location && globalThis.location.origin;
+      if (!here || here === "null") return raw.startsWith("/") && !raw.startsWith("//");
+      return new URL(raw, globalThis.location.href).origin === here;
+    } catch {
+      return false;
+    }
+  }
+
+  function withToken(init) {
+    const headers = new Headers((init && init.headers) || {});
+    if (!headers.has("authorization")) {
+      const token = stored(ADMIN_TOKEN_KEY_FOR_READS) || stored(API_TOKEN_STORAGE_KEY);
+      if (token) headers.set("authorization", `Bearer ${token}`);
+    }
+    return { ...(init || {}), headers };
+  }
+
+  // One prompt at a time: the shell fires several loads at once on open.
+  let pendingPrompt = null;
+  function askForApiToken() {
+    if (!pendingPrompt) {
+      pendingPrompt = Promise.resolve().then(() => {
+        const token = window.prompt("Mnemosyne needs its API token (MNEMOSYNE_API_TOKEN):", "");
+        if (!token || !token.trim()) return false;
+        try {
+          window.sessionStorage.setItem(API_TOKEN_STORAGE_KEY, token.trim());
+        } catch {
+          return false;
+        }
+        return true;
+      });
+      pendingPrompt.finally(() => {
+        setTimeout(() => {
+          pendingPrompt = null;
+        }, 0);
+      });
+    }
+    return pendingPrompt;
+  }
+
+  async function needsApiToken(res) {
+    if (res.status !== 401) return false;
+    try {
+      const body = await res.clone().json();
+      return body && body.code === "api_token_required";
+    } catch {
+      return false;
+    }
+  }
+
+  globalThis.fetch = async function apiTokenFetch(input, init) {
+    if (!isSameOrigin(input)) return nativeFetch(input, init);
+    const res = await nativeFetch(input, withToken(init));
+    if (!(await needsApiToken(res))) return res;
+    // A stored token that is now wrong: drop it before asking again.
+    try {
+      window.sessionStorage.removeItem(API_TOKEN_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+    if (!(await askForApiToken())) return res;
+    return nativeFetch(input, withToken(init));
+  };
+})();
+
 const livelinessStatusEl = document.getElementById("liveliness-status");
 const livelinessDetailEl = document.getElementById("liveliness-detail");
 const settingsStatusEl = document.getElementById("settings-status");
