@@ -95,10 +95,13 @@
 // in-flight requests for up to MNEMOSYNE_SHUTDOWN_GRACE_MS (default 10s)
 // before exiting 0 — see "Graceful shutdown" at the bottom of this file.
 //
-// PORT env (default 8477).
+// PORT env (default 8477). MNEMOSYNE_HOST env (default 127.0.0.1): the
+// interface to bind. Every route except GET /health, GET /healthz and the
+// static /ui shell needs MNEMOSYNE_API_TOKEN (or MNEMOSYNE_ADMIN_TOKEN) as
+// `Authorization: Bearer <token>`; with no API token set, only loopback
+// callers are served. See src/api-auth.mjs (PANT-1398).
 
 import http from "node:http";
-import { timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { readFileSync, realpathSync } from "node:fs";
@@ -139,6 +142,14 @@ import {
 import { createHttpMetrics } from "./observability/http-metrics.mjs";
 import { createIngest } from "./ingest.mjs";
 import { resolveIndexTargets } from "./index-guard.mjs";
+import {
+  bearerMatches,
+  createApiGate,
+  isLoopbackAddress,
+  isLoopbackHost,
+  readApiToken,
+  resolveHost,
+} from "./api-auth.mjs";
 
 const PORT = Number(process.env.PORT || 8477);
 
@@ -270,17 +281,7 @@ function safeDecode(s) {
 // route is off by default and only answers a caller holding the operator's
 // MNEMOSYNE_ADMIN_TOKEN.
 function adminTokenMatches(req, token) {
-  const header = String(req.headers.authorization || "");
-  const m = /^Bearer\s+(.+)$/i.exec(header);
-  if (!m) return false;
-  const given = Buffer.from(m[1].trim());
-  const want = Buffer.from(token);
-  return given.length === want.length && timingSafeEqual(given, want);
-}
-
-function isLoopbackAddress(address) {
-  const a = String(address || "");
-  return a === "::1" || /^(::ffff:)?127\./.test(a);
+  return bearerMatches(req, token);
 }
 
 function isTruthyEnv(value) {
@@ -300,6 +301,10 @@ export function createMnemosyneServer(overrides = {}) {
   const openRemember =
     overrides.openRemember !== undefined ? overrides.openRemember : isTruthyEnv(process.env.MNEMOSYNE_OPEN_REMEMBER);
   const isLocalPeer = overrides.isLocalPeer || ((req) => isLoopbackAddress(req.socket.remoteAddress));
+  // PANT-1398: every route but /health, /healthz and the /ui shell needs the
+  // API token (or the admin token). See src/api-auth.mjs.
+  const apiToken = overrides.apiToken !== undefined ? overrides.apiToken : readApiToken();
+  const apiGate = createApiGate({ apiToken, adminToken, isLocalPeer });
   const recallFn = overrides.recall || recall;
   const grepFn = overrides.grep || grep;
   const rememberFn = overrides.remember || remember;
@@ -408,6 +413,9 @@ export function createMnemosyneServer(overrides = {}) {
     });
     trackInFlight(res);
     try {
+      const denied = apiGate(req, url.pathname);
+      if (denied) return send(res, denied[0], denied[1]);
+
       if (route === "GET /") {
         // Browser navigation (Accept includes text/html) -> land on the UI shell.
         // Everyone else (curl, fetch() with no/JSON Accept, existing consumers)
@@ -961,9 +969,17 @@ if (isDirectRun()) {
   const server = createMnemosyneServer();
   process.on("SIGTERM", () => shutdown(server, "SIGTERM"));
   process.on("SIGINT", () => shutdown(server, "SIGINT"));
-  server.listen(PORT, () => {
+  const HOST = resolveHost();
+  server.listen(PORT, HOST, () => {
     // eslint-disable-next-line no-console
-    console.log(`[mnemosyne] memory god listening on http://127.0.0.1:${PORT}`);
+    console.log(`[mnemosyne] memory god listening on http://${HOST.includes(":") ? `[${HOST}]` : HOST}:${PORT}`);
+    if (!readApiToken()) {
+      console.warn(
+        isLoopbackHost(HOST)
+          ? "[mnemosyne] WARNING: MNEMOSYNE_API_TOKEN is not set; only loopback callers are served"
+          : `[mnemosyne] WARNING: bound to ${HOST} but MNEMOSYNE_API_TOKEN is not set; every non-loopback caller gets 403`
+      );
+    }
     if (!process.env.MNEMOSYNE_ADMIN_TOKEN) {
       console.warn("[mnemosyne] WARNING: MNEMOSYNE_ADMIN_TOKEN is not set; write routes accept loopback callers only");
     }
