@@ -3,7 +3,8 @@
 // 1. Every state-changing route needs MNEMOSYNE_ADMIN_TOKEN as a Bearer token:
 //    401 without it, 401 with a wrong one, and the handler is never reached.
 //    With no token configured, only loopback callers may write (403 otherwise).
-//    Reads (/recall, /grep, GETs) stay open.
+//    Reads (/recall, /grep, GETs) need no admin token; since PANT-1398 they
+//    need MNEMOSYNE_API_TOKEN instead (test/api-auth.mjs).
 // 2. The indexer never reads through a symlink, a dotfile or a hidden
 //    directory, and never leaves the indexed root: a `x.json -> ../.env` link
 //    is skipped by POST /index and by POST /reindex's directory walk.
@@ -283,8 +284,10 @@ try {
       ok(res.status === 403, `no MNEMOSYNE_ADMIN_TOKEN, non-loopback caller: POST ${label} -> 403 (got ${res.status})`);
     }
     ok(calls.length === 0, "no write handler ran for a non-loopback caller");
+    // PANT-1398: with no MNEMOSYNE_API_TOKEN either, reads from a non-loopback
+    // caller are refused too (see test/api-auth.mjs).
     const recall = await post(url, "/recall", { query: "q", scope: "top" });
-    ok(recall.status === 200, `no MNEMOSYNE_ADMIN_TOKEN, non-loopback caller: POST /recall still answers (got ${recall.status})`);
+    ok(recall.status === 403, `no tokens, non-loopback caller: POST /recall -> 403 (got ${recall.status})`);
   });
   await withServer({ adminToken: "" }, async (url) => {
     const rem = await post(url, "/remember", { text: "local write", scope: "top" });

@@ -19,7 +19,8 @@
 // Live tests write into a real Mnemosyne corpus, so they only run with
 // MNEMOSYNE_LIVE_TESTS=1. Without it MNEMOSYNE_URL is also stripped from the
 // children's environment, so an agent/dev shell that exports MNEMOSYNE_URL for
-// its hooks can't leak test writes into the real service.
+// its hooks can't leak test writes into the real service. MNEMOSYNE_API_TOKEN
+// and MNEMOSYNE_API_TOKEN_FILE are stripped the same way.
 
 import { spawn, spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
@@ -123,7 +124,13 @@ function commandFor(file) {
 
 function childEnv() {
   const env = { ...process.env };
-  if (!LIVE) delete env.MNEMOSYNE_URL;
+  if (!LIVE) {
+    delete env.MNEMOSYNE_URL;
+    // A dev shell that exports the API token for its hooks would otherwise
+    // make every in-process test server demand it (PANT-1398).
+    delete env.MNEMOSYNE_API_TOKEN;
+    delete env.MNEMOSYNE_API_TOKEN_FILE;
+  }
   return env;
 }
 
