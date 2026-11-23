@@ -69,6 +69,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { clientAuthHeader } from "../src/api-auth.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -191,10 +192,18 @@ export async function ensureRunning({
 // returns directly) — no reformatting, no field-dropping, no new
 // business logic, no CLI shell-out of any kind.
 
+// Every Mnemosyne route but /health(z) needs a Bearer token (PANT-1398):
+// MNEMOSYNE_ADMIN_TOKEN when this process has it (writes need it,
+// first-cut-trust t1k), else MNEMOSYNE_API_TOKEN / MNEMOSYNE_API_TOKEN_FILE.
+// The MCP server's tools go through apiFetch, so they send it too.
+function adminAuthHeader() {
+  return clientAuthHeader();
+}
+
 async function apiFetch(port, method, urlPath, body) {
   const res = await fetch(`${baseUrl(port)}${urlPath}`, {
     method,
-    headers: body !== undefined ? { "content-type": "application/json" } : undefined,
+    headers: { ...(body !== undefined ? { "content-type": "application/json" } : {}), ...adminAuthHeader() },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const data = await res.json();
@@ -212,8 +221,9 @@ export const recallAction = (port, { query, scope, hits, escalate, min_score, ra
   apiFetch(port, "POST", "/recall", { query, scope, hits, escalate, min_score, radius });
 
 // rememberAction — thin pass-through to POST /remember.
-export const rememberAction = (port, { text, scope, tag } = {}) =>
-  apiFetch(port, "POST", "/remember", { text, scope, tag });
+// status + source_ref are optional explicit provenance (PANT-977).
+export const rememberAction = (port, { text, scope, tag, status, source_ref } = {}) =>
+  apiFetch(port, "POST", "/remember", { text, scope, tag, status, source_ref });
 
 // grepAction — thin pass-through to POST /grep.
 export const grepAction = (port, { query, scope, hits, escalate, radius } = {}) =>

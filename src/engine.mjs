@@ -7,13 +7,22 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { writeFile, mkdir, readFile, rename, unlink, readdir } from "node:fs/promises";
+import { writeFile, mkdir, readFile, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { autoDetectWriteContext, detectGitContext, GitContextDetectionError, STATUSES } from "./flight-status.mjs";
+import {
+  autoDetectWriteContext,
+  detectGitContext,
+  GitContextDetectionError,
+  NO_COMMIT,
+  normalizeSourceRef,
+  STATUSES,
+} from "./flight-status.mjs";
 import { filterHitsByStatus } from "./status-filter.mjs";
+import { decorateRefs } from "./refs.mjs";
+import { walkIndexable } from "./index-guard.mjs";
 
 const execFileP = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -376,7 +385,8 @@ export async function recall(query, scope, opts = {}) {
   const graphHits = await graphLayer.recall(String(query));
   const withGraph = mergeLayerResults(recallResult, graphHits);
   withGraph.layers_attempted = [...recallResult.layers_attempted, "code-graph"];
-  return applyStatusFilter(withGraph, opts);
+  // PANT-838: host-independent `ref` per hit (see refs.mjs).
+  return decorateRefs(await applyStatusFilter(withGraph, opts));
 }
 
 // applyStatusFilter — la-05-recall-status-filtering. Resolves the caller's
@@ -421,11 +431,31 @@ async function applyStatusFilter(result, opts) {
 // la-04-flight-status-schema: every write also carries a flight `status`
 // (provisional|confirmed|superseded) + `source_ref` ({branch, commit_sha,
 // pr_url}), auto-detected from real cwd git state unless the caller passes
-// both explicitly. Auto-detection failing on an ambiguous repo state
+// both explicitly. An explicit sourceRef may omit commit_sha (PANT-977: a
+// client-level note has no commit); the header then reads `commit=none`.
+// Auto-detection failing on an ambiguous repo state
 // (detached HEAD, no repo, `git` missing) fails the whole write loudly —
 // same "never write with guessed data" contract as this function's existing
 // swarm-memory failure handling, and this story's explicit risk mitigation.
 // Recall-side filtering on `status` is la-05 — not implemented here.
+// Note files are named `<timestamp>-<tag>-<random>.md` and created with the
+// `wx` flag, so two same-tag writes in the same millisecond can never
+// overwrite each other: the random suffix makes a clash vanishingly
+// unlikely, and `wx` turns the rare clash that does happen into an EEXIST we
+// retry with a fresh suffix instead of a silent overwrite.
+async function writeNewNoteFile(base, content) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const file = path.join(NOTES_DIR, `${base}-${randomBytes(4).toString("hex")}.md`);
+    try {
+      await writeFile(file, content, { encoding: "utf8", flag: "wx" });
+      return file;
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+    }
+  }
+  throw new Error(`could not allocate a unique note file name for ${base}`);
+}
+
 export async function remember(text, scope, opts = {}) {
   if (!text || !String(text).trim()) {
     const err = new Error("text is required");
@@ -460,8 +490,14 @@ export async function remember(text, scope, opts = {}) {
       err.status = 400;
       throw err;
     }
+    try {
+      sourceRef = normalizeSourceRef(explicitSourceRef);
+    } catch (e) {
+      const err = new Error(`invalid source_ref: ${e.message}`);
+      err.status = 400;
+      throw err;
+    }
     status = explicitStatus;
-    sourceRef = explicitSourceRef;
   } else {
     try {
       const detected = await autoDetectWriteContext({ cwd: opts.cwd, defaultBranch: opts.defaultBranch });
@@ -470,7 +506,8 @@ export async function remember(text, scope, opts = {}) {
     } catch (e) {
       if (e instanceof GitContextDetectionError) {
         const err = new Error(
-          `write-through rejected: flight-status auto-detection failed: ${e.message}. Pass opts.status and opts.sourceRef explicitly to write anyway.`
+          `write-through rejected: flight-status auto-detection failed: ${e.message}. Pass opts.status and opts.sourceRef explicitly ` +
+            `(HTTP/MCP: \`status\` + \`source_ref\` in the body) to write anyway.`
         );
         err.status = 422;
         throw err;
@@ -482,11 +519,10 @@ export async function remember(text, scope, opts = {}) {
   await mkdir(NOTES_DIR, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const tag = (opts.tag || "note").replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 40);
-  const file = path.join(NOTES_DIR, `${stamp}-${tag}.md`);
   const header =
     `<!-- remembered via Mnemosyne @ ${new Date().toISOString()} scope=${useScope} ` +
-    `status=${status} branch=${sourceRef.branch} commit=${sourceRef.commit_sha} -->\n`;
-  await writeFile(file, header + String(text) + "\n", "utf8");
+    `status=${status} branch=${sourceRef.branch} commit=${sourceRef.commit_sha ?? NO_COMMIT} -->\n`;
+  const file = await writeNewNoteFile(`${stamp}-${tag}`, header + String(text) + "\n");
 
   // Direct-mapped scope -> collection; index appends this one new file. The
   // file above is already on disk and is kept regardless of what happens
@@ -626,7 +662,7 @@ export async function grep(query, scope, opts = {}) {
   }
   
   const total = scopesArr.reduce((n, s) => n + (s.hits ? s.hits.length : 0), 0);
-  return { query: String(query), total_hits: total, scopes: scopesArr, match_mode: "keyword" };
+  return decorateRefs({ query: String(query), total_hits: total, scopes: scopesArr, match_mode: "keyword" });
 }
 
 // --- graph: READ-ONLY impact-graph exploration ------------------------------
@@ -754,6 +790,17 @@ function insertIntoTable(text, tableName, newLine) {
   return lines.join("\n");
 }
 
+// In-process async mutex for config.toml writes: each caller chains onto the
+// previous one's promise, so waiters sleep on the event loop (no busy-wait)
+// and run strictly one at a time in arrival order. A failed write releases
+// the lock just like a successful one.
+let _configLock = Promise.resolve();
+function withConfigLock(fn) {
+  const result = _configLock.then(fn);
+  _configLock = result.catch(() => {});
+  return result;
+}
+
 export async function addLane(name, collection, ladder) {
   if (!name || !SCOPE_NAME_RE.test(String(name))) {
     const err = new Error(
@@ -779,6 +826,13 @@ export async function addLane(name, collection, ladder) {
     ladderArr = ladder.map(String);
   }
 
+  // Serialized: the read / duplicate-check / rename below is a
+  // read-modify-write of one shared file, so two concurrent adds must not
+  // interleave or the second rename silently drops the first lane.
+  return withConfigLock(() => writeLane(name, collection, ladderArr));
+}
+
+async function writeLane(name, collection, ladderArr) {
   const configPath = defaultConfigPath();
   const original = await readFile(configPath, "utf8");
 
@@ -845,24 +899,14 @@ export async function addLane(name, collection, ladder) {
 // Distinct from reindexPaths(collection, paths) above (POST /index, the
 // operator-targeted action) — see SERVICE.md's "Two reindex paths". This is
 // the bulk action: for initial index builds or recovering a stale index
-// across a whole directory. Extensions + ignored directories to scan.
-const REINDEX_EXTENSIONS = new Set([".ts", ".md", ".yaml", ".yml"]);
-const REINDEX_IGNORED_DIRECTORIES = new Set([".git", "node_modules", "dist", "build", "coverage"]);
+// across a whole directory. Extensions to scan; the walk itself is
+// index-guard.mjs's (first-cut-trust t1k): symlinks are never followed,
+// dotfiles (.env, .env.*) and hidden directories are skipped, and every file
+// must stay under `directory`.
+export const REINDEX_EXTENSIONS = new Set([".ts", ".md", ".yaml", ".yml"]);
 
-async function* walkReindexable(directory) {
-  const entries = await readdir(directory, { withFileTypes: true });
-  for (const entry of entries) {
-    const entryPath = path.join(directory, entry.name);
-    if (entry.isDirectory()) {
-      if (!REINDEX_IGNORED_DIRECTORIES.has(entry.name)) {
-        yield* walkReindexable(entryPath);
-      }
-      continue;
-    }
-    if (entry.isFile() && REINDEX_EXTENSIONS.has(path.extname(entry.name))) {
-      yield entryPath;
-    }
-  }
+export function walkReindexable(directory, opts = {}) {
+  return walkIndexable(directory, { extensions: REINDEX_EXTENSIONS, ...opts });
 }
 
 // reindex(scope, {directory}) — scans `directory` (default cwd) for

@@ -92,6 +92,98 @@ function persistConnectBannerCollapsed(collapsed) {
 })();
 // ==================== end aha-04-ui-connect-banner ====================
 
+// --- API token for every route (PANT-1398) ----------------------------------
+// The service answers only GET /health, /healthz and this /ui shell without a
+// Bearer token. Every same-origin fetch() below goes through this wrapper:
+// it sends the admin token when the tab has one (it passes the read gate too),
+// else the API token, and on a 401 `api_token_required` asks once for
+// MNEMOSYNE_API_TOKEN, keeps it in sessionStorage for this tab (never in the
+// page) and retries once. Cross-origin calls (the :3141 client API, the
+// persona service) are left untouched.
+const API_TOKEN_STORAGE_KEY = "mnemosyne.apiToken";
+const ADMIN_TOKEN_KEY_FOR_READS = "mnemosyne.adminToken";
+
+(function installApiTokenFetch() {
+  const nativeFetch = typeof globalThis.fetch === "function" ? globalThis.fetch.bind(globalThis) : null;
+  if (!nativeFetch) return;
+
+  function stored(key) {
+    try {
+      return window.sessionStorage.getItem(key) || "";
+    } catch {
+      return "";
+    }
+  }
+
+  function isSameOrigin(input) {
+    try {
+      const raw = typeof input === "string" ? input : input && input.url;
+      if (!raw) return false;
+      const here = globalThis.location && globalThis.location.origin;
+      if (!here || here === "null") return raw.startsWith("/") && !raw.startsWith("//");
+      return new URL(raw, globalThis.location.href).origin === here;
+    } catch {
+      return false;
+    }
+  }
+
+  function withToken(init) {
+    const headers = new Headers((init && init.headers) || {});
+    if (!headers.has("authorization")) {
+      const token = stored(ADMIN_TOKEN_KEY_FOR_READS) || stored(API_TOKEN_STORAGE_KEY);
+      if (token) headers.set("authorization", `Bearer ${token}`);
+    }
+    return { ...(init || {}), headers };
+  }
+
+  // One prompt at a time: the shell fires several loads at once on open.
+  let pendingPrompt = null;
+  function askForApiToken() {
+    if (!pendingPrompt) {
+      pendingPrompt = Promise.resolve().then(() => {
+        const token = window.prompt("Mnemosyne needs its API token (MNEMOSYNE_API_TOKEN):", "");
+        if (!token || !token.trim()) return false;
+        try {
+          window.sessionStorage.setItem(API_TOKEN_STORAGE_KEY, token.trim());
+        } catch {
+          return false;
+        }
+        return true;
+      });
+      pendingPrompt.finally(() => {
+        setTimeout(() => {
+          pendingPrompt = null;
+        }, 0);
+      });
+    }
+    return pendingPrompt;
+  }
+
+  async function needsApiToken(res) {
+    if (res.status !== 401) return false;
+    try {
+      const body = await res.clone().json();
+      return body && body.code === "api_token_required";
+    } catch {
+      return false;
+    }
+  }
+
+  globalThis.fetch = async function apiTokenFetch(input, init) {
+    if (!isSameOrigin(input)) return nativeFetch(input, init);
+    const res = await nativeFetch(input, withToken(init));
+    if (!(await needsApiToken(res))) return res;
+    // A stored token that is now wrong: drop it before asking again.
+    try {
+      window.sessionStorage.removeItem(API_TOKEN_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+    if (!(await askForApiToken())) return res;
+    return nativeFetch(input, withToken(init));
+  };
+})();
+
 const livelinessStatusEl = document.getElementById("liveliness-status");
 const livelinessDetailEl = document.getElementById("liveliness-detail");
 const settingsStatusEl = document.getElementById("settings-status");
@@ -101,6 +193,36 @@ const lastRefreshedEl = document.getElementById("last-refreshed");
 const lanesStatusEl = document.getElementById("lanes-status");
 const lanesTbodyEl = document.getElementById("lanes-tbody");
 const addLaneForm = document.getElementById("add-lane-form");
+
+// --- Admin token for write routes (first-cut-trust t1k) ---------------------
+// POST /lanes and POST /index need MNEMOSYNE_ADMIN_TOKEN as a Bearer token
+// when the service has one. The operator pastes it once per tab when a write
+// answers 401; it lives in sessionStorage only (gone when the tab closes) and
+// is never written into the page.
+const ADMIN_TOKEN_STORAGE_KEY = "mnemosyne.adminToken";
+
+function adminHeaders(headers) {
+  let token = "";
+  try {
+    token = window.sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
+  } catch {
+    // sessionStorage unavailable -- send no token.
+  }
+  return token ? { ...headers, authorization: `Bearer ${token}` } : headers;
+}
+
+// After a 401: ask for the token and keep it for this tab. Returns true when
+// one was entered, so the caller can tell the operator to submit again.
+function askForAdminToken() {
+  const token = window.prompt("This action needs Mnemosyne's admin token (MNEMOSYNE_ADMIN_TOKEN):", "");
+  if (!token || !token.trim()) return false;
+  try {
+    window.sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token.trim());
+  } catch {
+    return false;
+  }
+  return true;
+}
 const addLaneStatusEl = document.getElementById("add-lane-status");
 const personasStatusEl = document.getElementById("personas-status");
 const personasTbodyEl = document.getElementById("personas-tbody");
@@ -248,10 +370,14 @@ addLaneForm.addEventListener("submit", async (evt) => {
   try {
     const res = await fetch("/lanes", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: adminHeaders({ "content-type": "application/json" }),
       body: JSON.stringify({ name, collection, ladder }),
     });
     const body = await res.json();
+    if (res.status === 401 && askForAdminToken()) {
+      setStatus(addLaneStatusEl, "", "admin token saved for this tab — submit again");
+      return;
+    }
     if (!res.ok) {
       setStatus(addLaneStatusEl, "fail", `FAIL — ${body.error || `HTTP ${res.status}`}`);
       return;
@@ -1198,10 +1324,14 @@ reindexForm.addEventListener("submit", async (evt) => {
   try {
     const res = await fetch("/index", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: adminHeaders({ "content-type": "application/json" }),
       body: JSON.stringify({ collection, paths }),
     });
     const body = await res.json();
+    if (res.status === 401 && askForAdminToken()) {
+      setStatus(reindexStatusEl, "", "admin token saved for this tab — submit again");
+      return;
+    }
     if (!res.ok) {
       setStatus(reindexStatusEl, "fail", `FAIL — ${body.error || `HTTP ${res.status}`}`);
       return;
@@ -1210,7 +1340,8 @@ reindexForm.addEventListener("submit", async (evt) => {
       reindexStatusEl,
       "pass",
       `done — ${body.files_indexed ?? "?"} file(s) indexed, ${body.chunks_upserted ?? "?"} chunk(s) upserted, ` +
-        `${body.embed_failures ?? 0} embed failure(s), ${body.total_points ?? "?"} total point(s) in ${body.collection}`
+        `${body.embed_failures ?? 0} embed failure(s), ${body.total_points ?? "?"} total point(s) in ${body.collection}` +
+        (body.skipped && body.skipped.length ? ` — ${body.skipped.length} path(s) skipped (symlinks, dotfiles, hidden dirs)` : "")
     );
     if (body.engine_output) {
       reindexResultEl.textContent = body.engine_output;

@@ -2,6 +2,36 @@
 
 All notable changes to Mnemosyne are documented here.
 
+## [Unreleased]
+
+### Security
+
+- **Bind to `127.0.0.1` and require an API token** (PANT-1398) —
+  `src/server.mjs` called `server.listen(PORT)` with no host, so `:8477`
+  answered on every interface and anyone on the local network could call
+  `/recall`, `/grep`, `/note` and the graph routes. The service now binds
+  `MNEMOSYNE_HOST` (default `127.0.0.1`), and every route except
+  `GET /health`, `GET /healthz` and the `/ui` shell needs
+  `Authorization: Bearer <MNEMOSYNE_API_TOKEN>` (or the admin token), from the
+  local vault as `MNEMOSYNE_API_TOKEN` or `MNEMOSYNE_API_TOKEN_FILE`. With no
+  token set, only loopback callers are served. The hooks, skill helper and MCP
+  server, reindex CLI, onboard and the `:3141` remember proxy send it; the UI
+  asks for it once per tab. The `:3141` client API binds
+  `MNEMOSYNE_CLIENT_API_HOST` (default `127.0.0.1`). **Deployments that other
+  hosts or containers reach must set `MNEMOSYNE_HOST` and `MNEMOSYNE_API_TOKEN`
+  on the service and the token on every client.**
+- **Write routes need `MNEMOSYNE_ADMIN_TOKEN`** (first-cut-trust t1k) —
+  `POST /remember`, `/ingest`, `/lanes`, `/index`, `/reindex` and
+  `/events/repo-merged` now answer `401` without
+  `Authorization: Bearer <MNEMOSYNE_ADMIN_TOKEN>`, like `POST /collections`.
+  With no token set, only loopback callers may write. `MNEMOSYNE_OPEN_REMEMBER=1`
+  keeps plain `/remember` open for agent hooks. Reads stay open.
+- **The indexer never follows symlinks** — `POST /index` and `POST /reindex`
+  walk directories in `src/index-guard.mjs` and pass `swarm-memory` explicit
+  regular files only, under `MNEMOSYNE_REINDEX_ROOTS`, skipping symlinks,
+  dotfiles (`.env*`) and hidden directories. A `x.json -> .env` link can no
+  longer be indexed and served back through `POST /grep`.
+
 ## [0.16.0] — 2026-09-07
 
 `mnemosyne-desktop-app` epic (`da-01`..`da-05`) — Mnemosyne now ships as a

@@ -89,15 +89,16 @@ async function waitForServer(url, timeoutMs = 8000) {
 // --- live functional round-trip: POST /index against a real, tiny, scoped ---
 // throwaway file in personal_memory (never the production corpus wholesale).
 {
+  const dir = await mkdtemp(path.join(tmpdir(), "mnemosyne-reindex-route-"));
+  // POST /index only reads under MNEMOSYNE_REINDEX_ROOTS (first-cut-trust t1k).
   const child = spawn(process.execPath, [SERVER_PATH], {
-    env: { ...process.env, PORT: String(PORT) },
+    env: { ...process.env, PORT: String(PORT), MNEMOSYNE_REINDEX_ROOTS: dir },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let serverOutput = "";
   child.stdout.on("data", (d) => { serverOutput += d.toString(); });
   child.stderr.on("data", (d) => { serverOutput += d.toString(); });
 
-  const dir = await mkdtemp(path.join(tmpdir(), "mnemosyne-reindex-route-"));
   const token = `MNEMO-REINDEX-ROUTE-${Date.now()}`;
   const file = path.join(dir, "reindex-route-test-note.md");
   await writeFile(

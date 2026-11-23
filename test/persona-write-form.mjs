@@ -46,7 +46,7 @@
 // browser/jsdom load of the whole file.
 //
 // Usage: node test/persona-write-form.mjs
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -70,6 +70,7 @@ const PERSONA_BASE = `http://127.0.0.1:${PERSONA_PORT}`;
 // pinned to a real, stable commit rather than "whatever HEAD happens to be"
 // (which would silently drift once this story's own commit lands on top).
 const PRE_PF05_BASELINE_COMMIT = "7a3c5a5";
+const BASELINE_APP_PATH = path.join(ROOT, "test", "fixtures", "persona-write-form", "app.pre-pf05.js");
 
 let fails = 0;
 const ok = (c, m) => { console.log(`${c ? "  PASS" : "  FAIL"}  ${m}`); if (!c) fails++; };
@@ -452,11 +453,9 @@ try {
     return { fetchSpy, statusEl };
   }
 
-  const baselineAppSrc = execFileSync("git", ["show", `${PRE_PF05_BASELINE_COMMIT}:ui/app.js`], {
-    cwd: ROOT,
-    encoding: "utf8",
-    maxBuffer: 16 * 1024 * 1024,
-  });
+  // Vendored copy of `git show ${PRE_PF05_BASELINE_COMMIT}:ui/app.js`, so this
+  // runs in a shallow clone (CI's actions/checkout) where that commit is absent.
+  const baselineAppSrc = await readFile(BASELINE_APP_PATH, "utf8");
 
   // --- Case 1: NO files attached -- byte-for-byte unchanged ----------------
   const noAttachFields = {

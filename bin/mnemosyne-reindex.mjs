@@ -10,6 +10,7 @@
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { clientAuthHeader } from "../src/api-auth.mjs";
 
 const DEFAULT_URL = process.env.MNEMOSYNE_URL || "http://127.0.0.1:8477";
 
@@ -38,7 +39,9 @@ export async function run(argv, { log = console.log, warn = console.error } = {}
   try {
     res = await fetch(`${args.url}/reindex`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      // POST /reindex needs MNEMOSYNE_ADMIN_TOKEN as a Bearer token when the
+      // service has one, and the API token otherwise (PANT-1398).
+      headers: { "content-type": "application/json", ...clientAuthHeader() },
       body: JSON.stringify({ scope: args.scope, directory: args.directory }),
     });
   } catch (e) {

@@ -13,6 +13,7 @@ import { promisify } from "node:util";
 import { writeFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { clientAuthHeader } from "../../src/api-auth.mjs";
 
 const execFileP = promisify(execFile);
 
@@ -30,13 +31,21 @@ const CHILD_ENV = {
   PATH: `/opt/homebrew/bin:${homedir()}/.local/bin:${process.env.PATH || ""}`,
 };
 
+// Every Mnemosyne route but /health(z) needs a Bearer token (PANT-1398):
+// MNEMOSYNE_ADMIN_TOKEN when this process has it (writes need it,
+// first-cut-trust t1k), else MNEMOSYNE_API_TOKEN / MNEMOSYNE_API_TOKEN_FILE.
+// See src/api-auth.mjs.
+function adminAuthHeader() {
+  return clientAuthHeader();
+}
+
 async function httpJson(method, route, body) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), HTTP_TIMEOUT_MS);
   try {
     const res = await fetch(MNEMOSYNE_URL + route, {
       method,
-      headers: body ? { "content-type": "application/json" } : undefined,
+      headers: { ...(body ? { "content-type": "application/json" } : {}), ...adminAuthHeader() },
       body: body ? JSON.stringify(body) : undefined,
       signal: ctrl.signal,
     });

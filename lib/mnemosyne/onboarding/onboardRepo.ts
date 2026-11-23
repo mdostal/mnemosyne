@@ -32,7 +32,7 @@
  * `create_collection_and_scope()` maps to this repo's own collection
  * (design-discussion.md's "own scope" isolation: scope->collection mapping
  * keyed to this repo's own collection). `POST /reindex` itself is
- * asynchronous (`202 {status:'started',...}` immediately, the real index
+ * asynchronous (`202 {job_id, status:'running',...}` immediately, the real index
  * continues in the background), so `{ ran: true }` here means the reindex
  * was successfully KICKED OFF against a real collection, not that indexing
  * has completed by the time `onboardRepo()` returns -- see
@@ -71,6 +71,7 @@
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { MnemosyneClient } from '../client.js';
+import { mnemosyneAuthHeader } from '../service-auth.js';
 import { computeMemoryLevels, type ComputedMemoryLevel } from '../memory-levels/computeMemoryLevels.js';
 import { syncAllHarnesses, type SyncResult } from '../layer1/sync.js';
 import { repoLocalPersonaPath, writeRepoLocalPersona } from '../layer1/persona-store-repo-local.js';
@@ -213,7 +214,7 @@ function mnemosyneServiceUrl(): string {
  * Mnemosyne service. `scope` is `scopeId` -- see this module's own doc
  * comment for why that's the correct per-repo scope key to reuse here.
  *
- * `POST /reindex` itself is asynchronous (`202 {status:'started',...}`
+ * `POST /reindex` itself is asynchronous (`202 {job_id, status:'running',...}`
  * immediately; the real index continues in the background and logs its own
  * outcome -- SERVICE.md) so a `{ ran: true }` result here means the reindex
  * was successfully KICKED OFF against a real collection, not that indexing
@@ -242,7 +243,9 @@ async function runVectorIndexStep(
   try {
     res = await fetch(`${baseUrl}/reindex`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      // POST /reindex needs MNEMOSYNE_ADMIN_TOKEN as a Bearer token when the
+      // service has one, and the API token otherwise (PANT-1398).
+      headers: { 'content-type': 'application/json', ...mnemosyneAuthHeader() },
       body: JSON.stringify({ scope: scopeId, directory: repoRoot }),
     });
   } catch (error) {

@@ -22,6 +22,35 @@ export function isStatus(value) {
   return typeof value === "string" && STATUSES.includes(value);
 }
 
+// --- explicit source_ref ----------------------------------------------------
+// PANT-977: a caller with no git checkout to auto-detect from (an HTTP client
+// writing a client-level note) passes source_ref itself. Validated here so a
+// bad value is a 400, never a note header the readers can't parse back:
+// branch must be one whitespace-free token (status-filter.mjs / triggers.mjs
+// read `branch=(\S+)`), commit_sha is optional but when present must be the
+// hex sha triggers.mjs matches on, pr_url is an optional string.
+export const NO_COMMIT = "none";
+const COMMIT_SHA_RE = /^[0-9a-fA-F]{7,64}$/;
+
+// Returns the normalized {branch, commit_sha, pr_url}, or throws an Error
+// whose message names the bad field.
+export function normalizeSourceRef(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("source_ref must be an object {branch, commit_sha?, pr_url?}");
+  }
+  const { branch, commit_sha = null, pr_url = null } = value;
+  if (typeof branch !== "string" || !/^\S+$/.test(branch) || branch.includes("-->")) {
+    throw new Error("source_ref.branch must be a non-empty string with no whitespace");
+  }
+  if (commit_sha !== null && (typeof commit_sha !== "string" || !COMMIT_SHA_RE.test(commit_sha))) {
+    throw new Error("source_ref.commit_sha must be a 7-64 character hex git sha when present");
+  }
+  if (pr_url !== null && typeof pr_url !== "string") {
+    throw new Error("source_ref.pr_url must be a string when present");
+  }
+  return { branch, commit_sha, pr_url };
+}
+
 // --- status transitions -----------------------------------------------------
 // Exactly the two transitions this story's acceptance criteria define as
 // valid: provisional->confirmed (promote) and provisional->superseded
